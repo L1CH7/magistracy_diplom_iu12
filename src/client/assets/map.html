@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MapLibre Client</title>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
+    .marker-agent { width: 16px; height: 16px; border-radius: 50%; background: #22c55e; border: 2px solid #065f46; }
+    .maplibregl-ctrl-logo, .maplibregl-ctrl-attrib { opacity: .7; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <script>
+  // Basic config: read ?tile=... from query string, fallback to OSM tiles
+  const params = new URLSearchParams(window.location.search);
+  const DEFAULT_TILE_URL = params.get('tile') || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+    // Create map
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: {
+        version: 8,
+        sources: {
+          osm: {
+            type: 'raster',
+            tiles: [DEFAULT_TILE_URL],
+            tileSize: 256,
+          },
+          graph: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+          routes: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+        },
+        layers: [
+          { id: 'osm', type: 'raster', source: 'osm' },
+          { id: 'graph', type: 'line', source: 'graph', paint: { 'line-color': '#9ca3af', 'line-width': 1 } },
+          { id: 'routes', type: 'line', source: 'routes', paint: { 'line-color': ['get', 'color'], 'line-width': 3 } },
+        ]
+      },
+      center: [37.6173, 55.7558],
+      zoom: 12,
+      hash: false,
+      attributionControl: true,
+      antialias: true,
+    });
+
+    // Agent marker + smooth animation
+    const agentEl = document.createElement('div');
+    agentEl.className = 'marker-agent';
+    const agentMarker = new maplibregl.Marker({ element: agentEl, pitchAlignment: 'map', rotationAlignment: 'map' });
+    let agentCur = null; // [lng, lat]
+    let agentTarget = null; // [lng, lat]
+    let lastFrame = 0;
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    function animate(ts) {
+      requestAnimationFrame(animate);
+      if (!agentCur || !agentTarget) return;
+      const dt = Math.min((ts - lastFrame) / 1000, 0.05); // cap step
+      lastFrame = ts;
+      const alpha = 0.25; // smoothing factor
+      const next = [
+        lerp(agentCur[0], agentTarget[0], alpha),
+        lerp(agentCur[1], agentTarget[1], alpha)
+      ];
+      agentCur = next;
+      agentMarker.setLngLat(next);
+      if (!agentMarker._map) agentMarker.addTo(map);
+    }
+    requestAnimationFrame(animate);
+
+    // Public API bridged from PyQt
+    window.app = {
+      setGraphGeoJSON(geojson) {
+        const src = map.getSource('graph');
+        if (src) src.setData(geojson);
+      },
+      setRoutes(routes) {
+        // routes: [{ id, coords: [[lon,lat], ...], color?: '#rrggbb' }]
+        const features = routes.map(r => ({
+          type: 'Feature',
+          properties: { id: r.id ?? '', color: r.color ?? '#2563eb' },
+          geometry: { type: 'LineString', coordinates: r.coords }
+        }));
+        const src = map.getSource('routes');
+        if (src) src.setData({ type: 'FeatureCollection', features });
+      },
+      updateAgent(pos) {
+        // pos: { lat, lon }
+        const lngLat = [pos.lon, pos.lat];
+        if (!agentCur) agentCur = lngLat;
+        agentTarget = lngLat;
+      },
+      fitToRoutes() {
+        const src = map.getSource('routes');
+        if (!src) return;
+        const data = src._data || src._options?.data; // internal, but ok in practice
+        if (!data || !data.features || data.features.length === 0) return;
+        const coords = data.features.flatMap(f => f.geometry.coordinates);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        coords.forEach(([x, y]) => {
+          if (x < minX) minX = x; if (y < minY) minY = y;
+          if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+        });
+        if (isFinite(minX)) {
+          map.fitBounds([[minX, minY], [maxX, maxY]], { padding: 60, duration: 600, maxZoom: 16 });
+        }
+      }
+    };
+  </script>
+</body>
+</html>

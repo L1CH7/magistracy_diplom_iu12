@@ -1,0 +1,60 @@
+---
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    ports:
+      - "8000:8000"
+    environment:
+      - OSM_JSON_PATH=/app/data/osm_data.json
+    volumes:
+      - ./data:/app/data
+    networks:
+      - nav-net
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /app/src
+        - action: rebuild
+          path: ./Dockerfile.server
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    depends_on:
+      - server
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - QT_QPA_PLATFORM=xcb
+      - QTWEBENGINE_DISABLE_SANDBOX=1
+      - QT_DEBUG_PLUGINS=1
+      - QTWEBENGINE_CHROMIUM_FLAGS=--enable-gpu-rasterization --ignore-gpu-blocklist --disable-software-rasterizer
+      - TILE_URL=${TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ~/.Xauthority:/root/.Xauthority:rw
+      - /dev/shm:/dev/shm
+    devices:
+      - /dev/dri:/dev/dri
+    networks:
+      - nav-net
+    stdin_open: true
+    tty: true
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /app/src
+        - action: rebuild
+          path: ./Dockerfile.client
+
+networks:
+  nav-net:
+    driver: bridge
+
+  

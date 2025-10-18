@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+.env
+.mypy_cache/
+
+# Agent artifacts
+.agent_dir/out/
+.agent_dir/logs/
+.agent_dir/checkpoints/
+
+# Editors/OS
+.vscode/
+*.swp
+.DS_Store
+
+# Tests/coverage
+.pytest_cache/
+htmlcov/
+.coverage*
+
+# Docker
+*.log
+
+# Data caches
+data/osm_data.json
+data/*.geojson
