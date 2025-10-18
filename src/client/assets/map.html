@@ -8,6 +8,9 @@
   <style>
     html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
     .marker-agent { width: 16px; height: 16px; border-radius: 50%; background: #22c55e; border: 2px solid #065f46; }
+    .marker-start { width: 14px; height: 14px; border-radius: 50%; background: #2563eb; border: 2px solid #1e3a8a; }
+    .marker-end { width: 14px; height: 14px; border-radius: 50%; background: #ef4444; border: 2px solid #7f1d1d; }
+    .marker-via { width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; border: 2px solid #92400e; }
     .maplibregl-ctrl-logo, .maplibregl-ctrl-attrib { opacity: .7; }
   </style>
 </head>
@@ -20,7 +23,7 @@
   const DEFAULT_TILE_URL = params.get('tile') || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     // Create map
-    const map = new maplibregl.Map({
+  const map = new maplibregl.Map({
       container: 'map',
       style: {
         version: 8,
@@ -70,7 +73,67 @@
       agentMarker.setLngLat(next);
       if (!agentMarker._map) agentMarker.addTo(map);
     }
-    requestAnimationFrame(animate);
+  requestAnimationFrame(animate);
+
+  // Expose map globally for PyQt callbacks
+  window.map = map;
+
+    // Picking start/end/via points on the map
+    let pickMode = 'none'; // 'from' | 'to' | 'via' | 'none'
+    let startPt = null; // {lon, lat}
+    let endPt = null;   // {lon, lat}
+    let viaPts = [];    // Array<{lon, lat}>
+    let startMarker = null;
+    let endMarker = null;
+    let viaMarkers = [];
+
+    function ensureMarker(cls) {
+      const el = document.createElement('div');
+      el.className = cls;
+      return new maplibregl.Marker({ element: el, pitchAlignment: 'map', rotationAlignment: 'map' });
+    }
+
+    function setStart(lngLat) {
+      startPt = { lon: lngLat.lng, lat: lngLat.lat };
+      if (!startMarker) startMarker = ensureMarker('marker-start');
+      startMarker.setLngLat([startPt.lon, startPt.lat]).addTo(map);
+    }
+    function setEnd(lngLat) {
+      endPt = { lon: lngLat.lng, lat: lngLat.lat };
+      if (!endMarker) endMarker = ensureMarker('marker-end');
+      endMarker.setLngLat([endPt.lon, endPt.lat]).addTo(map);
+    }
+    function addVia(lngLat) {
+      const p = { lon: lngLat.lng, lat: lngLat.lat };
+      viaPts.push(p);
+      const m = ensureMarker('marker-via').setLngLat([p.lon, p.lat]).addTo(map);
+      viaMarkers.push(m);
+    }
+    function clearVia() {
+      viaPts = [];
+      viaMarkers.forEach(m => m.remove());
+      viaMarkers = [];
+    }
+
+    map.on('click', (e) => {
+      if (pickMode === 'none') return;
+      if (pickMode === 'from') { setStart(e.lngLat); pickMode = 'none'; }
+      else if (pickMode === 'to') { setEnd(e.lngLat); pickMode = 'none'; }
+      else if (pickMode === 'via') { addVia(e.lngLat); /* keep mode for multiple via */ }
+    });
+
+    // Public API additions for picking
+    function getPickedPoints() {
+      return { start: startPt, end: endPt, via: viaPts.slice() };
+    }
+    function setPickMode(mode) {
+      pickMode = (mode === 'from' || mode === 'to' || mode === 'via') ? mode : 'none';
+    }
+    function clearPicked() {
+      startPt = null; endPt = null; clearVia();
+      if (startMarker) { startMarker.remove(); startMarker = null; }
+      if (endMarker) { endMarker.remove(); endMarker = null; }
+    }
 
     // Public API bridged from PyQt
     window.app = {
@@ -108,7 +171,10 @@
         if (isFinite(minX)) {
           map.fitBounds([[minX, minY], [maxX, maxY]], { padding: 60, duration: 600, maxZoom: 16 });
         }
-      }
+      },
+      setPickMode,
+      getPickedPoints,
+      clearPicked,
     };
   </script>
 </body>

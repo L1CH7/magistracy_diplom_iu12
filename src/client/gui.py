@@ -1,18 +1,21 @@
 import sys
 import os
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QTextEdit, QComboBox
-)
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import QUrl, QUrlQuery
-import requests
 import threading
 import time
+import json
+import requests
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QTextEdit, QComboBox, QShortcut,
+    QToolBox, QWidget as QW,
+)
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtCore import QUrl, QUrlQuery, QTimer
+from PyQt5.QtGui import QKeySequence
 
 
 class NavigationGUI(QWidget):
-    def __init__(self, server_url="http://server:8000"):
+    def __init__(self, server_url: str = "http://server:8000"):
         super().__init__()
         self.server_url = server_url
         self.agent_id = None
@@ -20,14 +23,15 @@ class NavigationGUI(QWidget):
         self._graph_geojson = None
         self._routes_ml = None
         self._last_agent_pos = None
+        self.prev_pos = None
+        self.prev_time = None
+
         self.setWindowTitle("Navigation MAS Client")
         self.setStyleSheet("background-color: #f0f0f0; color: black;")
         self.setup_ui()
         self.load_graph()
-        self.prev_pos = None
-        self.prev_time = None
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         layout = QVBoxLayout()
 
         # Start point
@@ -72,21 +76,53 @@ class NavigationGUI(QWidget):
         self.view_map_btn.clicked.connect(self.view_map)
         btn_frame.addWidget(self.view_map_btn)
 
+        # Picking buttons: From / To / Via / Clear
+        self.pick_from_btn = QPushButton("From")
+        self.pick_from_btn.clicked.connect(
+            lambda: self._js("window.app && window.app.setPickMode('from');")
+        )
+        btn_frame.addWidget(self.pick_from_btn)
+
+        self.pick_to_btn = QPushButton("To")
+        self.pick_to_btn.clicked.connect(
+            lambda: self._js("window.app && window.app.setPickMode('to');")
+        )
+        btn_frame.addWidget(self.pick_to_btn)
+
+        self.pick_via_btn = QPushButton("Via")
+        self.pick_via_btn.clicked.connect(
+            lambda: self._js("window.app && window.app.setPickMode('via');")
+        )
+        btn_frame.addWidget(self.pick_via_btn)
+
+        self.clear_pick_btn = QPushButton("Clear picks")
+        self.clear_pick_btn.clicked.connect(
+            lambda: self._js("window.app && window.app.clearPicked();")
+        )
+        btn_frame.addWidget(self.clear_pick_btn)
         layout.addLayout(btn_frame)
 
-        # Route display
-        layout.addWidget(QLabel("Route:"))
+        # Collapsible logs
+        self.toolbox = QToolBox()
+        route_page = QW()
+        route_layout = QVBoxLayout(route_page)
         self.route_text = QTextEdit()
-        layout.addWidget(self.route_text)
+        route_layout.addWidget(self.route_text)
+        self.toolbox.addItem(route_page, "Route")
 
-        # Agent status
-        layout.addWidget(QLabel("Agent Status:"))
+        status_page = QW()
+        status_layout = QVBoxLayout(status_page)
         self.status_text = QTextEdit()
-        layout.addWidget(self.status_text)
+        status_layout.addWidget(self.status_text)
+        self.toolbox.addItem(status_page, "Agent Status")
 
-        # Speed display
+        speed_page = QW()
+        speed_layout = QVBoxLayout(speed_page)
         self.speed_label = QLabel("Speed: 0 km/h")
-        layout.addWidget(self.speed_label)
+        speed_layout.addWidget(self.speed_label)
+        self.toolbox.addItem(speed_page, "Speed")
+
+        layout.addWidget(self.toolbox)
 
         # Route selection
         route_frame = QHBoxLayout()
@@ -97,15 +133,12 @@ class NavigationGUI(QWidget):
         route_frame.addWidget(self.route_combo)
         layout.addLayout(route_frame)
 
-        # OSM Load
-        osm_frame = QHBoxLayout()
-        osm_frame.addWidget(QLabel("Bbox (min_lon min_lat max_lon max_lat):"))
-        self.bbox_entry = QLineEdit("37.4 55.6 37.8 55.9")
-        osm_frame.addWidget(self.bbox_entry)
-        self.load_osm_btn = QPushButton("Load OSM")
-        self.load_osm_btn.clicked.connect(self.load_osm)
-        osm_frame.addWidget(self.load_osm_btn)
-        layout.addLayout(osm_frame)
+        # Map bounds display (replaces manual bbox load)
+        bounds_frame = QHBoxLayout()
+        bounds_frame.addWidget(QLabel("Map bounds:"))
+        self.bounds_label = QLabel("[-, -, -, -]")
+        bounds_frame.addWidget(self.bounds_label)
+        layout.addLayout(bounds_frame)
 
         # Control buttons
         ctrl_frame = QHBoxLayout()
@@ -118,16 +151,14 @@ class NavigationGUI(QWidget):
         ctrl_frame.addWidget(self.quit_btn)
         layout.addLayout(ctrl_frame)
 
-        # Map (MapLibre GL HTML)
+        # Map (MapLibre GL HTML) — occupy most of the screen
         layout.addWidget(QLabel("Map:"))
         self.web_view = QWebEngineView()
-        layout.addWidget(self.web_view)
-        # Load local HTML asset with tile URL query param for MapLibre
+        layout.addWidget(self.web_view, stretch=1)
         map_url = QUrl.fromLocalFile("/app/src/client/assets/map.html")
         q = QUrlQuery()
         tile_url = os.environ.get(
-            "TILE_URL",
-            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            "TILE_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         )
         q.addQueryItem("tile", tile_url)
         map_url.setQuery(q)
@@ -135,106 +166,132 @@ class NavigationGUI(QWidget):
         self.web_view.loadFinished.connect(self.on_map_loaded)
 
         self.setLayout(layout)
+        QShortcut(QKeySequence("Esc"), self, activated=self._on_quit)
 
-    def load_graph(self):
-        try:
-            resp = requests.get(f"{self.server_url}/graph")
-            if resp.status_code == 200:
-                data = resp.json()
-                graph_nodes = {n['id']: n for n in data['nodes']}
-                graph_edges = data['edges']
-            else:
-                graph_nodes = {}
-                graph_edges = []
-        except Exception:
+    def _js(self, code: str) -> None:
+        if self.map_ready:
+            self.web_view.page().runJavaScript(code)
+
+    def load_graph(self) -> None:
+        def worker():
             graph_nodes = {}
             graph_edges = []
-        # Build GeoJSON for graph edges and push into MapLibre
-        features = []
-        # larger cap; MapLibre handles lots of lines
-        for e in graph_edges[:5000]:
-            u, v = e['u'], e['v']
-            if u in graph_nodes and v in graph_nodes:
-                u_data, v_data = graph_nodes[u], graph_nodes[v]
-                features.append({
-                    "type": "Feature",
-                    "properties": {},
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": [
-                            [u_data['lon'], u_data['lat']],
-                            [v_data['lon'], v_data['lat']]
-                        ]
-                    }
-                })
-        graph_geojson = {
-            "type": "FeatureCollection",
-            "features": features
-        }
-        self._graph_geojson = graph_geojson
-        if self.map_ready:
-            self.web_view.page().runJavaScript(
-                f"window.app && window.app.setGraphGeoJSON({graph_geojson});"
-            )
+            try:
+                resp = requests.get(f"{self.server_url}/graph", timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    graph_nodes.update({n['id']: n for n in data['nodes']})
+                    graph_edges = data['edges']
+            except Exception:
+                pass
+            features = []
+            for edge in graph_edges[:5000]:
+                u, v = edge['u'], edge['v']
+                if u in graph_nodes and v in graph_nodes:
+                    u_data, v_data = graph_nodes[u], graph_nodes[v]
+                    features.append({
+                        "type": "Feature",
+                        "properties": {},
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [
+                                [u_data['lon'], u_data['lat']],
+                                [v_data['lon'], v_data['lat']],
+                            ],
+                        },
+                    })
+            graph_geojson = {"type": "FeatureCollection", "features": features}
 
-    def get_route(self):
+            def apply():
+                self._graph_geojson = graph_geojson
+                code = (
+                    "window.app && window.app.setGraphGeoJSON("
+                    f"{json.dumps(graph_geojson)}"
+                    ");"
+                )
+                self._js(code)
+
+            QTimer.singleShot(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def get_route(self) -> None:
         try:
             start_lat = float(self.start_lat.text())
             start_lon = float(self.start_lon.text())
             end_lat = float(self.end_lat.text())
             end_lon = float(self.end_lon.text())
-            req = {
-                "start": {"lat": start_lat, "lon": start_lon},
-                "end": {"lat": end_lat, "lon": end_lon},
-                "k": int(self.k_entry.text()) if self.k_entry.text().isdigit()
-                else 1
-            }
-            resp = requests.post(f"{self.server_url}/route", json=req)
-            if resp.status_code == 200:
-                data = resp.json()
-                self.routes = data['routes']
-                self.current_route_index = 0
-                self.route_text.clear()
-                for i, r in enumerate(self.routes):
-                    self.route_text.append(
-                        f"Route {i+1}: Nodes {len(r['nodes'])}, "
-                        f"Dist {r['total_distance']:.2f}m, "
-                        f"Time {r['estimated_time']:.2f}s"
-                    )
-                self.start_agent_btn.setEnabled(True)
-                # Push routes to MapLibre
-                ml_routes = []
-                colors = [
-                    '#2563eb', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'
-                ]
-                for i, r in enumerate(self.routes):
-                    coords = [[p['lon'], p['lat']] for p in r['positions']]
-                    ml_routes.append({
-                        'id': f'route{i+1}',
-                        'coords': coords,
-                        'color': colors[i % len(colors)]
-                    })
-                self._routes_ml = ml_routes
-                if self.map_ready:
-                    self.web_view.page().runJavaScript(
-                        f"window.app && window.app.setRoutes({ml_routes});"
-                    )
-                    self.web_view.page().runJavaScript(
-                        "window.app && window.app.fitToRoutes();"
-                    )
-                self.route_combo.clear()
-                self.route_combo.addItems(
-                    [f"Route {i+1}" for i in range(len(self.routes))]
-                )
-                self.route_combo.setCurrentText("Route 1")
-            else:
-                self.status_text.append(f"Failed to get route: {resp.text}")
         except ValueError:
             self.status_text.append("Invalid coordinates")
-        except Exception as e:
-            self.status_text.append(str(e))
+            return
+        k_val = (
+            int(self.k_entry.text()) if self.k_entry.text().isdigit() else 1
+        )
+        req = {
+            "start": {"lat": start_lat, "lon": start_lon},
+            "end": {"lat": end_lat, "lon": end_lon},
+            "k": k_val,
+        }
+        self.get_route_btn.setEnabled(False)
 
-    def start_agent(self):
+        def worker():
+            try:
+                resp = requests.post(
+                    f"{self.server_url}/route", json=req, timeout=20
+                )
+                ok = resp.status_code == 200
+                data = resp.json() if ok else {"error": resp.text}
+            except Exception as e:
+                ok = False
+                data = {"error": str(e)}
+
+            def apply():
+                if not ok:
+                    self.status_text.append(
+                        f"Failed to get route: {data['error']}"
+                    )
+                else:
+                    self.routes = data['routes']
+                    self.current_route_index = 0
+                    self.route_text.clear()
+                    for i, r in enumerate(self.routes):
+                        self.route_text.append(
+                            f"Route {i+1}: Nodes {len(r['nodes'])}, "
+                            f"Dist {r['total_distance']:.2f}m, "
+                            f"Time {r['estimated_time']:.2f}s"
+                        )
+                    self.start_agent_btn.setEnabled(True)
+                    colors = [
+                        '#2563eb', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'
+                    ]
+                    ml_routes = []
+                    for i, r in enumerate(self.routes):
+                        coords = [[p['lon'], p['lat']] for p in r['positions']]
+                        ml_routes.append({
+                            'id': f'route{i+1}',
+                            'coords': coords,
+                            'color': colors[i % len(colors)],
+                        })
+                    self._routes_ml = ml_routes
+                    code = (
+                        "window.app && window.app.setRoutes("
+                        f"{json.dumps(ml_routes)}"
+                        ");"
+                    )
+                    self._js(code)
+                    self._js("window.app && window.app.fitToRoutes();")
+                    self.route_combo.clear()
+                    self.route_combo.addItems(
+                        [f"Route {i+1}" for i in range(len(self.routes))]
+                    )
+                    self.route_combo.setCurrentText("Route 1")
+                self.get_route_btn.setEnabled(True)
+
+            QTimer.singleShot(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def start_agent(self) -> None:
         if not hasattr(self, 'routes') or not self.routes:
             self.status_text.append("Get routes first")
             return
@@ -243,10 +300,12 @@ class NavigationGUI(QWidget):
                 "route_nodes": self.routes[self.current_route_index]['nodes'],
                 "params": {
                     "max_speed": 50.0, "power": 100.0,
-                    "length": 5.0, "width": 2.0
-                }
+                    "length": 5.0, "width": 2.0,
+                },
             }
-            resp = requests.post(f"{self.server_url}/agent/start", json=req)
+            resp = requests.post(
+                f"{self.server_url}/agent/start", json=req, timeout=10
+            )
             if resp.status_code == 200:
                 state = resp.json()
                 self.agent_id = state['agent_id']
@@ -263,11 +322,11 @@ class NavigationGUI(QWidget):
         except Exception as e:
             self.status_text.append(str(e))
 
-    def simulate_agent(self):
+    def simulate_agent(self) -> None:
         while self.agent_id:
             try:
                 resp = requests.post(
-                    f"{self.server_url}/agent/{self.agent_id}/step"
+                    f"{self.server_url}/agent/{self.agent_id}/step", timeout=10
                 )
                 if resp.status_code == 200:
                     state = resp.json()
@@ -282,8 +341,7 @@ class NavigationGUI(QWidget):
                         dist = ((lat_diff**2 + lon_diff**2)**0.5) * 111320
                         dt = current_time - self.prev_time
                         if dt > 0:
-                            speed = dist / dt * 3.6
-                            speed = min(speed, 120.0)
+                            speed = min(dist / dt * 3.6, 120.0)
                             self.speed_label.setText(
                                 f"Speed: {speed:.2f} km/h"
                             )
@@ -295,15 +353,16 @@ class NavigationGUI(QWidget):
                         f"{state['index']}, pos: {state['position']}, "
                         f"done: {state['done']}"
                     )
-                    # Update agent smoothly on map
                     pos = state['position']
-                    js = (
-                        "window.app && window.app.updateAgent({" +
-                        f"'lat': {pos['lat']}, 'lon': {pos['lon']}" + "});"
-                    )
                     self._last_agent_pos = pos
-                    if self.map_ready:
-                        self.web_view.page().runJavaScript(js)
+                    agent_obj = json.dumps({
+                        'lat': pos['lat'], 'lon': pos['lon']
+                    })
+                    code = (
+                        "window.app && window.app.updateAgent(" +
+                        agent_obj + ");"
+                    )
+                    self._js(code)
                     if state['done']:
                         break
                 else:
@@ -314,74 +373,94 @@ class NavigationGUI(QWidget):
                 break
             time.sleep(0.1)
 
-    def load_osm(self):
-        try:
-            bbox_str = self.bbox_entry.text()
-            bbox = [float(x) for x in bbox_str.split()]
-            if len(bbox) != 4:
-                raise ValueError("Need 4 values")
-            req = {"bbox": bbox}
-            resp = requests.post(f"{self.server_url}/osm/load", json=req)
-            if resp.status_code == 200:
-                result = resp.json()
-                self.status_text.append(result['message'])
-                self.load_graph()  # Reload graph
-            else:
-                self.status_text.append(f"Failed to load OSM: {resp.text}")
-        except ValueError:
-            self.status_text.append("Invalid bbox format")
-        except Exception as e:
-            self.status_text.append(str(e))
+    def _update_bounds_label(self) -> None:
+        # Pull bounds from MapLibre and display as
+        # [min_lon, min_lat, max_lon, max_lat]
+        if not self.map_ready:
+            return
 
-    def generate_map(self):
-        # Deprecated: Map rendering is driven directly in MapLibre via JS API
+        def _apply_bounds(result):
+            # result expected as {west, south, east, north}
+            if not result or not isinstance(result, dict):
+                return
+            try:
+                bbox = [
+                    float(result.get('west')),
+                    float(result.get('south')),
+                    float(result.get('east')),
+                    float(result.get('north')),
+                ]
+                fmt = (
+                    f"[{bbox[0]:.5f}, {bbox[1]:.5f}, "
+                    f"{bbox[2]:.5f}, {bbox[3]:.5f}]"
+                )
+                self.bounds_label.setText(fmt)
+            except Exception:
+                pass
+
+        js = (
+            "(function(){ if(!window.map) return null; "
+            "const b=window.map.getBounds(); "
+            "return {west:b.getWest(), south:b.getSouth(), "
+            "east:b.getEast(), north:b.getNorth()}; })();"
+        )
+        self.web_view.page().runJavaScript(js, _apply_bounds)
+
+    def generate_map(self) -> None:
+        # Rendering is driven from JS; no-op here.
         pass
 
-    def restart_agent(self):
+    def restart_agent(self) -> None:
         self.agent_id = None
         self.status_text.clear()
         self.restart_btn.setEnabled(False)
 
-    def select_route(self):
+    def select_route(self) -> None:
         selected = self.route_combo.currentText()
         if selected:
             index = int(selected.split()[1]) - 1
             self.current_route_index = index
             self.generate_map()
 
-    def view_map(self):
+    def view_map(self) -> None:
         self.generate_map()
 
-    def on_map_loaded(self, ok: bool):
+    def on_map_loaded(self, ok: bool) -> None:
         self.map_ready = ok
         if not ok:
             return
-        # push latest known data
+        # start periodic bounds label refresh
+        self._bounds_timer = getattr(self, '_bounds_timer', None)
+        if not self._bounds_timer:
+            self._bounds_timer = QTimer(self)
+            self._bounds_timer.timeout.connect(self._update_bounds_label)
+            self._bounds_timer.start(500)
         if self._graph_geojson is not None:
-            js = (
-                "window.app && window.app.setGraphGeoJSON(" +
-                f"{self._graph_geojson}" + ");"
+            code = (
+                "window.app && window.app.setGraphGeoJSON("
+                f"{json.dumps(self._graph_geojson)}"
+                ");"
             )
-            self.web_view.page().runJavaScript(js)
+            self._js(code)
         if self._routes_ml is not None:
-            self.web_view.page().runJavaScript(
-                f"window.app && window.app.setRoutes({self._routes_ml});"
+            code = (
+                "window.app && window.app.setRoutes("
+                f"{json.dumps(self._routes_ml)}"
+                ");"
             )
-            self.web_view.page().runJavaScript(
-                "window.app && window.app.fitToRoutes();"
-            )
+            self._js(code)
+            self._js("window.app && window.app.fitToRoutes();")
         if self._last_agent_pos is not None:
             pos = self._last_agent_pos
-            js = (
-                "window.app && window.app.updateAgent({" +
-                f"'lat': {pos['lat']}, 'lon': {pos['lon']}" + "});"
-            )
-            self.web_view.page().runJavaScript(js)
+            agent_obj = json.dumps({'lat': pos['lat'], 'lon': pos['lon']})
+            code = "window.app && window.app.updateAgent(" + agent_obj + ");"
+            self._js(code)
 
-    def run(self):
-        # Only show the window; the QApplication event loop
-        # is started once in the __main__ section below.
+    def run(self) -> None:
         self.show()
+
+    def _on_quit(self) -> None:
+        QApplication.quit()
 
 
 if __name__ == "__main__":
