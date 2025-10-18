@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import os
 from typing import List, Dict, Any
+from itertools import cycle
 
 import networkx as nx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from src.data.graph_builder import build_graph_from_overpass, nearest_node
@@ -61,6 +63,7 @@ engine: SimpleRouteEngine | None = None
 agents: Dict[int, Dict] = {}
 route_cache: Dict[str, RouteResponse] = {}
 next_agent_id = 1
+_tile_hosts = cycle(["a", "b", "c"])  # for upstream OSM subdomains
 
 
 def _load_graph() -> nx.DiGraph:
@@ -255,3 +258,38 @@ def osm_load(req: OsmLoadRequest) -> dict:
             status_code=500,
             detail=f"Failed to load OSM: {str(e)}"
         )
+
+
+@app.get("/tiles/osm/{z}/{x}/{y}.png")
+def proxy_osm_tiles(z: int, x: int, y: int):
+    """
+    Simple transparent proxy for OSM raster tiles to avoid CORS/UA issues
+    when rendering inside Qt WebEngine. Please respect OSM Tile Usage Policy
+    for production; add caching and proper contact information.
+    """
+    try:
+        import requests as _req
+        host = next(_tile_hosts)
+        url = f"https://{host}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        headers = {
+            "User-Agent": "Diplom-MapClient/0.1 (+https://example.invalid)",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        r = _req.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            raise HTTPException(
+                status_code=r.status_code,
+                detail="Tile fetch failed",
+            )
+        return Response(
+            content=r.content,
+            media_type="image/png",
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -8,7 +8,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OSM_JSON_PATH=/app/data/osm_data.json
+      OSM_JSON_PATH: /app/data/osm_data.json
     volumes:
       - ./data:/app/data
     networks:
@@ -28,13 +28,13 @@ services:
     depends_on:
       - server
     environment:
-      - DISPLAY=${DISPLAY}
-      - QT_X11_NO_MITSHM=1
-      - QT_QPA_PLATFORM=xcb
-      - QTWEBENGINE_DISABLE_SANDBOX=1
-      - QT_DEBUG_PLUGINS=1
-      - QTWEBENGINE_CHROMIUM_FLAGS=--enable-gpu-rasterization --ignore-gpu-blocklist --disable-software-rasterizer
-      - TILE_URL=${TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: "1"
+      QT_QPA_PLATFORM: xcb
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
+      QT_DEBUG_PLUGINS: "1"
+      QTWEBENGINE_CHROMIUM_FLAGS: --enable-gpu-rasterization --ignore-gpu-blocklist
+      TILE_URL: ${TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.Xauthority:/root/.Xauthority:rw

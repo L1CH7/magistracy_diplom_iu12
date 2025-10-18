@@ -4,14 +4,63 @@ import threading
 import time
 import json
 import requests
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from functools import partial
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QTextEdit, QComboBox, QShortcut,
-    QToolBox, QWidget as QW,
+    QWidget as QW,
 )
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import QUrl, QUrlQuery, QTimer
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
+from PyQt5.QtCore import QUrl, QTimer
 from PyQt5.QtGui import QKeySequence
+
+
+class CollapsibleSection(QWidget):
+    def __init__(self, title: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._open = False
+        self._title = title
+        self._content = QW()
+        self._content.setVisible(self._open)
+
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(4)
+
+        self._header_btn = QPushButton(self._header_text(self._title))
+        self._header_btn.setCheckable(True)
+        self._header_btn.setChecked(self._open)
+        self._header_btn.clicked.connect(self._toggle)
+        self._header_btn.setStyleSheet(
+            "text-align: left; font-weight: bold; padding: 6px;"
+        )
+        self._layout.addWidget(self._header_btn)
+        self._layout.addWidget(self._content)
+
+    def _header_text(self, title: str) -> str:
+        return ("▼ " if self._open else "▶ ") + title
+
+    def _toggle(self) -> None:
+        self._open = not self._open
+        self._content.setVisible(self._open)
+        # update arrow
+        self._header_btn.setText(self._header_text(self._title))
+        self._header_btn.setChecked(self._open)
+
+    def add_widget(self, w: QWidget) -> None:
+        lay = QVBoxLayout(self._content)
+        lay.setContentsMargins(12, 0, 0, 0)
+        lay.addWidget(w)
+
+
+class WebConsolePage(QWebEnginePage):
+    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
+        try:
+            lvl = int(level)
+        except Exception:
+            lvl = level
+        print(f"JS[{lvl}] {sourceID}:{lineNumber} {message}")
 
 
 class NavigationGUI(QWidget):
@@ -25,6 +74,11 @@ class NavigationGUI(QWidget):
         self._last_agent_pos = None
         self.prev_pos = None
         self.prev_time = None
+        # Initialize tile_url early so _start_assets_httpd can access it
+        self._tile_url = os.environ.get(
+            "TILE_URL",
+            "http://server:8000/tiles/osm/{z}/{x}/{y}.png"
+        )
 
         self.setWindowTitle("Navigation MAS Client")
         self.setStyleSheet("background-color: #f0f0f0; color: black;")
@@ -102,27 +156,26 @@ class NavigationGUI(QWidget):
         btn_frame.addWidget(self.clear_pick_btn)
         layout.addLayout(btn_frame)
 
-        # Collapsible logs
-        self.toolbox = QToolBox()
-        route_page = QW()
-        route_layout = QVBoxLayout(route_page)
+        # Collapsible logs (click to open, click again to close)
+        # Simple custom sections for better UX
+        sections_container = QVBoxLayout()
+
         self.route_text = QTextEdit()
-        route_layout.addWidget(self.route_text)
-        self.toolbox.addItem(route_page, "Route")
+        self.route_section = CollapsibleSection("Route")
+        self.route_section.add_widget(self.route_text)
+        sections_container.addWidget(self.route_section)
 
-        status_page = QW()
-        status_layout = QVBoxLayout(status_page)
         self.status_text = QTextEdit()
-        status_layout.addWidget(self.status_text)
-        self.toolbox.addItem(status_page, "Agent Status")
+        self.status_section = CollapsibleSection("Agent Status")
+        self.status_section.add_widget(self.status_text)
+        sections_container.addWidget(self.status_section)
 
-        speed_page = QW()
-        speed_layout = QVBoxLayout(speed_page)
         self.speed_label = QLabel("Speed: 0 km/h")
-        speed_layout.addWidget(self.speed_label)
-        self.toolbox.addItem(speed_page, "Speed")
+        self.speed_section = CollapsibleSection("Speed")
+        self.speed_section.add_widget(self.speed_label)
+        sections_container.addWidget(self.speed_section)
 
-        layout.addWidget(self.toolbox)
+        layout.addLayout(sections_container)
 
         # Route selection
         route_frame = QHBoxLayout()
@@ -155,18 +208,39 @@ class NavigationGUI(QWidget):
         layout.addWidget(QLabel("Map:"))
         self.web_view = QWebEngineView()
         layout.addWidget(self.web_view, stretch=1)
-        map_url = QUrl.fromLocalFile("/app/src/client/assets/map.html")
-        q = QUrlQuery()
-        tile_url = os.environ.get(
-            "TILE_URL", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        )
-        q.addQueryItem("tile", tile_url)
-        map_url.setQuery(q)
+        # Start a tiny local HTTP server to serve map.html, avoiding
+        # file:// origin CORS restrictions in QtWebEngine
+        self._assets_port = self._start_assets_httpd()
+        map_url = QUrl(f"http://127.0.0.1:{self._assets_port}/map.html")
+        # Console log hook to debug tile/GL errors.
+        # IMPORTANT: set the custom page BEFORE loading the URL.
+        self.web_view.setPage(WebConsolePage(self.web_view))
         self.web_view.load(map_url)
+        self.web_view.loadFinished.connect(self._on_map_html_loaded)
         self.web_view.loadFinished.connect(self.on_map_loaded)
 
         self.setLayout(layout)
         QShortcut(QKeySequence("Esc"), self, activated=self._on_quit)
+
+    def _start_assets_httpd(self) -> int:
+        """Start HTTP server for map.html assets."""
+        assets_dir = "/app/src/client/assets"
+        handler = partial(SimpleHTTPRequestHandler, directory=assets_dir)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        return port
+
+    def _on_map_html_loaded(self, ok: bool) -> None:
+        """Inject TILE_URL as window variable after map.html loads."""
+        if not ok:
+            print("ERROR: map.html failed to load")
+            return
+        # Inject window.TILE_URL before map accesses it
+        code = f"window.TILE_URL = {json.dumps(self._tile_url)};"
+        print(f"DEBUG: Injecting TILE_URL: {self._tile_url}")
+        self.web_view.page().runJavaScript(code)
 
     def _js(self, code: str) -> None:
         if self.map_ready:
@@ -210,6 +284,9 @@ class NavigationGUI(QWidget):
                     ");"
                 )
                 self._js(code)
+                # Auto-fit to graph extent so user sees lines even if
+                # tiles fail
+                self._js("window.app && window.app.fitToGraph();")
 
             QTimer.singleShot(0, apply)
 
@@ -428,6 +505,8 @@ class NavigationGUI(QWidget):
     def on_map_loaded(self, ok: bool) -> None:
         self.map_ready = ok
         if not ok:
+            # Visual hint when map fails to load
+            self.bounds_label.setText("[map failed to load]")
             return
         # start periodic bounds label refresh
         self._bounds_timer = getattr(self, '_bounds_timer', None)
