@@ -8,12 +8,13 @@ import time
 import json
 import requests
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from urllib.parse import parse_qs
 from functools import partial
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QTextEdit, QShortcut,
-    QMainWindow, QFrame, QMenu, QToolButton,
+    QMainWindow, QFrame, QMenu, QSlider, QScrollArea,
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 from PyQt5.QtCore import QUrl, QTimer, Qt
@@ -72,6 +73,44 @@ class WebConsolePage(QWebEnginePage):
         print(f"JS[{lvl}] {sourceID}:{lineNumber} {message}")
 
 
+class ZoomAPIHandler(SimpleHTTPRequestHandler):
+    """HTTP handler for zoom API + assets serving."""
+
+    gui_instance = None  # Will be set by NavigationGUI
+
+    def do_GET(self):
+        """Handle GET requests for both API and static files."""
+        # Parse URL
+        path = self.path.split('?')[0]
+        query_string = self.path.split('?')[1] if '?' in self.path else ''
+
+        # Handle API endpoints
+        if path == '/api/zoom':
+            # Parse zoom value from query string
+            params = parse_qs(query_string)
+            if 'value' in params:
+                try:
+                    zoom_value = float(params['value'][0])
+                    # Update GUI zoom slider if instance is available
+                    if self.gui_instance:
+                        self.gui_instance._handle_zoom_from_js(
+                            zoom_value
+                        )
+                    # Send 200 OK
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/plain')
+                    self.end_headers()
+                    self.wfile.write(b'OK')
+                    return
+                except (ValueError, IndexError):
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+
+        # Fall back to serving static files
+        super().do_GET()
+
+
 class NavigationGUI(QMainWindow):
     """Main window: fullscreen map + collapsible left sidebar."""
 
@@ -85,6 +124,23 @@ class NavigationGUI(QMainWindow):
         self._last_agent_pos = None
         self.prev_pos = None
         self.prev_time = None
+        self._last_context_menu_pos = None
+        self._context_menu_timer = None
+        # Track points as array: first=from, last=to, middle=via
+        # Each point: {"lon": float, "lat": float, "color": str}
+        self.points = []
+        self.points_list_widget = None
+        # Color palette for via points (beautiful, non-acidic)
+        self.color_palette = [
+            "#8b5cf6", "#06b6d4", "#14b8a6", "#f59e0b",
+            "#ec4899", "#a855f7", "#0ea5e9", "#10b981"
+        ]
+        self._color_idx = 0
+        # Map colors for display
+        self.from_map_color = "#2563eb"  # Blue
+        self.to_map_color = "#dc2626"    # Red
+        # Zoom slider dragging state
+        self._zoom_slider_user_dragging = False
         self._tile_url = os.environ.get(
             "TILE_URL",
             "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -106,32 +162,51 @@ class NavigationGUI(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # ===== SIDEBAR TOGGLE BUTTON =====
-        self.sidebar_toggle_btn = QToolButton()
-        self.sidebar_toggle_btn.setText("≡")
-        self.sidebar_toggle_btn.setMaximumWidth(40)
-        self.sidebar_toggle_btn.setMaximumHeight(40)
-        self.sidebar_toggle_btn.setCursor(Qt.PointingHandCursor)
-        self.sidebar_toggle_btn.setStyleSheet(
-            "QToolButton { background-color: #2563eb; color: white; "
-            "border: none; border-radius: 4px; font-weight: bold; font-size: 18px; "
-            "padding: 4px; margin: 8px; } "
-            "QToolButton:hover { background-color: #1d4ed8; }"
-        )
-        self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
-        self.sidebar_visible = True
-
         # ===== LEFT SIDEBAR (collapsible) =====
         self.sidebar = QFrame()
         self.sidebar.setStyleSheet(
-            "QFrame { background-color: #ffffff; border-right: 1px solid #e5e7eb; "
-            "border-radius: 0px; }"
+            "QFrame { background-color: #ffffff; border: 1px solid #e5e7eb; "
+            "border-radius: 8px; }"
         )
         self.sidebar.setMaximumWidth(350)
         self.sidebar.setMinimumWidth(280)
+        self.sidebar.setMinimumHeight(600)  # Full height
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(12, 12, 12, 12)
         sidebar_layout.setSpacing(8)
+
+        # === Top bar with close/open button ===
+        top_bar_layout = QHBoxLayout()
+        top_bar_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Close button (shown when sidebar is open) - same style as open btn
+        self.sidebar_close_btn = QPushButton("☰")
+        self.sidebar_close_btn.setMaximumWidth(40)
+        self.sidebar_close_btn.setMaximumHeight(40)
+        self.sidebar_close_btn.setStyleSheet(
+            "QPushButton { background-color: #2563eb; color: white; "
+            "border: none; border-radius: 4px; font-weight: bold; "
+            "font-size: 18px; } "
+            "QPushButton:hover { background-color: #1d4ed8; }"
+        )
+        self.sidebar_close_btn.clicked.connect(self._toggle_sidebar)
+        top_bar_layout.addWidget(self.sidebar_close_btn)
+        
+        top_bar_layout.addStretch()
+        sidebar_layout.addLayout(top_bar_layout)
+
+        # === Open button (overlay, shown when sidebar is hidden) ===
+        self.sidebar_open_btn = QPushButton("☰")
+        self.sidebar_open_btn.setMaximumWidth(40)
+        self.sidebar_open_btn.setMaximumHeight(40)
+        self.sidebar_open_btn.setStyleSheet(
+            "QPushButton { background-color: #2563eb; color: white; "
+            "border: none; border-radius: 4px; font-weight: bold; "
+            "font-size: 18px; } "
+            "QPushButton:hover { background-color: #1d4ed8; }"
+        )
+        self.sidebar_open_btn.clicked.connect(self._toggle_sidebar)
+        self.sidebar_visible = True
 
         # Title
         title_label = QLabel("Navigation")
@@ -267,6 +342,23 @@ class NavigationGUI(QMainWindow):
         self.speed_section.add_widget(self.speed_label)
         sidebar_layout.addWidget(self.speed_section)
 
+        # === SELECTED POINTS LIST ===
+        self.points_section = CollapsibleSection("Selected Points")
+        self.points_container = QFrame()
+        self.points_container.setStyleSheet(
+            "QFrame { background-color: #f9fafb; border-radius: 6px; "
+            "border: 1px solid #e5e7eb; }"
+        )
+        self.points_container.setMaximumHeight(200)
+        points_container_layout = QVBoxLayout(self.points_container)
+        points_container_layout.setContentsMargins(6, 6, 6, 6)
+        points_container_layout.setSpacing(6)
+        self.points_list = QWidget()  # Placeholder
+        points_container_layout.addWidget(self.points_list)
+        points_container_layout.addStretch()
+        self.points_section.add_widget(self.points_container)
+        sidebar_layout.addWidget(self.points_section)
+
         sidebar_layout.addStretch()
 
         # Quit button
@@ -279,103 +371,113 @@ class NavigationGUI(QMainWindow):
         )
         sidebar_layout.addWidget(self.quit_btn)
 
-        main_layout.addWidget(self.sidebar, stretch=0)
-
-        # ===== RIGHT: MAP AREA =====
-        map_frame = QFrame()
-        map_frame.setStyleSheet("QFrame { background-color: #f3f4f6; }")
-        map_layout = QVBoxLayout(map_frame)
+        # ===== MAP AREA WITH OVERLAY CONTROLS =====
+        # Create map frame (will contain map + overlay controls)
+        self.map_frame = QFrame()
+        self.map_frame.setStyleSheet(
+            "QFrame { background-color: #f3f4f6; }"
+        )
+        map_layout = QVBoxLayout(self.map_frame)
         map_layout.setContentsMargins(0, 0, 0, 0)
+        map_layout.setSpacing(0)
 
+        # Web view (map)
         self.web_view = QWebEngineView()
-        map_layout.addWidget(self.web_view)
+        map_layout.addWidget(self.web_view, 1)
 
-        main_layout.addWidget(map_frame, stretch=1)
-
-        # ===== OVERLAY CONTROLS ON MAP =====
-        # Sidebar toggle button (top-left)
-        overlay_top_left = QWidget()
-        overlay_top_left.setMaximumSize(50, 50)
-        overlay_top_left.setStyleSheet("background-color: transparent;")
-        overlay_top_left_layout = QVBoxLayout(overlay_top_left)
-        overlay_top_left_layout.setContentsMargins(0, 0, 0, 0)
-        overlay_top_left_layout.addWidget(self.sidebar_toggle_btn)
-
-        # Zoom controls (top-right)
+        # === SIDEBAR AS OVERLAY (can be hidden/shown) ===
+        self.sidebar.setParent(self.map_frame)
+        self.sidebar.setMaximumWidth(350)
+        
+        # === TOP-LEFT: Sidebar open button (overlay, shown when sidebar is hidden) ===
+        # Created during sidebar_open_btn initialization, no need to set parent here
+        
+        # === RIGHT-CENTER: Zoom controls (overlay, semi-transparent) ===
+        zoom_container = QWidget()
+        zoom_container.setParent(self.map_frame)
+        zoom_container.setMaximumWidth(60)
+        zoom_layout = QVBoxLayout(zoom_container)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(2)
+        
+        # zoom in/out button 
+        zoom_button_size = 15
+        # Zoom in button
         self.zoom_in_btn = QPushButton("+")
-        self.zoom_in_btn.setMaximumWidth(40)
-        self.zoom_in_btn.setMaximumHeight(40)
+        self.zoom_in_btn.setMinimumWidth(zoom_button_size)
+        self.zoom_in_btn.setMaximumWidth(zoom_button_size)
+        self.zoom_in_btn.setMinimumHeight(zoom_button_size)
+        self.zoom_in_btn.setMaximumHeight(zoom_button_size)
         self.zoom_in_btn.setStyleSheet(
-            "QPushButton { background-color: #2563eb; color: white; "
-            "border: none; border-radius: 20px; font-weight: bold; "
-            "font-size: 16px; } "
-            "QPushButton:hover { background-color: #1d4ed8; }"
+            "QPushButton { background-color: rgba(255, 255, 255, 0.8); "
+            "border: 1px solid #d1d5db; border-radius: 4px; "
+            "font-weight: bold; color: #374151; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 1); }"
         )
         self.zoom_in_btn.clicked.connect(self._on_zoom_in)
-
+        zoom_layout.addWidget(self.zoom_in_btn)
+        
+        # Zoom slider
+        self.zoom_slider = QSlider(Qt.Vertical)
+        self.zoom_slider.setMinimum(0)
+        self.zoom_slider.setMaximum(100)
+        self.zoom_slider.setValue(50)  # Start at center
+        self.zoom_slider.setStyleSheet(
+            "QSlider { background-color: transparent; "
+            "border: none; margin: 0px; padding: 0px; } "
+            "QSlider::groove:vertical { border: none; "
+            "background-color: rgba(255, 255, 255, 0.5); "
+            "border-radius: 4px; width: 8px; } "
+            "QSlider::handle:vertical { background: "
+            "rgba(37, 99, 235, 0.9); border: none; border-radius: 6px; "
+            "height: 16px; margin: 0px -4px; } "
+            "QSlider::handle:vertical:hover { background: "
+            "rgba(37, 99, 235, 1); }"
+        )
+        self.zoom_slider.sliderMoved.connect(
+            self._on_zoom_slider_moved
+        )
+        self.zoom_slider.sliderPressed.connect(
+            self._on_zoom_slider_pressed
+        )
+        self.zoom_slider.sliderReleased.connect(
+            self._on_zoom_slider_released
+        )
+        zoom_layout.addWidget(self.zoom_slider, 1)
+        
+        # Zoom out button
         self.zoom_out_btn = QPushButton("−")
-        self.zoom_out_btn.setMaximumWidth(40)
-        self.zoom_out_btn.setMaximumHeight(40)
+        self.zoom_out_btn.setMinimumWidth(zoom_button_size)
+        self.zoom_out_btn.setMaximumWidth(zoom_button_size)
+        self.zoom_out_btn.setMinimumHeight(zoom_button_size)
+        self.zoom_out_btn.setMaximumHeight(zoom_button_size)
         self.zoom_out_btn.setStyleSheet(
-            "QPushButton { background-color: #2563eb; color: white; "
-            "border: none; border-radius: 20px; font-weight: bold; "
-            "font-size: 16px; } "
-            "QPushButton:hover { background-color: #1d4ed8; }"
+            "QPushButton { background-color: rgba(255, 255, 255, 0.8); "
+            "border: 1px solid #d1d5db; border-radius: 4px; "
+            "font-weight: bold; color: #374151; } "
+            "QPushButton:hover { background-color: rgba(255, 255, 255, 1); }"
         )
         self.zoom_out_btn.clicked.connect(self._on_zoom_out)
+        zoom_layout.addWidget(self.zoom_out_btn)
+        
+        zoom_container.raise_()
+        
+        # === BOTTOM-LEFT: Scale ruler (overlay) ===
+        self.scale_ruler = QLabel("50m")
+        self.scale_ruler.setParent(self.map_frame)
+        self.scale_ruler.setVisible(False)  # Hidden
+        
+        self.scale_ruler_line = QFrame()
+        self.scale_ruler_line.setParent(self.map_frame)
+        self.scale_ruler_line.setVisible(False)  # Hidden
+        
+        # Track zoom bounds for slider
+        self.current_zoom = 12.0  # Will be updated on map load
+        self.initial_zoom = 12.0  # Will be updated on map load
+        self.zoom_min = 0.2 * 12.0  # Will be updated on map load
+        self.zoom_max = 5.0 * 12.0  # Will be updated on map load
 
-        overlay_top_right = QWidget()
-        overlay_top_right.setMaximumSize(50, 100)
-        overlay_top_right.setStyleSheet("background-color: transparent;")
-        overlay_top_right_layout = QVBoxLayout(overlay_top_right)
-        overlay_top_right_layout.setContentsMargins(0, 0, 0, 0)
-        overlay_top_right_layout.addWidget(self.zoom_in_btn)
-        overlay_top_right_layout.addWidget(self.zoom_out_btn)
-
-        # Scale widget (bottom-left)
-        self.scale_label = QLabel("Zoom: --")
-        self.scale_label.setStyleSheet(
-            "background-color: rgba(255, 255, 255, 0.95); "
-            "padding: 6px 10px; border-radius: 4px; "
-            "border: 1px solid #d1d5db; font-size: 11px; "
-            "font-family: monospace;"
-        )
-
-        # Add overlay widgets to map frame with overlays
-        # We need to create a wrapper that allows overlaying
-        map_wrapper = QFrame()
-        map_wrapper_layout = QHBoxLayout(map_wrapper)
-        map_wrapper_layout.setContentsMargins(0, 0, 0, 0)
-        map_wrapper_layout.setSpacing(0)
-
-        # Create a stack for map + overlays
-        map_stack = QFrame()
-        map_stack_layout = QVBoxLayout(map_stack)
-        map_stack_layout.setContentsMargins(0, 0, 0, 0)
-        map_stack_layout.setSpacing(0)
-
-        # Top bar with controls
-        top_controls = QHBoxLayout()
-        top_controls.setContentsMargins(8, 8, 8, 0)
-        top_controls.setSpacing(0)
-        top_controls.addWidget(self.sidebar_toggle_btn, 0)
-        top_controls.addStretch()
-        top_controls.addWidget(self.zoom_in_btn, 0)
-        top_controls.addWidget(self.zoom_out_btn, 0)
-        top_controls.addSpacing(8)
-
-        # Bottom bar with scale
-        bottom_controls = QHBoxLayout()
-        bottom_controls.setContentsMargins(8, 0, 8, 8)
-        bottom_controls.setSpacing(0)
-        bottom_controls.addWidget(self.scale_label, 0)
-        bottom_controls.addStretch()
-
-        map_stack_layout.addLayout(top_controls, 0)
-        map_stack_layout.addWidget(self.web_view, 1)
-        map_stack_layout.addLayout(bottom_controls, 0)
-
-        main_layout.addWidget(map_stack, stretch=1)
+        main_layout.addWidget(self.map_frame, stretch=1)
 
         # ===== Load map =====
         self._assets_port = self._start_assets_httpd()
@@ -387,16 +489,47 @@ class NavigationGUI(QMainWindow):
 
         # ESC to quit
         QShortcut(QKeySequence("Esc"), self, activated=self._on_quit)
+        
+        # Ctrl+1/2/3 for quick point setting at cursor
+        QShortcut(QKeySequence("Ctrl+1"), self, activated=self._on_ctrl_1)
+        QShortcut(QKeySequence("Ctrl+2"), self, activated=self._on_ctrl_2)
+        QShortcut(QKeySequence("Ctrl+3"), self, activated=self._on_ctrl_3)
+        
+        # Setup zoom change callback - this will be called by map.html
+        # when zoom changes (any method: wheel, buttons, slider, etc)
+        self._setup_zoom_callback()
 
     def _start_assets_httpd(self) -> int:
-        """Start HTTP server for map.html assets."""
+        """Start HTTP server for map.html assets + zoom API."""
         assets_dir = "/app/src/client/assets"
-        handler = partial(SimpleHTTPRequestHandler, directory=assets_dir)
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        handler = partial(ZoomAPIHandler, directory=assets_dir)
+        # Store reference to this GUI instance in handler
+        ZoomAPIHandler.gui_instance = self
+        httpd = ThreadingHTTPServer(("127.0.0.1", 9999), handler)
         port = httpd.server_address[1]
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
         t.start()
         return port
+
+    def _handle_zoom_from_js(self, zoom_value: float) -> None:
+        """Handle zoom change from JavaScript via HTTP API."""
+        try:
+            self.current_zoom = zoom_value
+
+            # Convert zoom level back to slider position (0-100)
+            zoom_min = 0
+            zoom_max = 19
+            # Reverse exponential: slider_pos = (zoom_level / span) ^ (1/1.3)
+            normalized = (zoom_value - zoom_min) / (zoom_max - zoom_min)
+            slider_pos = int(round((normalized ** (1.0 / 1.3)) * 100))
+            slider_pos = max(0, min(100, slider_pos))
+
+            # Update slider without triggering valueChanged signal
+            self.zoom_slider.blockSignals(True)
+            self.zoom_slider.setValue(slider_pos)
+            self.zoom_slider.blockSignals(False)
+        except Exception as e:
+            print(f"Error handling zoom from JS: {e}")
 
     def _on_map_html_loaded(self, ok: bool) -> None:
         """Inject TILE_URL after map.html loads."""
@@ -406,73 +539,459 @@ class NavigationGUI(QMainWindow):
         code = f"window.TILE_URL = {json.dumps(self._tile_url)};"
         print(f"DEBUG: Injecting TILE_URL: {self._tile_url}")
         self.web_view.page().runJavaScript(code)
+        # Note: initializeMap() will be called automatically by map.html
+        # when it detects TILE_URL is available (after 100ms timeout)
         # Setup context menu callback from map right-click
         self._setup_map_context_menu()
 
     def _setup_map_context_menu(self) -> None:
         """Install JS callback for right-click context menu."""
+        # Install JS callbacks
         js_code = """
-window.onMapContextMenu = function(pos) {
-    console.log('RightClick at:', pos.lng, pos.lat);
-};
-"""
+        window.lastContextMenuPos = null;
+        window.lastContextMenuProcessed = false;
+        
+        window.onMapContextMenu = function(pos) {
+            console.log('RightClick at:', pos.lon, pos.lat);
+            // Store last position for Python to retrieve
+            window.lastContextMenuPos = pos;
+            window.lastContextMenuProcessed = false;
+        };
+        """
         self.web_view.page().runJavaScript(js_code)
+        
+        # Start polling timer to check for right-click events
+        self._context_menu_timer = QTimer()
+        self._context_menu_timer.timeout.connect(self._poll_context_menu_pos)
+        self._context_menu_timer.start(20)  # Poll every 20ms for faster response
+    
+    def _poll_context_menu_pos(self) -> None:
+        """Poll for right-click position from JavaScript."""
+        self.web_view.page().runJavaScript(
+            "JSON.stringify(window.lastContextMenuPos)",
+            lambda result: self._on_context_menu_pos_received(result)
+        )
 
-    def _show_map_context_menu(self, lng: float, lat: float) -> None:
-        """Show context menu for map right-click."""
+    def _show_map_context_menu(self, lon: float, lat: float) -> None:
+        """Show simple context menu for map right-click."""
         menu = QMenu(self)
-        action_from = menu.addAction("Set From")
-        action_to = menu.addAction("Set To")
-        action_via = menu.addAction("Add Via")
+        menu.setWindowOpacity(0.95)
+        menu.setMinimumWidth(180)
+        
+        # Main actions only
+        action_from = menu.addAction("Set From Point")
+        action_to = menu.addAction("Set To Point")
+        
+        # Via is only available if we have at least 2 points
+        action_via = None
+        if len(self.points) >= 2:
+            action_via = menu.addAction("Add Via Point")
+        
+        menu.addSeparator()
         action_clear = menu.addAction("Clear All")
-
+        
+        # Connect actions
         action_from.triggered.connect(
-            lambda: self._set_point("from", lng, lat)
+            lambda: self._set_point("from", lon, lat)
         )
         action_to.triggered.connect(
-            lambda: self._set_point("to", lng, lat)
+            lambda: self._set_point("to", lon, lat)
         )
-        action_via.triggered.connect(
-            lambda: self._set_point("via", lng, lat)
-        )
+        if action_via:
+            action_via.triggered.connect(
+                lambda: self._set_point("via", lon, lat)
+            )
         action_clear.triggered.connect(self._clear_map_markers)
-
+        
         menu.exec_(QCursor.pos())
 
-    def _set_point(self, point_type: str, lng: float, lat: float) -> None:
+    def _on_context_menu_pos_received(self, result: str) -> None:
+        """Handle right-click position received from JavaScript."""
+        if not result or result == "null":
+            return
+        
+        try:
+            import json
+            pos = json.loads(result)
+            if pos and isinstance(pos, dict):
+                lon = pos.get("lon")
+                lat = pos.get("lat")
+                if lon is not None and lat is not None:
+                    # Round to avoid floating point comparison issues
+                    lon_r = round(lon, 4)
+                    lat_r = round(lat, 4)
+                    last_pos_r = (
+                        round(self._last_context_menu_pos[0], 4),
+                        round(self._last_context_menu_pos[1], 4)
+                    ) if self._last_context_menu_pos else None
+                    
+                    # Show menu if this is a genuinely new position
+                    if last_pos_r != (lon_r, lat_r):
+                        self._last_context_menu_pos = (lon, lat)
+                        # Minimal delay
+                        QTimer.singleShot(
+                            10,
+                            lambda: self._show_map_context_menu(lon, lat)
+                        )
+                        # Clear the position immediately
+                        self.web_view.page().runJavaScript(
+                            "window.lastContextMenuPos = null;"
+                        )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+    def _set_point(self, point_type: str, lon: float, lat: float) -> None:
         """Set a point on map via context menu."""
         if point_type == "from":
+            # Set first point - always replaces existing from
+            color = self.color_palette[
+                self._color_idx % len(self.color_palette)
+            ]
+            self._color_idx += 1
+            
+            if not self.points:
+                self.points.append({
+                    "lon": lon, "lat": lat, "color": color
+                })
+            else:
+                self.points[0] = {
+                    "lon": lon, "lat": lat, "color": color
+                }
             self.start_lat.setText(f"{lat:.6f}")
-            self.start_lon.setText(f"{lng:.6f}")
-            code = (
-                f"window.app && "
-                f"window.app.setStart({{"
-                f"lng: {lng}, lat: {lat}"
-                f"}});"
-            )
-            self._js(code)
+            self.start_lon.setText(f"{lon:.6f}")
+        
         elif point_type == "to":
+            # Set last point - always replaces existing to
+            color = self.color_palette[
+                self._color_idx % len(self.color_palette)
+            ]
+            self._color_idx += 1
+            
+            if len(self.points) == 0:
+                self.points.append({
+                    "lon": lon, "lat": lat, "color": color
+                })
+            elif len(self.points) == 1:
+                self.points.append({
+                    "lon": lon, "lat": lat, "color": color
+                })
+            else:
+                # Replace last
+                self.points[-1] = {
+                    "lon": lon, "lat": lat, "color": color
+                }
+            
             self.end_lat.setText(f"{lat:.6f}")
-            self.end_lon.setText(f"{lng:.6f}")
-            code = (
-                f"window.app && "
-                f"window.app.setEnd({{"
-                f"lng: {lng}, lat: {lat}"
-                f"}});"
-            )
-            self._js(code)
+            self.end_lon.setText(f"{lon:.6f}")
+        
         elif point_type == "via":
+            # Via point - gets random color from palette
+            # Insert before last (to) point
+            if len(self.points) < 2:
+                # Not enough points for via yet
+                return
+            
+            color = self.color_palette[
+                self._color_idx % len(self.color_palette)
+            ]
+            self._color_idx += 1
+            
+            # Insert before the last point (which is "to")
+            self.points.insert(-1, {
+                "lon": lon, "lat": lat, "color": color
+            })
+        
+        # Update map markers and list
+        self._update_map_markers()
+        self._update_points_list()
+
+    def _update_map_markers(self) -> None:
+        """Clear all markers and add only current points from array."""
+        # Clear ALL old markers first
+        self._js("window.app && window.app.clearAllMarkers();")
+        
+        if not self.points:
+            return
+        
+        # Add markers for each point with correct color
+        for idx, point in enumerate(self.points):
+            lon = point["lon"]
+            lat = point["lat"]
+            
+            if idx == 0:
+                # From - blue border (white fill)
+                marker_color = "#2563eb"
+            elif idx == len(self.points) - 1:
+                # To - red border (white fill)
+                marker_color = "#dc2626"
+            else:
+                # Via - its own color with black border
+                marker_color = point["color"]
+            
+            # Add marker to map
             code = (
                 f"window.app && "
-                f"window.app.addVia({{"
-                f"lng: {lng}, lat: {lat}"
-                f"}});"
+                f"window.app.addMarker({{"
+                f"lon: {lon}, lat: {lat}"
+                f"}}, '{marker_color}');"
             )
             self._js(code)
 
+    def _remove_point(self, idx: int) -> None:
+        """Remove a point at specific index from the points array."""
+        if 0 <= idx < len(self.points):
+            self.points.pop(idx)
+            
+            # Update from/to fields if needed
+            if len(self.points) == 0:
+                self.start_lat.setText("55.751244")
+                self.start_lon.setText("37.618423")
+                self.end_lat.setText("55.755826")
+                self.end_lon.setText("37.617300")
+            elif len(self.points) == 1:
+                p = self.points[0]
+                self.start_lat.setText(f"{p['lat']:.6f}")
+                self.start_lon.setText(f"{p['lon']:.6f}")
+                self.end_lat.setText("55.755826")
+                self.end_lon.setText("37.617300")
+            else:
+                p0 = self.points[0]
+                p1 = self.points[-1]
+                self.start_lat.setText(f"{p0['lat']:.6f}")
+                self.start_lon.setText(f"{p0['lon']:.6f}")
+                self.end_lat.setText(f"{p1['lat']:.6f}")
+                self.end_lon.setText(f"{p1['lon']:.6f}")
+            
+            # Update markers (only the remaining ones)
+            self._update_map_markers()
+        
+        self._update_points_list()
+
     def _clear_map_markers(self) -> None:
-        """Clear all map markers."""
+        """Clear all map markers and points."""
+        self.points = []
+        self.start_lat.setText("55.751244")
+        self.start_lon.setText("37.618423")
+        self.end_lat.setText("55.755826")
+        self.end_lon.setText("37.617300")
         self._js("window.app && window.app.clearAllMarkers();")
+        self._update_points_list()
+
+    def _update_points_list(self) -> None:
+        """Update the points list display as scrollable sandwich."""
+        # Remove old list widget
+        if hasattr(self, 'points_list_widget') and self.points_list_widget:
+            self.points_list_widget.deleteLater()
+        
+        # Create new container
+        self.points_list_widget = QWidget()
+        layout = QVBoxLayout(self.points_list_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        if not self.points:
+            # No points - hide the entire list widget
+            layout.addStretch()
+        else:
+            # Create scroll area for sandwich
+            scroll_area = QScrollArea()
+            scroll_area.setStyleSheet(
+                "QScrollArea { border: none; background-color: #ffffff; } "
+                "QScrollBar:vertical { width: 6px; } "
+                "QScrollBar::handle:vertical { background: #d1d5db; "
+                "border-radius: 3px; } "
+                "QScrollBar::handle:vertical:hover { background: #9ca3af; }"
+            )
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            
+            # Create sandwich container
+            sandwich = self._create_sandwich()
+            scroll_area.setWidget(sandwich)
+            
+            # Set max height to show ~5 points
+            point_height = 36
+            max_points_visible = 5
+            max_height = min(
+                len(self.points) * point_height,
+                max_points_visible * point_height
+            )
+            scroll_area.setMaximumHeight(max_height)
+            scroll_area.setMinimumHeight(
+                min(len(self.points) * point_height, max_height)
+            )
+            
+            layout.addWidget(scroll_area)
+        
+        # Add to container
+        old_widget = self.points_container.layout().takeAt(0)
+        if old_widget and old_widget.widget():
+            old_widget.widget().deleteLater()
+        self.points_container.layout().insertWidget(
+            0, self.points_list_widget
+        )
+
+    def _create_sandwich(self) -> QFrame:
+        """Create a sandwich-style list of points with tight tiles."""
+        container = QFrame()
+        container.setStyleSheet(
+            "QFrame { background-color: #ffffff; "
+            "border: 1px solid #d1d5db; border-radius: 6px; "
+            "margin: 0px; padding: 0px; }"
+        )
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        n = len(self.points)
+        for idx in range(n):
+            point = self.points[idx]
+            is_first = (idx == 0)
+            is_last = (idx == n - 1)
+            
+            tile = self._create_sandwich_tile(idx, point, is_first, is_last)
+            layout.addWidget(tile)
+        
+        return container
+
+    def _create_sandwich_tile(
+        self, idx: int, point: dict, is_first: bool, is_last: bool
+    ) -> QFrame:
+        """Create a tile for one point in the sandwich."""
+        tile = QFrame()
+        
+        # Styling - only bottom border between tiles
+        tile.setStyleSheet(
+            "QFrame { background-color: #ffffff; "
+            "border: none; border-bottom: 1px solid #e5e7eb; "
+            "padding: 0px; margin: 0px; }"
+        )
+        tile.setMaximumHeight(32)
+        tile.setMinimumHeight(32)
+        
+        layout = QHBoxLayout(tile)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(4)
+        
+        # 1. Marker circle matching map display
+        dot = QFrame()
+        
+        if is_first:
+            # From: white circle with blue border
+            dot.setMinimumWidth(14)
+            dot.setMaximumWidth(14)
+            dot.setMinimumHeight(14)
+            dot.setMaximumHeight(14)
+            dot.setStyleSheet(
+                "QFrame { background-color: #ffffff; "
+                "border: 2px solid #2563eb; border-radius: 7px; }"
+            )
+        elif is_last:
+            # To: white circle with red border
+            dot.setMinimumWidth(14)
+            dot.setMaximumWidth(14)
+            dot.setMinimumHeight(14)
+            dot.setMaximumHeight(14)
+            dot.setStyleSheet(
+                "QFrame { background-color: #ffffff; "
+                "border: 2px solid #dc2626; border-radius: 7px; }"
+            )
+        else:
+            # Via: colored circle with black border
+            color = point.get("color", "#8b5cf6")
+            dot.setMinimumWidth(12)
+            dot.setMaximumWidth(12)
+            dot.setMinimumHeight(12)
+            dot.setMaximumHeight(12)
+            dot.setStyleSheet(
+                f"QFrame {{ background-color: {color}; "
+                f"border: 2px solid #000000; border-radius: 6px; }}"
+            )
+        
+        layout.addWidget(dot)
+        
+        # 2. Point type label
+        if is_first:
+            type_label = QLabel("From")
+        elif is_last:
+            type_label = QLabel("To")
+        else:
+            type_label = QLabel("Via")
+        
+        type_label.setStyleSheet(
+            "font-size: 11px; color: #374151; min-width: 24px;"
+        )
+        layout.addWidget(type_label)
+        
+        # 3. Coordinates (compact)
+        coord_text = f"{point['lon']:.2f}, {point['lat']:.2f}"
+        coord_label = QLabel(coord_text)
+        coord_label.setStyleSheet(
+            "font-family: monospace; font-size: 10px; color: #6b7280;"
+        )
+        layout.addWidget(coord_label, 1)
+        
+        # 4. Up button (not for first)
+        if idx > 0:
+            up_btn = QPushButton("▲")
+            up_btn.setMinimumWidth(20)
+            up_btn.setMaximumWidth(20)
+            up_btn.setMinimumHeight(20)
+            up_btn.setMaximumHeight(20)
+            up_btn.setStyleSheet(
+                "QPushButton { background-color: transparent; "
+                "border: none; padding: 0px; "
+                "color: #9ca3af; font-size: 9px; font-weight: bold; } "
+                "QPushButton:hover { color: #6b7280; }"
+            )
+            up_btn.clicked.connect(lambda: self._move_point(idx, -1))
+            layout.addWidget(up_btn)
+        
+        # 5. Down button (not for last)
+        if idx < len(self.points) - 1:
+            down_btn = QPushButton("▼")
+            down_btn.setMinimumWidth(20)
+            down_btn.setMaximumWidth(20)
+            down_btn.setMinimumHeight(20)
+            down_btn.setMaximumHeight(20)
+            down_btn.setStyleSheet(
+                "QPushButton { background-color: transparent; "
+                "border: none; padding: 0px; "
+                "color: #9ca3af; font-size: 9px; font-weight: bold; } "
+                "QPushButton:hover { color: #6b7280; }"
+            )
+            down_btn.clicked.connect(lambda: self._move_point(idx, 1))
+            layout.addWidget(down_btn)
+        
+        # 6. Delete button
+        del_btn = QPushButton("✕")
+        del_btn.setMinimumWidth(20)
+        del_btn.setMaximumWidth(20)
+        del_btn.setMinimumHeight(20)
+        del_btn.setMaximumHeight(20)
+        del_btn.setStyleSheet(
+            "QPushButton { background-color: transparent; "
+            "border: none; padding: 0px; "
+            "color: #ef4444; font-size: 10px; font-weight: bold; } "
+            "QPushButton:hover { color: #dc2626; }"
+        )
+        del_btn.clicked.connect(lambda: self._remove_point(idx))
+        layout.addWidget(del_btn)
+        
+        return tile
+
+    def _move_point(self, from_idx: int, direction: int) -> None:
+        """Move a point up (-1) or down (+1) in the list."""
+        to_idx = from_idx + direction
+        if 0 <= to_idx < len(self.points):
+            self.points[from_idx], self.points[to_idx] = (
+                self.points[to_idx], self.points[from_idx]
+            )
+        
+        # Update both map and list display
+        self._update_map_markers()
+        self._update_points_list()
 
     def _js(self, code: str) -> None:
         """Execute JS on map."""
@@ -762,13 +1281,28 @@ window.onMapContextMenu = function(pos) {
         self.web_view.page().runJavaScript(js, _apply_bounds)
 
     def _toggle_sidebar(self) -> None:
-        """Toggle sidebar visibility with animation."""
+        """Toggle sidebar visibility without redrawing map."""
         self.sidebar_visible = not self.sidebar_visible
-        self.sidebar.setVisible(self.sidebar_visible)
-        # Update button appearance
-        self.sidebar_toggle_btn.setText(
-            "≡" if self.sidebar_visible else "⋮"
-        )
+        # Update overlay positions (shows/hides sidebar and open button)
+        self._update_overlay_positions()
+
+    def _setup_zoom_callback(self) -> None:
+        """Setup JS->Python zoom change callback.
+        
+        When map zoom changes, JS will call Python with the new zoom level
+        and a flag indicating whether it was from UI interaction.
+        """
+        # TODO: Implement proper Qt signal for zoom changes
+        # For now, just set up the JS function placeholder
+        js = """
+        window.onZoomChanged = function(zoom, fromUI) {
+            // Called by map.on('zoom') event in map.html
+            // fromUI = true if user caused it (wheel, buttons, etc)
+            // fromUI = false if we called map.setZoom() from Python
+            console.log('Map zoom:', zoom, 'from UI:', fromUI);
+        };
+        """
+        self.web_view.page().runJavaScript(js)
 
     def _on_zoom_in(self) -> None:
         """Increase map zoom."""
@@ -777,25 +1311,160 @@ window.onMapContextMenu = function(pos) {
     def _on_zoom_out(self) -> None:
         """Decrease map zoom."""
         self._js("if(window.map) window.map.zoomOut();")
+    
+    def _update_zoom_slider_from_map(
+            self, zoom_level: float
+    ) -> None:
+        """Update zoom slider to match current map zoom.
+        
+        Called from:
+        - on_map_loaded() for initialization
+        - JS zoom event listener (wheel, +/- buttons)
+        - _on_zoom_slider_moved() blocks signals to prevent loops
+        """
+        try:
+            # Convert zoom level (0-19) to slider position (0-100)
+            zoom_min = 0
+            zoom_max = 19
+            slider_pos = (
+                (zoom_level - zoom_min) / (zoom_max - zoom_min)
+            ) ** (1.0 / 1.3)
+            slider_value = int(
+                max(0, min(100, slider_pos * 100))
+            )
+            
+            # Update slider without triggering sliderMoved signal
+            self.zoom_slider.blockSignals(True)
+            self.zoom_slider.setValue(slider_value)
+            self.zoom_slider.blockSignals(False)
+            
+            self.current_zoom = zoom_level
+        except Exception as e:
+            print(f"Error updating zoom slider: {e}")
+    
+    def _on_zoom_slider_pressed(self) -> None:
+        """User pressed zoom slider - block signals during drag."""
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.blockSignals(False)  # Re-enable but track state
+        self._zoom_slider_user_dragging = True
+    
+    def _on_zoom_slider_released(self) -> None:
+        """User released zoom slider."""
+        self._zoom_slider_user_dragging = False
+    
+    def _on_zoom_slider_moved(self, value: int) -> None:
+        """User moved zoom slider (0-100 = full world to street level)."""
+        slider_pos = value / 100.0
+        zoom_min = 0
+        zoom_max = 19
+        zoom = zoom_min + (zoom_max - zoom_min) * (slider_pos ** 1.3)
+        
+        # Only send to map if zoom actually changed significantly
+        if abs(zoom - self.current_zoom) > 0.05:
+            self._js(f"if(window.map) window.map.setZoom({zoom:.1f});")
 
     def _update_scale_label(self) -> None:
-        """Update scale label with current zoom level."""
+        """Update scale ruler - dynamic width based on zoom."""
         if not self.map_ready:
             return
 
-        def _apply_zoom(result):
+        def _apply_scale(result):
             if result is not None:
                 try:
                     zoom = float(result)
-                    self.scale_label.setText(f"Zoom: {zoom:.1f}")
-                except Exception:
-                    pass
+                    self.current_zoom = zoom
+                    
+                    # Calculate scale ruler distance
+                    import math
+                    lat = 55.7558  # Default to Moscow
+                    px_per_meter = (
+                        256 * (2 ** zoom) * math.cos(
+                            math.radians(lat)
+                        ) / 40075000
+                    )
+                    
+                    # Target: show distance that looks good visually
+                    # Aim for 60-120px on screen
+                    target_pixels_min = 60
+                    target_pixels_max = 120
+                    
+                    # Predefined scale steps (nice round numbers)
+                    scale_steps = [
+                        1, 2, 5, 10, 20, 50, 100, 200, 500,
+                        1000, 2000, 5000, 10000, 20000, 50000
+                    ]
+                    
+                    # Find best scale: closest to target range
+                    best_scale = 1
+                    best_diff = float('inf')
+                    target_center = (
+                        (target_pixels_min + target_pixels_max) / 2
+                    )
+                    for scale in scale_steps:
+                        pixels = scale * px_per_meter
+                        # Prefer scales in middle of range
+                        diff = abs(pixels - target_center)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_scale = scale
+                    
+                    # Calculate actual pixels for this scale
+                    ruler_pixels = int(best_scale * px_per_meter)
+                    # Clamp between min and max
+                    ruler_pixels = max(40, min(200, ruler_pixels))
+                    
+                    # Format label
+                    if best_scale >= 1000:
+                        label = f"{best_scale // 1000}km"
+                    else:
+                        label = f"{best_scale}m"
+                    
+                    self.scale_ruler.setText(label)
+                    
+                    # Set line width to calculated size
+                    self.scale_ruler_line.setMaximumWidth(ruler_pixels)
+                    
+                    # Update overlay positions
+                    self._update_overlay_positions()
+                except Exception as e:
+                    print(f"Scale update error: {e}")
 
         js = (
             "(function(){ if(!window.map) return null; "
             "return window.map.getZoom(); })();"
         )
-        self.web_view.page().runJavaScript(js, _apply_zoom)
+        self.web_view.page().runJavaScript(js, _apply_scale)
+    
+    def _update_overlay_positions(self) -> None:
+        """Update positions of overlay controls."""
+        if not hasattr(self, 'map_frame'):
+            return
+        
+        map_w = self.map_frame.width()
+        map_h = self.map_frame.height()
+        
+        # Position sidebar at left edge (overlay, full height, with margin)
+        if self.sidebar_visible:
+            self.sidebar.move(8, 8)  # Margin from top-left
+            self.sidebar.resize(self.sidebar.width(), map_h - 16)  # Margin
+            self.sidebar.show()
+            self.sidebar_open_btn.hide()
+        else:
+            self.sidebar.move(-self.sidebar.width(), 0)
+            # Show open button at top-left
+            self.sidebar_open_btn.setParent(self.map_frame)
+            self.sidebar_open_btn.move(8, 8)
+            self.sidebar_open_btn.show()
+        
+        # Position zoom controls at right-center (overlay)
+        if hasattr(self, 'zoom_slider'):
+            zoom_container = self.zoom_slider.parent()
+            if zoom_container:
+                zoom_h = zoom_container.height()
+                zoom_x = map_w - 70  # Right edge with margin
+                zoom_y = max(20, (map_h - zoom_h) // 2)
+                zoom_container.move(zoom_x, zoom_y)
+                zoom_container.raise_()
 
     def restart_agent(self) -> None:
         """Reset agent."""
@@ -809,6 +1478,37 @@ window.onMapContextMenu = function(pos) {
         if not ok:
             self.bounds_label.setText("[map failed to load]")
             return
+        
+        # Initialize zoom bounds and slider from current map zoom
+        def _init_zoom_bounds(zoom_result):
+            if zoom_result is not None:
+                try:
+                    initial_zoom = float(zoom_result)
+                    self.initial_zoom = initial_zoom
+                    self.zoom_min = max(0, 0.2 * initial_zoom)
+                    self.zoom_max = min(21, 5.0 * initial_zoom)
+                    
+                    # Update slider via the single sync function
+                    self._update_zoom_slider_from_map(initial_zoom)
+                except Exception as e:
+                    print(f"Failed to init zoom bounds: {e}")
+        
+        # Setup JS->Python zoom callback
+        js_setup = """
+        window.onZoomChanged = function(zoom) {
+            // This will be called by map 'zoom' event listener
+            // We'll handle it via Qt callback mechanism
+        };
+        """
+        self.web_view.page().runJavaScript(js_setup)
+        
+        # Get initial zoom and update slider
+        js = (
+            "(function(){ if(!window.map) return null; "
+            "return window.map.getZoom(); })();"
+        )
+        self.web_view.page().runJavaScript(js, _init_zoom_bounds)
+        
         self._bounds_timer = getattr(self, "_bounds_timer", None)
         if not self._bounds_timer:
             self._bounds_timer = QTimer(self)
@@ -848,6 +1548,36 @@ window.onMapContextMenu = function(pos) {
                 "window.app.updateAgent(" + agent_obj + ");"
             )
             self._js(code)
+
+    def _on_ctrl_1(self) -> None:
+        """Ctrl+1: Set From point at cursor position."""
+        js = "(function(){ return window.lastMousePosition || null; })();"
+        
+        def callback(result):
+            if result:
+                self._set_point("from", result["lon"], result["lat"])
+        
+        self.web_view.page().runJavaScript(js, callback)
+
+    def _on_ctrl_2(self) -> None:
+        """Ctrl+2: Set To point at cursor position."""
+        js = "(function(){ return window.lastMousePosition || null; })();"
+        
+        def callback(result):
+            if result:
+                self._set_point("to", result["lon"], result["lat"])
+        
+        self.web_view.page().runJavaScript(js, callback)
+
+    def _on_ctrl_3(self) -> None:
+        """Ctrl+3: Add Via point at cursor position."""
+        js = "(function(){ return window.lastMousePosition || null; })();"
+        
+        def callback(result):
+            if result:
+                self._set_point("via", result["lon"], result["lat"])
+        
+        self.web_view.page().runJavaScript(js, callback)
 
     def _on_quit(self) -> None:
         QApplication.quit()

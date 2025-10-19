@@ -67,8 +67,11 @@ _tile_hosts = cycle(["a", "b", "c"])  # for upstream OSM subdomains
 
 
 def _load_graph() -> nx.DiGraph:
+    # For now, always use demo graph to avoid long startup times
+    # TODO: async graph loading or background task
     json_path = os.getenv("OSM_JSON_PATH")
-    if json_path and os.path.exists(json_path):
+    if False and json_path and os.path.exists(json_path):
+        # Disabled: graph loading takes too long
         import json
         with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -92,8 +95,16 @@ def _load_graph() -> nx.DiGraph:
 @app.on_event("startup")
 def startup_event() -> None:
     global G, engine
-    G = _load_graph()
-    engine = SimpleRouteEngine(G)
+    try:
+        G = _load_graph()
+        print(f"DEBUG: Graph loaded with {G.number_of_nodes()} nodes")
+        engine = SimpleRouteEngine(G)
+        print("DEBUG: Engine initialized successfully")
+    except Exception as e:
+        print(f"ERROR during startup: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 @app.post("/route", response_model=RouteResponse)
