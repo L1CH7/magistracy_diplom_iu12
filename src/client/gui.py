@@ -20,57 +20,17 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 from PyQt5.QtCore import QUrl, QTimer, Qt
 from PyQt5.QtGui import QKeySequence, QCursor
 
-
-class CollapsibleSection(QWidget):
-    """Custom collapsible section for logs (Route, Status, Speed)."""
-
-    def __init__(self, title: str, parent: QWidget | None = None):
-        super().__init__(parent)
-        self._open = False
-        self._title = title
-        self._content = QWidget()
-        self._content.setVisible(self._open)
-
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(4)
-
-        self._header_btn = QPushButton(self._header_text(self._title))
-        self._header_btn.setCheckable(True)
-        self._header_btn.setChecked(self._open)
-        self._header_btn.clicked.connect(self._toggle)
-        self._header_btn.setStyleSheet(
-            "text-align: left; font-weight: bold; padding: 6px; "
-            "border-radius: 4px; background-color: #e5e7eb; "
-            "border: 1px solid #d1d5db;"
-        )
-        self._layout.addWidget(self._header_btn)
-        self._layout.addWidget(self._content)
-
-    def _header_text(self, title: str) -> str:
-        return ("▼ " if self._open else "▶ ") + title
-
-    def _toggle(self) -> None:
-        self._open = not self._open
-        self._content.setVisible(self._open)
-        self._header_btn.setText(self._header_text(self._title))
-        self._header_btn.setChecked(self._open)
-
-    def add_widget(self, w: QWidget) -> None:
-        lay = QVBoxLayout(self._content)
-        lay.setContentsMargins(8, 4, 8, 8)
-        lay.addWidget(w)
-
-
-class WebConsolePage(QWebEnginePage):
-    """Bridge JS console logs to Python stdout."""
-
-    def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
-        try:
-            lvl = int(level)
-        except Exception:
-            lvl = level
-        print(f"JS[{lvl}] {sourceID}:{lineNumber} {message}")
+# Handle both relative and absolute imports
+try:
+    from .models import Point, Route, NavigationState
+    from .ui.widgets.collapsible import CollapsibleSection
+    from .ui.widgets.web_console import WebConsolePage
+    from .handlers import MapHandler
+except ImportError:
+    from models import Point, Route, NavigationState
+    from ui.widgets.collapsible import CollapsibleSection
+    from ui.widgets.web_console import WebConsolePage
+    from handlers import MapHandler
 
 
 class ZoomAPIHandler(SimpleHTTPRequestHandler):
@@ -117,6 +77,13 @@ class NavigationGUI(QMainWindow):
     def __init__(self, server_url: str = "http://server:8000"):
         super().__init__()
         self.server_url = server_url
+        
+        # Initialize navigation state - Single Source of Truth
+        self.nav_state = NavigationState()
+        
+        # Initialize map handler
+        self.map_handler = None  # Will be created in setup_ui
+        
         self.agent_id = None
         self.map_ready = False
         self._graph_geojson = None
@@ -479,8 +446,11 @@ class NavigationGUI(QMainWindow):
 
         main_layout.addWidget(self.map_frame, stretch=1)
 
+        # ===== Initialize Map Handler =====
+        self.map_handler = MapHandler(self, self.nav_state)
+        
         # ===== Load map =====
-        self._assets_port = self._start_assets_httpd()
+        self._assets_port = self.map_handler.start_assets_server()
         map_url = QUrl(f"http://127.0.0.1:{self._assets_port}/map.html")
         self.web_view.setPage(WebConsolePage(self.web_view))
         self.web_view.load(map_url)
@@ -512,7 +482,11 @@ class NavigationGUI(QMainWindow):
         return port
 
     def _handle_zoom_from_js(self, zoom_value: float) -> None:
-        """Handle zoom change from JavaScript via HTTP API."""
+        """Handle zoom change from JavaScript via HTTP API.
+        
+        TODO: This should be moved to MapHandler and use nav_state.zoom_changed
+        signal instead. The slider update should happen via signal connection.
+        """
         try:
             self.current_zoom = zoom_value
 
@@ -528,6 +502,9 @@ class NavigationGUI(QMainWindow):
             self.zoom_slider.blockSignals(True)
             self.zoom_slider.setValue(slider_pos)
             self.zoom_slider.blockSignals(False)
+            
+            # TODO: Emit zoom_changed signal here
+            # self.nav_state.set_zoom(zoom_value)
         except Exception as e:
             print(f"Error handling zoom from JS: {e}")
 
@@ -536,16 +513,21 @@ class NavigationGUI(QMainWindow):
         if not ok:
             print("ERROR: map.html failed to load")
             return
-        code = f"window.TILE_URL = {json.dumps(self._tile_url)};"
-        print(f"DEBUG: Injecting TILE_URL: {self._tile_url}")
-        self.web_view.page().runJavaScript(code)
-        # Note: initializeMap() will be called automatically by map.html
-        # when it detects TILE_URL is available (after 100ms timeout)
-        # Setup context menu callback from map right-click
-        self._setup_map_context_menu()
+        if self.map_handler:
+            self.map_handler.on_map_html_loaded()
+        else:
+            # Fallback
+            code = f"window.TILE_URL = {json.dumps(self._tile_url)};"
+            print(f"DEBUG: Injecting TILE_URL: {self._tile_url}")
+            self.web_view.page().runJavaScript(code)
 
     def _setup_map_context_menu(self) -> None:
-        """Install JS callback for right-click context menu."""
+        """Install JS callback for right-click context menu.
+        
+        TODO: This method and related polling should be moved to MapHandler.
+        The context menu setup is already partially in MapHandler.setup_map_context_menu()
+        but GUI still has these duplicate methods. Consolidate them.
+        """
         # Install JS callbacks
         js_code = """
         window.lastContextMenuPos = null;
