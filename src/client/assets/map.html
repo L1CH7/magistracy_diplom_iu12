@@ -95,14 +95,14 @@
       }
     });
 
-    // Picking start/end/via points on the map
-    let pickMode = 'none'; // 'from' | 'to' | 'via' | 'none'
+    // Picking start/end/via points on the map via right-click context menu
     let startPt = null; // {lon, lat}
     let endPt = null;   // {lon, lat}
     let viaPts = [];    // Array<{lon, lat}>
     let startMarker = null;
     let endMarker = null;
     let viaMarkers = [];
+    let contextMenuPos = null; // last right-click position
 
     function ensureMarker(cls) {
       const el = document.createElement('div');
@@ -131,25 +131,36 @@
       viaMarkers.forEach(m => m.remove());
       viaMarkers = [];
     }
+    function clearAllMarkers() {
+      startPt = null; endPt = null; clearVia();
+      if (startMarker) { startMarker.remove(); startMarker = null; }
+      if (endMarker) { endMarker.remove(); endMarker = null; }
+    }
 
-    map.on('click', (e) => {
-      if (pickMode === 'none') return;
-      if (pickMode === 'from') { setStart(e.lngLat); pickMode = 'none'; }
-      else if (pickMode === 'to') { setEnd(e.lngLat); pickMode = 'none'; }
-      else if (pickMode === 'via') { addVia(e.lngLat); /* keep mode for multiple via */ }
+    // Right-click context menu for picking
+    map.getCanvas().addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      contextMenuPos = map.unproject([e.clientX, e.clientY]);
+      // Emit event to PyQt to show context menu
+      // We'll use a simple approach: fire a custom event that PyQt can catch via runJavaScript callback
+      window.lastContextMenuPos = contextMenuPos;
+      console.log('Right-click at:', contextMenuPos);
+      // Call back to PyQt (if available)
+      if (window.onMapContextMenu) {
+        window.onMapContextMenu(contextMenuPos);
+      }
     });
 
     // Public API additions for picking
     function getPickedPoints() {
       return { start: startPt, end: endPt, via: viaPts.slice() };
     }
+    // setPickMode is now a no-op; picking is via right-click context menu
     function setPickMode(mode) {
-      pickMode = (mode === 'from' || mode === 'to' || mode === 'via') ? mode : 'none';
+      console.log('setPickMode called with:', mode, '(deprecated; use context menu)');
     }
     function clearPicked() {
-      startPt = null; endPt = null; clearVia();
-      if (startMarker) { startMarker.remove(); startMarker = null; }
-      if (endMarker) { endMarker.remove(); endMarker = null; }
+      clearAllMarkers();
     }
 
     // Public API bridged from PyQt
@@ -193,7 +204,7 @@
       fitToRoutes() {
         const src = map.getSource('routes');
         if (!src) return;
-        const data = src._data || src._options?.data; // internal, but ok in practice
+        const data = src._data || src._options?.data;
         if (!data || !data.features || data.features.length === 0) return;
         const coords = data.features.flatMap(f => f.geometry.coordinates);
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -208,6 +219,17 @@
       setPickMode,
       getPickedPoints,
       clearPicked,
+      setStart,
+      setEnd,
+      addVia,
+      clearVia,
+      clearAllMarkers,
+      zoomIn() {
+        if (map) map.zoomIn();
+      },
+      zoomOut() {
+        if (map) map.zoomOut();
+      },
     };
   } // end of initializeMap()
 
