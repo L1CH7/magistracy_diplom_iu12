@@ -25,12 +25,12 @@ try:
     from .models import Point, Route, NavigationState
     from .ui.widgets.collapsible import CollapsibleSection
     from .ui.widgets.web_console import WebConsolePage
-    from .handlers import MapHandler
+    from .handlers import MapHandler, PointHandler
 except ImportError:
     from models import Point, Route, NavigationState
     from ui.widgets.collapsible import CollapsibleSection
     from ui.widgets.web_console import WebConsolePage
-    from handlers import MapHandler
+    from handlers import MapHandler, PointHandler
 
 
 class ZoomAPIHandler(SimpleHTTPRequestHandler):
@@ -83,6 +83,9 @@ class NavigationGUI(QMainWindow):
         
         # Initialize map handler
         self.map_handler = None  # Will be created in setup_ui
+        
+        # Initialize point handler
+        self.point_handler = None  # Will be created in setup_ui
         
         self.agent_id = None
         self.map_ready = False
@@ -448,6 +451,9 @@ class NavigationGUI(QMainWindow):
 
         # ===== Initialize Map Handler =====
         self.map_handler = MapHandler(self, self.nav_state)
+        
+        # ===== Initialize Point Handler =====
+        self.point_handler = PointHandler(self, self.nav_state)
         
         # ===== Load map =====
         self._assets_port = self.map_handler.start_assets_server()
@@ -958,7 +964,13 @@ class NavigationGUI(QMainWindow):
             "color: #ef4444; font-size: 10px; font-weight: bold; } "
             "QPushButton:hover { color: #dc2626; }"
         )
-        del_btn.clicked.connect(lambda: self._remove_point(idx))
+        del_btn.clicked.connect(
+            lambda: (
+                self.point_handler.remove_point(idx)
+                if self.point_handler
+                else self._remove_point(idx)
+            )
+        )
         layout.addWidget(del_btn)
         
         return tile
@@ -1537,7 +1549,11 @@ class NavigationGUI(QMainWindow):
         
         def callback(result):
             if result:
-                self._set_point("from", result["lon"], result["lat"])
+                if self.point_handler:
+                    self.point_handler.set_point("from", result["lon"],
+                                                  result["lat"])
+                else:
+                    self._set_point("from", result["lon"], result["lat"])
         
         self.web_view.page().runJavaScript(js, callback)
 
@@ -1547,7 +1563,11 @@ class NavigationGUI(QMainWindow):
         
         def callback(result):
             if result:
-                self._set_point("to", result["lon"], result["lat"])
+                if self.point_handler:
+                    self.point_handler.set_point("to", result["lon"],
+                                                  result["lat"])
+                else:
+                    self._set_point("to", result["lon"], result["lat"])
         
         self.web_view.page().runJavaScript(js, callback)
 
@@ -1557,7 +1577,11 @@ class NavigationGUI(QMainWindow):
         
         def callback(result):
             if result:
-                self._set_point("via", result["lon"], result["lat"])
+                if self.point_handler:
+                    self.point_handler.set_point("via", result["lon"],
+                                                  result["lat"])
+                else:
+                    self._set_point("via", result["lon"], result["lat"])
         
         self.web_view.page().runJavaScript(js, callback)
 

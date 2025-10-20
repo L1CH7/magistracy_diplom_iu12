@@ -11,6 +11,10 @@ def __getattr__(name):
     elif name == 'ZoomAPIHandler':
         from .map_handler import ZoomAPIHandler
         return ZoomAPIHandler
+    elif name == 'PointHandler':
+        from .point_handler import PointHandler
+        return PointHandler
     raise AttributeError(f"module {__name__} has no attribute {name}")
 
-__all__ = ['MapHandler', 'ZoomControl', 'ZoomAPIHandler']
+
+__all__ = ['MapHandler', 'ZoomControl', 'ZoomAPIHandler', 'PointHandler']
