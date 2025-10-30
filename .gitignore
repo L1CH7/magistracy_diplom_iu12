@@ -9,9 +9,7 @@ __pycache__/
 .mypy_cache/
 
 # Agent artifacts
-.agent_dir/out/
-.agent_dir/logs/
-.agent_dir/checkpoints/
+.agent
 
 # Editors/OS
 .vscode/

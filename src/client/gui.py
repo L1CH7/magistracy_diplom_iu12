@@ -25,11 +25,13 @@ try:
     from .models import Point, Route, NavigationState
     from .ui.widgets.collapsible import CollapsibleSection
     from .ui.widgets.web_console import WebConsolePage
+    from .ui.map_widget import MapWidget
     from .handlers import MapHandler, PointHandler
 except ImportError:
     from models import Point, Route, NavigationState
     from ui.widgets.collapsible import CollapsibleSection
     from ui.widgets.web_console import WebConsolePage
+    from ui.map_widget import MapWidget
     from handlers import MapHandler, PointHandler
 
 
@@ -127,7 +129,6 @@ class NavigationGUI(QMainWindow):
         """Create main layout: sidebar (left, collapsible) + map (right, main)."""
         central = QWidget()
         self.setCentralWidget(central)
-
         main_layout = QHBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -352,7 +353,7 @@ class NavigationGUI(QMainWindow):
         map_layout.setSpacing(0)
 
         # Web view (map)
-        self.web_view = QWebEngineView()
+        self.web_view = MapWidget(self.map_frame)
         map_layout.addWidget(self.web_view, 1)
 
         # === SIDEBAR AS OVERLAY (can be hidden/shown) ===
@@ -458,8 +459,7 @@ class NavigationGUI(QMainWindow):
         # ===== Load map =====
         self._assets_port = self.map_handler.start_assets_server()
         map_url = QUrl(f"http://127.0.0.1:{self._assets_port}/map.html")
-        self.web_view.setPage(WebConsolePage(self.web_view))
-        self.web_view.load(map_url)
+        self.web_view.load_map(map_url.toString())
         self.web_view.loadFinished.connect(self._on_map_html_loaded)
         self.web_view.loadFinished.connect(self.on_map_loaded)
 
@@ -990,7 +990,7 @@ class NavigationGUI(QMainWindow):
     def _js(self, code: str) -> None:
         """Execute JS on map."""
         if self.map_ready:
-            self.web_view.page().runJavaScript(code)
+            self.web_view.execute_js(code)
 
     def load_graph(self) -> None:
         """Load graph from server in background."""
