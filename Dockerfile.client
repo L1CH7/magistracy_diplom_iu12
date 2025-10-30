@@ -31,4 +31,4 @@ COPY src/ ./src/
 COPY src/client/assets/ ./src/client/assets/
 
 # Default run (X11 host display expected; use compose volumes to pass /tmp/.X11-unix):
-CMD ["python", "src/client/gui.py"]
+CMD ["python", "src/client/main.py"]

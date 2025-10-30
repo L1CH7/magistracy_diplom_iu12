@@ -66,8 +66,8 @@ class PointHandler(QObject):
             }
         
         # Update UI fields
-        self.gui.start_lat.setText(f"{lat:.6f}")
-        self.gui.start_lon.setText(f"{lon:.6f}")
+        self.gui.sidebar.start_lat.setText(f"{lat:.6f}")
+        self.gui.sidebar.start_lon.setText(f"{lon:.6f}")
         
         # Update map
         self._update_map_markers()
@@ -98,8 +98,8 @@ class PointHandler(QObject):
             }
         
         # Update UI fields
-        self.gui.end_lat.setText(f"{lat:.6f}")
-        self.gui.end_lon.setText(f"{lon:.6f}")
+        self.gui.sidebar.end_lat.setText(f"{lat:.6f}")
+        self.gui.sidebar.end_lon.setText(f"{lon:.6f}")
         
         # Update map
         self._update_map_markers()
@@ -138,23 +138,23 @@ class PointHandler(QObject):
             
             # Update from/to fields if needed
             if len(self.points) == 0:
-                self.gui.start_lat.setText("55.751244")
-                self.gui.start_lon.setText("37.618423")
-                self.gui.end_lat.setText("55.755826")
-                self.gui.end_lon.setText("37.617300")
+                self.gui.sidebar.start_lat.setText("55.751244")
+                self.gui.sidebar.start_lon.setText("37.618423")
+                self.gui.sidebar.end_lat.setText("55.755826")
+                self.gui.sidebar.end_lon.setText("37.617300")
             elif len(self.points) == 1:
                 p = self.points[0]
-                self.gui.start_lat.setText(f"{p['lat']:.6f}")
-                self.gui.start_lon.setText(f"{p['lon']:.6f}")
-                self.gui.end_lat.setText("55.755826")
-                self.gui.end_lon.setText("37.617300")
+                self.gui.sidebar.start_lat.setText(f"{p['lat']:.6f}")
+                self.gui.sidebar.start_lon.setText(f"{p['lon']:.6f}")
+                self.gui.sidebar.end_lat.setText("55.755826")
+                self.gui.sidebar.end_lon.setText("37.617300")
             else:
                 p0 = self.points[0]
                 p1 = self.points[-1]
-                self.gui.start_lat.setText(f"{p0['lat']:.6f}")
-                self.gui.start_lon.setText(f"{p0['lon']:.6f}")
-                self.gui.end_lat.setText(f"{p1['lat']:.6f}")
-                self.gui.end_lon.setText(f"{p1['lon']:.6f}")
+                self.gui.sidebar.start_lat.setText(f"{p0['lat']:.6f}")
+                self.gui.sidebar.start_lon.setText(f"{p0['lon']:.6f}")
+                self.gui.sidebar.end_lat.setText(f"{p1['lat']:.6f}")
+                self.gui.sidebar.end_lon.setText(f"{p1['lon']:.6f}")
             
             # Update map
             self._update_map_markers()
@@ -166,10 +166,10 @@ class PointHandler(QObject):
     def clear_all(self) -> None:
         """Clear all navigation points."""
         self.points = []
-        self.gui.start_lat.setText("55.751244")
-        self.gui.start_lon.setText("37.618423")
-        self.gui.end_lat.setText("55.755826")
-        self.gui.end_lon.setText("37.617300")
+        self.gui.sidebar.start_lat.setText("55.751244")
+        self.gui.sidebar.start_lon.setText("37.618423")
+        self.gui.sidebar.end_lat.setText("55.755826")
+        self.gui.sidebar.end_lon.setText("37.617300")
         self.gui._js("window.app && window.app.clearAllMarkers();")
         self._update_points_list()
         self.points_updated.emit(self.points)

@@ -11,6 +11,9 @@ __pycache__/
 # Agent artifacts
 .agent
 
+# Trash (old/deprecated files)
+.trash/
+
 # Editors/OS
 .vscode/
 *.swp
