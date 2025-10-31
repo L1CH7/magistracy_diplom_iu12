@@ -274,10 +274,34 @@ def osm_load(req: OsmLoadRequest) -> dict:
 @app.get("/tiles/osm/{z}/{x}/{y}.png")
 def proxy_osm_tiles(z: int, x: int, y: int):
     """
-    Simple transparent proxy for OSM raster tiles to avoid CORS/UA issues
-    when rendering inside Qt WebEngine. Please respect OSM Tile Usage Policy
-    for production; add caching and proper contact information.
+    Caching proxy for OSM raster tiles. Caches tiles on disk to reduce
+    network requests. Respects OSM Tile Usage Policy.
     """
+    from pathlib import Path
+    
+    # Setup cache directory
+    cache_dir = Path(os.getenv("TILE_CACHE_DIR", "/app/data/tiles"))
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create cache path: tiles/z/x/y.png
+    tile_path = cache_dir / str(z) / str(x)
+    tile_path.mkdir(parents=True, exist_ok=True)
+    tile_file = tile_path / f"{y}.png"
+    
+    # Check cache first
+    if tile_file.exists():
+        print(f"DEBUG: Tile cache HIT for {z}/{x}/{y}")
+        return Response(
+            content=tile_file.read_bytes(),
+            media_type="image/png",
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "Access-Control-Allow-Origin": "*",
+                "X-Cache": "HIT",
+            },
+        )
+    
+    # Cache miss - fetch from upstream
     try:
         import requests as _req
         host = next(_tile_hosts)
@@ -286,18 +310,25 @@ def proxy_osm_tiles(z: int, x: int, y: int):
             "User-Agent": "Diplom-MapClient/0.1 (+https://example.invalid)",
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         }
+        print(f"DEBUG: Fetching tile {z}/{x}/{y} from {url}")
         r = _req.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             raise HTTPException(
                 status_code=r.status_code,
                 detail="Tile fetch failed",
             )
+        
+        # Save to cache
+        tile_file.write_bytes(r.content)
+        print(f"DEBUG: Tile cached for {z}/{x}/{y}")
+        
         return Response(
             content=r.content,
             media_type="image/png",
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Access-Control-Allow-Origin": "*",
+                "X-Cache": "MISS",
             },
         )
     except HTTPException:

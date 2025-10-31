@@ -5,6 +5,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.server
+      cache_from:
+        - diplom-server:latest
+    image: diplom-server:latest
     ports:
       - "8000:8000"
     environment:
@@ -25,6 +28,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.client
+      cache_from:
+        - diplom-client:latest
+    image: diplom-client:latest
     depends_on:
       - server
     environment:

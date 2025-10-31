@@ -1,20 +1,9 @@
-"""Handlers package."""
+"""Handlers package - bridges for JS-Python communication."""
 
-# Lazy imports to avoid circular dependencies
-def __getattr__(name):
-    if name == 'MapHandler':
-        from .map_handler import MapHandler
-        return MapHandler
-    elif name == 'ZoomControl':
-        from .zoom_handler import ZoomControl
-        return ZoomControl
-    elif name == 'ZoomAPIHandler':
-        from .map_handler import ZoomAPIHandler
-        return ZoomAPIHandler
-    elif name == 'PointHandler':
-        from .point_handler import PointHandler
-        return PointHandler
-    raise AttributeError(f"module {__name__} has no attribute {name}")
+from .zoom_bridge import ZoomBridge
+from .points_bridge import PointsBridge
 
-
-__all__ = ['MapHandler', 'ZoomControl', 'ZoomAPIHandler', 'PointHandler']
+__all__ = [
+    'ZoomBridge',
+    'PointsBridge',
+]

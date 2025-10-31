@@ -17,6 +17,7 @@
 <body>
   <div id="map"></div>
   <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <script>
   // Wait for TILE_URL to be injected by PyQt, then initialize map
   let mapInitialized = false;
@@ -24,19 +25,15 @@
   let map = null; // will be set in initializeMap()
   
   // Global variables for picking
-  let startPt = null;
-  let endPt = null;
-  let viaPts = [];
+  let allPoints = [];  // Array of {lon, lat, color} - first=from, last=to, middle=via
   let allMarkers = [];
   let contextMenuPos = null;
-  let startMarker = null;
-  let endMarker = null;
   let mapLoaded = false;  // Tracks if map.on('load') has fired
   
   // Queue for operations before map is ready
   let pendingOperations = [];
   
-  // Helper function to create marker element
+  // Helper function to create marker element based on display_color
   function createMarkerElement(color) {
     const el = document.createElement('div');
     const isFrom = (color === '#2563eb');
@@ -71,23 +68,57 @@
   }
   
   function setStart(lngLat) {
+    console.log('setStart called:', lngLat, 'mapLoaded:', mapLoaded);
     if (!mapLoaded) {
       pendingOperations.push({ type: 'setStart', lngLat });
+      console.log('Map not loaded, queued setStart');
       return;
     }
-    startPt = { lng: lngLat.lng || lngLat.lon, lat: lngLat.lat };
-    if (startMarker) startMarker.remove();
-    startMarker = _addMarkerToMap(lngLat, '#2563eb');
+    const lon = lngLat.lng !== undefined ? lngLat.lng : lngLat.lon;
+    // Color must be provided from Python
+    const point = {
+      lon: lon,
+      lat: lngLat.lat,
+      color: lngLat.color || '#8b5cf6'  // Fallback to default
+    };
+    
+    if (allPoints.length === 0) {
+      allPoints.push(point);
+    } else {
+      allPoints[0] = point;  // Replace first point
+    }
+    
+    // Redraw all markers
+    _redrawAllMarkers();
+    console.log('Start point set, allPoints:', allPoints.length);
   }
   
   function setEnd(lngLat) {
+    console.log('setEnd called:', lngLat, 'mapLoaded:', mapLoaded);
     if (!mapLoaded) {
       pendingOperations.push({ type: 'setEnd', lngLat });
+      console.log('Map not loaded, queued setEnd');
       return;
     }
-    endPt = { lng: lngLat.lng || lngLat.lon, lat: lngLat.lat };
-    if (endMarker) endMarker.remove();
-    endMarker = _addMarkerToMap(lngLat, '#dc2626');
+    const lon = lngLat.lng !== undefined ? lngLat.lng : lngLat.lon;
+    // Color must be provided from Python
+    const point = {
+      lon: lon,
+      lat: lngLat.lat,
+      color: lngLat.color || '#8b5cf6'  // Fallback to default
+    };
+    
+    if (allPoints.length === 0) {
+      allPoints.push(point);
+    } else if (allPoints.length === 1) {
+      allPoints.push(point);
+    } else {
+      allPoints[allPoints.length - 1] = point;  // Replace last point
+    }
+    
+    // Redraw all markers
+    _redrawAllMarkers();
+    console.log('End point set, allPoints:', allPoints.length);
   }
   
   function addMarker(lngLat, color) {
@@ -95,7 +126,55 @@
       pendingOperations.push({ type: 'addMarker', lngLat, color });
       return;
     }
-    return _addMarkerToMap(lngLat, color || '#8b5cf6');
+    const lon = lngLat.lon !== undefined ? lngLat.lon : lngLat.lng;
+    const point = { lon: lon, lat: lngLat.lat, color: color || '#8b5cf6' };
+    
+    // Add via point (insert before last if we have from+to, else just append)
+    if (allPoints.length >= 2) {
+      allPoints.splice(allPoints.length - 1, 0, point);
+    } else {
+      allPoints.push(point);
+    }
+    
+    // Redraw all markers
+    _redrawAllMarkers();
+    console.log('Via point added, allPoints:', allPoints.length);
+  }
+  
+  function _redrawAllMarkers() {
+    // Clear all existing markers
+    allMarkers.forEach(m => m.remove());
+    allMarkers = [];
+    
+    // Add marker for each point using display_color from presenter
+    allPoints.forEach((point, idx) => {
+      // Use display_color if present (from PointsPresenter)
+      // Fallback to position-based colors for backwards compatibility
+      let markerColor;
+      if (point.display_color) {
+        markerColor = point.display_color;
+      } else if (idx === 0) {
+        markerColor = '#2563eb';  // From fallback
+      } else if (idx === allPoints.length - 1) {
+        markerColor = '#dc2626';  // To fallback
+      } else {
+        markerColor = point.color || '#8b5cf6';  // Via fallback
+      }
+      
+      const marker = _addMarkerToMap(point, markerColor);
+      if (marker) {
+        allMarkers.push(marker);
+      }
+    });
+    console.log('Markers redrawn:', allPoints.length);
+    _notifyPointsChanged();  // Notify Python about changes
+  }
+  
+  // Notify Python that points have changed
+  function _notifyPointsChanged() {
+    if (window.pointsChangedCallback) {
+      window.pointsChangedCallback();
+    }
   }
   
   function addVia(lngLat) {
@@ -109,22 +188,31 @@
   }
   
   function clearAllMarkers() {
-    startPt = null;
-    endPt = null;
     allMarkers.forEach(m => m.remove());
     allMarkers = [];
-    if (startMarker) {
-      startMarker.remove();
-      startMarker = null;
-    }
-    if (endMarker) {
-      endMarker.remove();
-      endMarker = null;
-    }
+    allPoints = [];
   }
   
   function getPickedPoints() {
-    return { start: startPt, end: endPt, via: viaPts.slice() };
+    // Return points in old format for compatibility
+    const start = allPoints.length > 0 ? allPoints[0] : null;
+    const end = allPoints.length > 1 ? allPoints[allPoints.length - 1] : null;
+    const via = allPoints.length > 2 ? allPoints.slice(1, -1) : [];
+    return { start: start, end: end, via: via };
+  }
+  
+  function setAllPoints(points) {
+    // Replace entire allPoints array and redraw markers
+    // Do NOT modify point.color - colors in the array must stay as is!
+    // Display colors are overridden locally in _redrawAllMarkers()
+    allPoints = points.slice();  // Make a copy
+    
+    console.log('setAllPoints called with:', allPoints.length, 'points');
+    console.log('Display colors:', allPoints.map(p => p.display_color || 'N/A'));
+    console.log('Display types:', allPoints.map(p => p.display_type || 'N/A'));
+    console.log('Original colors:', allPoints.map(p => p.color || 'N/A'));
+    
+    _redrawAllMarkers();
   }
   
   function setPickMode(mode) {
@@ -214,80 +302,84 @@
 
   // Expose map globally for PyQt callbacks
   window.map = map;
+  
+  // Mark map as loaded immediately - don't wait for 'load' event
+  // The 'load' event may not fire if tiles fail to load
+  mapLoaded = true;
+  console.log('Map initialized, marking as loaded');
+  
+  // Setup event listeners immediately
+  // Track last mouse position for Ctrl shortcuts
+  let lastMousePosition = null; // {lon, lat}
+  map.on('mousemove', (e) => {
+    lastMousePosition = { lon: e.lngLat.lng, lat: e.lngLat.lat };
+    window.lastMousePosition = lastMousePosition; // expose to Python
+  });
+  
+  // Basic error logging
+  map.on('error', (e) => {
+    try {
+      console.log('[MapLibre error]', e && (e.error && e.error.message ? e.error.message : JSON.stringify(e)));
+    } catch (err) {
+      // ignore
+    }
+  });
+  
+  // Optional: setup map load callback for tile loading
+  map.on('load', () => {
+    console.log('Map tiles loaded successfully');
     
-    // Setup map event listeners after map is fully loaded
-    // All map operations must be inside this callback
-    map.on('load', () => {
-      console.log('Map loaded successfully');
-      
-      // Mark map as loaded for all functions
-      mapLoaded = true;
-      
-      // Process any pending operations that happened before map was ready
-      const ops = pendingOperations.slice();
-      pendingOperations = [];
-      ops.forEach(op => {
-        switch(op.type) {
-          case 'setStart':
-            setStart(op.lngLat);
-            break;
-          case 'setEnd':
-            setEnd(op.lngLat);
-            break;
-          case 'addMarker':
-            addMarker(op.lngLat, op.color);
-            break;
+    // Process any pending operations that happened before map was ready
+    const ops = pendingOperations.slice();
+    pendingOperations = [];
+    ops.forEach(op => {
+      switch(op.type) {
+        case 'setStart':
+          setStart(op.lngLat);
+          break;
+        case 'setEnd':
+          setEnd(op.lngLat);
+          break;
+        case 'addMarker':
+          addMarker(op.lngLat, op.color);
+          break;
+      }
+    });
+  });
+  
+  // Zoom changed - notify PyQt via QWebChannel
+  let _skip_next_zoom_update = false;
+  map.on('zoom', () => {
+    const zoom = Math.floor(map.getZoom());
+    const fromUI = !_skip_next_zoom_update;
+    _skip_next_zoom_update = false;
+    
+    if (fromUI && window.qt && window.qt.webChannelTransport) {
+      new QWebChannel(window.qt.webChannelTransport, function(channel) {
+        if (channel.objects.zoom_bridge) {
+          channel.objects.zoom_bridge.notify_zoom(zoom);
         }
       });
+    }
+    
+    if (window.onZoomChanged) {
+      window.onZoomChanged(zoom, fromUI);
+    }
+  });
 
-      // Basic error logging
-      map.on('error', (e) => {
-        try {
-          console.log('[MapLibre error]', e && (e.error && e.error.message ? e.error.message : JSON.stringify(e)));
-        } catch (err) {
-          // ignore
-        }
-      });
-
-      // Track last mouse position for Ctrl shortcuts
-      let lastMousePosition = null; // {lon, lat}
-      map.on('mousemove', (e) => {
-        lastMousePosition = { lon: e.lngLat.lng, lat: e.lngLat.lat };
-        window.lastMousePosition = lastMousePosition; // expose to Python
-      });
-
-      // Zoom changed - notify PyQt to update slider
-      let _skip_next_zoom_update = false;
-      map.on('zoom', () => {
-        const zoom = map.getZoom();
-        const fromUI = !_skip_next_zoom_update;
-        _skip_next_zoom_update = false;
-        
-        if (fromUI) {
-          try {
-            fetch(`http://127.0.0.1:9999/api/zoom?value=${zoom}`)
-              .catch(() => {});
-          } catch (e) {}
-        }
-        
-        if (window.onZoomChanged) {
-          window.onZoomChanged(zoom, fromUI);
-        }
-      });
-
-      // Right-click context menu for picking
-      map.getCanvas().addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        contextMenuPos = map.unproject([e.clientX, e.clientY]);
-        window.lastContextMenuPos = contextMenuPos;
-        console.log('Right-click at:', contextMenuPos);
-        if (window.onMapContextMenu) {
-          window.onMapContextMenu(contextMenuPos);
-        }
-      });
-    }); // end of map.on('load')
-    // setPickMode is now a no-op; picking is via right-click context menu
-    function setPickMode(mode) {
+  // Right-click context menu for picking
+  map.getCanvas().addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    contextMenuPos = map.unproject([e.clientX, e.clientY]);
+    window.lastContextMenuPos = contextMenuPos;
+    console.log('Right-click at:', contextMenuPos);
+    if (window.onMapContextMenu) {
+      window.onMapContextMenu(contextMenuPos);
+    }
+  });
+  
+  // setPickMode is now a no-op; picking is via right-click context menu
+  function setPickMode(mode) {
       console.log('setPickMode called with:', mode, '(deprecated; use context menu)');
     }
     function clearPicked() {
@@ -358,6 +450,7 @@
       },
       setPickMode,
       getPickedPoints,
+      setAllPoints,
       clearPicked,
       setStart,
       setEnd,
@@ -365,15 +458,16 @@
       clearVia,
       clearAllMarkers,
       zoomIn() {
-        if (map) map.zoomIn();
+        if (map) map.zoomIn({ duration: 200 });  // Fast zoom animation
       },
       zoomOut() {
-        if (map) map.zoomOut();
+        if (map) map.zoomOut({ duration: 200 });  // Fast zoom animation
       },
       setZoom(level) {
         if (map) {
           _skip_next_zoom_update = true;  // Mark that this zoom change came from Python
-          map.setZoom(level);
+          // Use jumpTo for instant zoom (no animation)
+          map.jumpTo({ zoom: level });
         }
       },
       getZoom() {
@@ -382,7 +476,7 @@
       },
     };
   } // end of initializeMap()
-
+  
   // Call initializeMap as soon as TILE_URL is available
   // PyQt will set window.TILE_URL, then we init
   console.log('Script started, map=' + (typeof map));

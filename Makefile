@@ -6,7 +6,7 @@ xhost:
 	xhost +local:docker
 
 build:
-	docker compose build
+	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 docker compose build --parallel
 
 up: xhost
 	docker compose up -d

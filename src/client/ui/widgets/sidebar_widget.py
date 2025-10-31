@@ -17,30 +17,10 @@ class SidebarWidget(QFrame):
         sidebar_layout.setContentsMargins(12, 12, 12, 12)
         sidebar_layout.setSpacing(8)
 
-        # Top bar with close/open button
-        top_bar_layout = QHBoxLayout()
-        top_bar_layout.setContentsMargins(0, 0, 0, 0)
-        self.sidebar_close_btn = QPushButton("☰")
-        self.sidebar_close_btn.setMaximumWidth(40)
-        self.sidebar_close_btn.setMaximumHeight(40)
-        self.sidebar_close_btn.setStyleSheet(
-            "QPushButton { background-color: #2563eb; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 18px; } QPushButton:hover { background-color: #1d4ed8; }"
-        )
-        top_bar_layout.addWidget(self.sidebar_close_btn)
-        top_bar_layout.addStretch()
-        sidebar_layout.addLayout(top_bar_layout)
-
-        self.sidebar_visible = True
-        self.sidebar_open_btn = QPushButton("☰")
-        self.sidebar_open_btn.setMaximumWidth(40)
-        self.sidebar_open_btn.setMaximumHeight(40)
-        self.sidebar_open_btn.setStyleSheet(
-            "QPushButton { background-color: #2563eb; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 18px; } QPushButton:hover { background-color: #1d4ed8; }"
-        )
-
-        title_label = QLabel("Navigation")
-        title_label.setStyleSheet("font-weight: bold; font-size: 16px; color: #1f2937;")
-        sidebar_layout.addWidget(title_label)
+        # Title (no close button - it's outside now)
+        # title_label = QLabel("Navigation")
+        # title_label.setStyleSheet("font-weight: bold; font-size: 16px; color: #1f2937;")
+        # sidebar_layout.addWidget(title_label)
 
         # Start/End coords
         start_frame = QHBoxLayout()

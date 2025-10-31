@@ -27,6 +27,10 @@ htmlcov/
 # Docker
 *.log
 
+# Logs
+logs/
+
 # Data caches
 data/osm_data.json
 data/*.geojson
+data/tiles/

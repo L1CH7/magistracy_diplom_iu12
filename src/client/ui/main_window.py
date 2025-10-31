@@ -1,357 +1,223 @@
-"""Main application window with full UI and signal/slot connections."""
+"""Main application window with fullscreen map + overlay sidebar."""
 import os
-import json
 import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import parse_qs
+from functools import partial
 
-from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QFrame, QLabel
-)
-from PyQt5.QtCore import QTimer, pyqtSlot
+from PyQt5.QtWidgets import QMainWindow, QWidget, QShortcut
+from PyQt5.QtCore import QUrl
+from PyQt5.QtWebChannel import QWebChannel
+from PyQt5.QtGui import QKeySequence
 
-from ..models import NavigationState
-from ..services import APIClient
-from ..config.ui_config import (
-    SIDEBAR_WIDTH, WINDOW_WIDTH, WINDOW_HEIGHT
-)
-from .widgets import (
-    MapWidget, PointsPanel, ControlsPanel, StatusPanel,
-    CollapsibleSection
-)
+from src.client.ui.widgets.map_widget import MapWidget
+from src.client.handlers.zoom_bridge import ZoomBridge
+from src.client.handlers.points_bridge import PointsBridge
+from src.client.models.points_presenter import PointsPresenter
+from src.client.ui.main_window_handlers import MainWindowHandlers
+from src.client.ui.main_window_ui import MainWindowUI
+from src.utils.logging_config import setup_logging, get_logger
 
 
-class ZoomAPIHandler(SimpleHTTPRequestHandler):
-    """HTTP handler for /api/zoom endpoint."""
-
-    main_window = None  # Set by MainWindow
-
-    def do_GET(self):
-        """Handle zoom API requests."""
-        path = self.path.split('?')[0]
-        
-        if path == '/api/zoom':
-            params = parse_qs(self.path.split('?')[1] if '?' in self.path else '')
-            if 'value' in params and self.main_window:
-                try:
-                    zoom = float(params['value'][0])
-                    self.main_window._on_zoom_from_js(zoom)
-                    self.send_response(200)
-                    self.send_header('Content-type', 'text/plain')
-                    self.end_headers()
-                    self.wfile.write(b'OK')
-                    return
-                except Exception:
-                    pass
-        
-        self.send_response(404)
-        self.end_headers()
-    
-    def log_message(self, format, *args):
-        """Suppress HTTP server logging."""
-        pass
+# Setup logging at module level
+setup_logging(log_file="logs/navigation_mas.log", level="DEBUG")
+log = get_logger(__name__)
 
 
-class MainWindow(QMainWindow):
-    """Main application window with map and controls.
-    
-    Architecture:
-    - NavigationState: Central state (model)
-    - APIClient: Async HTTP operations (services)
-    - UI Panels: Dumb views that react to state signals
-    - MainWindow: Controller that connects everything via signals/slots
-    
-    All long-running operations (HTTP, graph loading) are in separate threads.
-    UI remains responsive always.
-    """
+class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
+    """Main application window: fullscreen map + overlay sidebar."""
 
     def __init__(self, server_url: str = "http://server:8000"):
-        """Initialize main window.
-        
-        Args:
-            server_url: Backend server URL
-        """
+        """Initialize main window."""
         super().__init__()
         
+        log.info("navigation_mas_starting", server_url=server_url)
+        
         self.server_url = server_url
-        self.agent_id = None
-        self.routes = []
-        self.current_route_index = 0
-        self.prev_pos = None
-        self.prev_time = None
-        self.simulate_thread = None
+        self.sidebar_visible = True
+        self._zoom_slider_dragging = False
         
-        # Color palette for via points
-        self.color_palette = [
-            "#8b5cf6", "#06b6d4", "#14b8a6", "#f59e0b",
-            "#ec4899", "#a855f7", "#0ea5e9", "#10b981"
-        ]
-        self._color_idx = 0
+        # Bridges for JS-to-Python communication (signals/slots ONLY!)
+        self.zoom_bridge = ZoomBridge()
+        self.zoom_bridge.zoom_changed.connect(self._handle_zoom_from_js)
         
-        # Initialize core components
-        self.state = NavigationState()
-        self.api_client = APIClient(server_url)
+        self.points_bridge = PointsBridge()
+        self.points_bridge.points_changed.connect(self._update_selected_points)
+        
+        # Points presenter: single source of truth for points with styling
+        self.points_presenter = PointsPresenter()
+        
+        # Start HTTP server for map.html assets (to avoid CORS)
+        self._start_assets_httpd()
         
         # Setup window
-        self.setWindowTitle("Navigation MAS — Modular Architecture")
-        self.setGeometry(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.setWindowTitle("Navigation MAS — Fullscreen Map")
+        self.setGeometry(0, 0, 1400, 900)
         self.showMaximized()
         
         # Setup UI
         self._setup_ui()
         
-        # Connect signals
-        self._connect_signals()
-        
-        # Start HTTP server for zoom API
-        self._start_zoom_http_server()
-        
-        # Load graph on startup
-        QTimer.singleShot(500, self._on_load_graph)
+        # Setup keyboard shortcuts
+        self._setup_shortcuts()
+    
+    def _start_assets_httpd(self) -> None:
+        """Start HTTP server for map.html assets."""
+        # ui/main_window.py -> ../assets
+        assets_dir = os.path.join(
+            os.path.dirname(__file__), '../assets'
+        )
+        handler = partial(SimpleHTTPRequestHandler, directory=assets_dir)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 9999), handler)
+        self._assets_port = httpd.server_address[1]
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        print(f"DEBUG: Assets HTTP server started on port {self._assets_port}")
     
     def _setup_ui(self) -> None:
-        """Setup user interface layout."""
+        """Setup user interface: fullscreen map + overlay sidebar."""
         central = QWidget()
         self.setCentralWidget(central)
         
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        # Map frame (takes full window)
+        self.map_frame = QWidget(central)
+        self.map_frame.setGeometry(0, 0, self.width(), self.height())
         
-        # === LEFT SIDEBAR (collapsible) ===
-        self.sidebar = QFrame()
-        self.sidebar.setStyleSheet(
-            "QFrame { background-color: #ffffff; border: 1px solid #e5e7eb; "
-            "border-radius: 8px; }"
-        )
-        self.sidebar.setMaximumWidth(SIDEBAR_WIDTH)
-        self.sidebar.setMinimumWidth(280)
+        # === Map widget (fullscreen) ===
+        self.map_widget = MapWidget(self.map_frame)
+        self.map_widget.setGeometry(0, 0, self.width(), self.height())
         
-        sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(12, 12, 12, 12)
-        sidebar_layout.setSpacing(8)
+        # Setup QWebChannel for JS-to-Python communication
+        self.channel = QWebChannel()
+        self.channel.registerObject('zoom_bridge', self.zoom_bridge)
+        self.channel.registerObject('points_bridge', self.points_bridge)
+        self.map_widget.page().setWebChannel(self.channel)
         
-        # Title
-        title = QLabel("Navigation MAS")
-        title.setStyleSheet("font-weight: bold; font-size: 16px;")
-        sidebar_layout.addWidget(title)
+        # Load map HTML via HTTP server (to avoid CORS with tile server)
+        map_url = f"http://127.0.0.1:{self._assets_port}/map.html"
+        self.map_widget.load(QUrl(map_url))
         
-        # Controls panel
-        self.controls_panel = ControlsPanel(self.state)
-        sidebar_layout.addWidget(self.controls_panel)
+        # Connect map loadFinished to inject TILE_URL
+        self.map_widget.loadFinished.connect(self._on_map_loaded)
         
-        # Points panel (collapsible)
-        points_section = CollapsibleSection("Selected Points")
-        self.points_panel = PointsPanel(self.state)
-        points_section.add_widget(self.points_panel)
-        sidebar_layout.addWidget(points_section)
+        # Setup sidebar (from MainWindowUI mixin)
+        self._setup_sidebar()
         
-        # Status panel
-        self.status_panel = StatusPanel(self.state)
-        sidebar_layout.addWidget(self.status_panel)
+        # Set parent_window for selected_points_widget
+        if hasattr(self.sidebar, 'selected_points_widget'):
+            self.sidebar.selected_points_widget.parent_window = self
         
-        main_layout.addWidget(self.sidebar, 0)
-        
-        # === RIGHT: MAP ===
-        self.map_widget = MapWidget()
-        main_layout.addWidget(self.map_widget, 1)
-        
-        # Load map HTML
-        map_html = os.path.join(
-            os.path.dirname(__file__), '../../assets/map.html'
-        )
-        if os.path.exists(map_html):
-            self.map_widget.load_map(map_html)
+        # Setup zoom controls (from MainWindowUI mixin)
+        self._setup_zoom_controls()
     
-    def _connect_signals(self) -> None:
-        """Connect all signals and slots.
+    def _setup_shortcuts(self) -> None:
+        """Setup keyboard shortcuts."""
+        # ESC to quit
+        QShortcut(QKeySequence("Esc"), self, activated=self.close)
         
-        This is where the magic happens - we wire up the entire
-        signal/slot system for reactive, efficient updates.
-        """
-        # === Controls → Actions ===
-        self.controls_panel.load_graph_clicked.connect(self._on_load_graph)
-        self.controls_panel.calculate_route_clicked.connect(
-            self._on_calculate_route
-        )
-        self.controls_panel.start_agent_clicked.connect(self._on_start_agent)
-        self.controls_panel.restart_agent_clicked.connect(
-            self._on_restart_agent
-        )
-        self.controls_panel.clear_clicked.connect(self._on_clear_points)
-        
-        # === Map → Context Menu ===
-        self.map_widget.context_menu_requested.connect(
-            self._on_map_right_click
-        )
-        
-        # === State → UI Updates (automatic via signals) ===
-        # (handled by individual panels in their __init__)
-        
-        # === APIClient responses ===
-        self.api_client.graph_loaded.connect(self._on_graph_loaded)
-        self.api_client.graph_load_failed.connect(self._on_graph_load_failed)
-        self.api_client.route_calculated.connect(self._on_route_calculated)
-        self.api_client.route_calc_failed.connect(self._on_route_calc_failed)
+        # Ctrl+1/2/3 for quick point setting at cursor
+        QShortcut(QKeySequence("Ctrl+1"), self, activated=self._on_ctrl_1)
+        QShortcut(QKeySequence("Ctrl+2"), self, activated=self._on_ctrl_2)
+        QShortcut(QKeySequence("Ctrl+3"), self, activated=self._on_ctrl_3)
     
-    @pyqtSlot()
-    def _on_load_graph(self) -> None:
-        """Load graph from server."""
-        self.state.start_operation("Loading graph")
-        self.api_client.load_graph(
-            os.path.join(os.path.dirname(__file__), '../../data/osm_data.json')
-        )
+    def resizeEvent(self, event) -> None:
+        """Handle window resize - update overlay positions."""
+        super().resizeEvent(event)
+        self._update_overlay_positions()
     
-    @pyqtSlot(dict)
-    def _on_graph_loaded(self, graph_data: dict) -> None:
-        """Handle graph loaded.
+    def _update_overlay_positions(self) -> None:
+        """Update positions of overlay widgets."""
+        if not hasattr(self, 'map_frame'):
+            return
         
-        Args:
-            graph_data: Loaded graph dictionary
-        """
-        self.state.set_status("Graph loaded, ready to calculate routes")
-        self.state.complete_operation(True)
+        # Update map frame to fill window
+        self.map_frame.setGeometry(0, 0, self.width(), self.height())
+        self.map_widget.setGeometry(0, 0, self.width(), self.height())
         
-        # Extract GeoJSON and display on map
-        features = []
-        nodes = {n['id']: n for n in graph_data.get('nodes', [])}
+        map_w = self.width()
+        map_h = self.height()
         
-        for edge in graph_data.get('edges', [])[:5000]:  # Limit for performance
-            u, v = edge['u'], edge['v']
-            if u in nodes and v in nodes:
-                u_data, v_data = nodes[u], nodes[v]
-                features.append({
-                    'type': 'Feature',
-                    'geometry': {
-                        'type': 'LineString',
-                        'coordinates': [[u_data['lon'], u_data['lat']],
-                                        [v_data['lon'], v_data['lat']]]
+        # Position sidebar at left with padding (~9px = 0.25cm)
+        padding = 9
+        if self.sidebar_visible:
+            self.sidebar.move(padding, padding)
+            self.sidebar.resize(self.sidebar.width(), map_h - 2 * padding)
+            self.sidebar.show()
+            # Hide toggle button when sidebar is visible
+            self.toggle_btn.hide()
+        else:
+            self.sidebar.hide()
+            # Show toggle button when sidebar is hidden
+            self.toggle_btn.move(padding, padding)
+            self.toggle_btn.show()
+            self.toggle_btn.raise_()
+        
+        # Position zoom controls 4px from right edge
+        if hasattr(self, 'zoom_container'):
+            # Slider height = 1/3 screen height
+            slider_height = map_h // 3
+            self.zoom_slider.setFixedHeight(slider_height)
+            
+            # Container height = slider + buttons + spacing
+            zoom_h = slider_height + 24 + 24 + 8  # 2 buttons + 2 gaps
+            zoom_w = self.zoom_container.width()
+            zoom_x = map_w - zoom_w - 4  # 4px from right edge
+            zoom_y = max(20, (map_h - zoom_h) // 2)
+            
+            self.zoom_container.setFixedHeight(zoom_h)
+            self.zoom_container.move(zoom_x, zoom_y)
+            self.zoom_container.raise_()
+    
+    def _toggle_sidebar(self) -> None:
+        """Toggle sidebar visibility."""
+        self.sidebar_visible = not self.sidebar_visible
+        self._update_overlay_positions()
+    
+    def _on_map_loaded(self, ok: bool) -> None:
+        """Inject TILE_URL after map.html loads."""
+        if not ok:
+            print("ERROR: map.html failed to load")
+            return
+        
+        # Inject TILE_URL from environment or use default
+        tile_url = os.environ.get(
+            "TILE_URL",
+            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        )
+        code = f"window.TILE_URL = '{tile_url}';"
+        print(f"DEBUG: Injecting TILE_URL: {tile_url}")
+        self.map_widget.page().runJavaScript(code)
+        
+        # Update overlay positions after map loads
+        self._update_overlay_positions()
+        
+        # Flag to skip point synchronization after manual changes
+        self._skip_points_sync_count = 0
+        
+        # Setup event-based updates instead of periodic polling
+        # JS will call window.pointsChangedCallback() when points change
+        self._setup_js_callbacks()
+    
+    def _setup_js_callbacks(self):
+        """Setup JavaScript callbacks for event-based updates."""
+        js_code = """
+        // Setup points_bridge when QWebChannel is ready
+        if (window.qt && window.qt.webChannelTransport) {
+            new QWebChannel(window.qt.webChannelTransport, function(channel) {
+                window.points_bridge = channel.objects.points_bridge;
+                
+                // Override the notification function to use the bridge
+                window.pointsChangedCallback = function() {
+                    console.log('Points changed, notifying Python via bridge');
+                    if (window.points_bridge) {
+                        window.points_bridge.notify_points_changed();
                     }
-                })
-        
-        geojson = {'type': 'FeatureCollection', 'features': features}
-        self.map_widget.execute_js(
-            f"if (window.app) window.app.setGraphGeoJSON({json.dumps(geojson)});"
-        )
-        self.map_widget.execute_js(
-            "if (window.app) window.app.fitToGraph();"
-        )
-    
-    @pyqtSlot(str)
-    def _on_graph_load_failed(self, error: str) -> None:
-        """Handle graph load failure.
-        
-        Args:
-            error: Error message
+                };
+                
+                console.log('Points bridge connected');
+            });
+        }
         """
-        self.state.report_error(f"Failed to load graph: {error}")
+        self.map_widget.page().runJavaScript(js_code)
+        log.debug("js_callbacks_setup")
     
-    @pyqtSlot()
-    def _on_calculate_route(self) -> None:
-        """Calculate route from controls."""
-        start = self.controls_panel.get_start_coords()
-        end = self.controls_panel.get_end_coords()
-        k_routes = self.controls_panel.get_k_routes()
-        
-        if not start or not end:
-            self.state.report_error("Invalid coordinates")
-            return
-        
-        # Add start and end points to state
-        self.state.clear_points()
-        self.state.add_point('start', start[0], start[1])
-        self.state.add_point('end', end[0], end[1])
-        
-        # Request route
-        waypoints = self.state.get_waypoints()
-        self.state.start_operation(f"Calculating {k_routes} route(s)")
-        self.api_client.calculate_route(waypoints, k_routes)
-    
-    @pyqtSlot(object)
-    def _on_route_calculated(self, route) -> None:
-        """Handle route calculated.
-        
-        Args:
-            route: Route object
-        """
-        self.routes.append(route)
-        self.state.set_route(
-            route.nodes, route.edges, route.distance_m, route.duration_s,
-            route.coordinates
-        )
-        self.state.complete_operation(True)
-        self.controls_panel.enable_agent_buttons(True)
-        
-        # Show route on map
-        if route.coordinates:
-            self.map_widget.show_route(route.coordinates)
-    
-    @pyqtSlot(str)
-    def _on_route_calc_failed(self, error: str) -> None:
-        """Handle route calculation failure.
-        
-        Args:
-            error: Error message
-        """
-        self.state.report_error(f"Route calculation failed: {error}")
-    
-    @pyqtSlot()
-    def _on_start_agent(self) -> None:
-        """Start agent simulation."""
-        if not self.routes:
-            self.state.report_error("Calculate a route first")
-            return
-        
-        route = self.routes[self.current_route_index]
-        self.state.set_status(f"Starting agent on route {len(route.nodes)} nodes")
-        # TODO: Implement agent start when backend available
-    
-    @pyqtSlot()
-    def _on_restart_agent(self) -> None:
-        """Restart agent simulation."""
-        if self.agent_id:
-            self.state.set_status("Restarting agent...")
-            # TODO: Implement agent restart when backend available
-    
-    @pyqtSlot()
-    def _on_clear_points(self) -> None:
-        """Clear all points."""
-        self.state.clear_points()
-        self.map_widget.clear_markers()
-        self.state.set_status("Points cleared")
-    
-    @pyqtSlot(float, float)
-    def _on_map_right_click(self, lon: float, lat: float) -> None:
-        """Handle right-click on map for point selection.
-        
-        Args:
-            lon: Longitude
-            lat: Latitude
-        """
-        # TODO: Implement context menu for point type selection
-        # For now, add as 'via' point
-        self.state.add_point('via', lon, lat)
-        self.map_widget.add_marker(lon, lat, self.color_palette[
-            self._color_idx % len(self.color_palette)
-        ], f"Point {len(self.state.get_points())}")
-        self._color_idx += 1
-    
-    def _on_zoom_from_js(self, zoom: float) -> None:
-        """Handle zoom change from JS.
-        
-        Args:
-            zoom: New zoom level
-        """
-        self.state.set_zoom(zoom)
-    
-    def _start_zoom_http_server(self) -> None:
-        """Start HTTP server for zoom API."""
-        ZoomAPIHandler.main_window = self
-        
-        try:
-            server = ThreadingHTTPServer(('0.0.0.0', 8888), ZoomAPIHandler)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            self.state.set_status("Zoom server started on :8888")
-        except Exception as e:
-            self.state.report_error(f"Failed to start zoom server: {e}")
+    # All event handlers are now in MainWindowHandlers mixin

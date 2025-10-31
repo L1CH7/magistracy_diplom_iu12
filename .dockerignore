@@ -1,0 +1,49 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.pytest_cache
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Documentation
+docs/
+REPORTS/
+*.md
+!README.md
+
+# Tests
+tests/
+test_*.py
+verify_*.py
+
+# Data (we mount it via volume)
+data/
+
+# Temp files
+.env
+.DS_Store

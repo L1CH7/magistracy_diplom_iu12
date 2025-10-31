@@ -1,7 +1,12 @@
 """Main entry point for Navigation MAS client."""
 import sys
+import os
+
+# Add parent to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 from PyQt5.QtWidgets import QApplication
-from main_window import NavigationGUI
+from src.client.ui.main_window import MainWindow
 
 
 def main():
@@ -12,8 +17,8 @@ def main():
     server_url = "http://server:8000"
     
     # Create and show main window
-    gui = NavigationGUI(server_url)
-    gui.show()
+    window = MainWindow(server_url)
+    window.show()
     
     sys.exit(app.exec_())
 
