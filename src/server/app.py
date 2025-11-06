@@ -67,16 +67,29 @@ _tile_hosts = cycle(["a", "b", "c"])  # for upstream OSM subdomains
 
 
 def _load_graph() -> nx.DiGraph:
-    # For now, always use demo graph to avoid long startup times
-    # TODO: async graph loading or background task
-    json_path = os.getenv("OSM_JSON_PATH")
-    if False and json_path and os.path.exists(json_path):
-        # Disabled: graph loading takes too long
-        import json
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return build_graph_from_overpass(data)
-    # Demo graph
+    """Load graph from OSM data if available, otherwise use demo."""
+    json_path = os.getenv("OSM_JSON_PATH", "data/osm_data.json")
+    
+    # Try to load OSM data
+    if os.path.exists(json_path):
+        try:
+            print(f"DEBUG: Loading graph from {json_path}")
+            import json
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            graph = build_graph_from_overpass(data)
+            print(
+                f"DEBUG: Loaded OSM graph with {graph.number_of_nodes()} "
+                f"nodes and {graph.number_of_edges()} edges"
+            )
+            return graph
+        except Exception as e:
+            print(f"WARN: Failed to load OSM graph: {e}")
+            print("DEBUG: Falling back to demo graph")
+    
+    # Demo graph fallback
+    print("DEBUG: Using demo graph (no OSM data available)")
     demo = nx.DiGraph()
     demo.add_node(1, lat=55.75, lon=37.61)
     demo.add_node(2, lat=55.76, lon=37.62)
@@ -105,6 +118,18 @@ def startup_event() -> None:
         import traceback
         traceback.print_exc()
         raise
+
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "ok",
+        "graph_loaded": G is not None,
+        "nodes": G.number_of_nodes() if G else 0,
+        "edges": G.number_of_edges() if G else 0,
+        "engine": engine is not None
+    }
 
 
 @app.post("/route", response_model=RouteResponse)
@@ -269,6 +294,179 @@ def osm_load(req: OsmLoadRequest) -> dict:
             status_code=500,
             detail=f"Failed to load OSM: {str(e)}"
         )
+
+
+class RoadGraphRequest(BaseModel):
+    bbox: List[float] = Field(
+        ..., min_items=4, max_items=4
+    )  # [min_lon, min_lat, max_lon, max_lat]
+
+
+@app.post("/osm/fetch_road_graph")
+async def fetch_road_graph(req: RoadGraphRequest):
+    """Fetch road graph data from OSM with progress streaming.
+    
+    Returns GeoJSON with road network for visualization.
+    """
+    from src.data.osm_overpass import fetch_overpass, build_highway_query
+    import asyncio
+    from fastapi.responses import StreamingResponse
+    import json as json_module
+    
+    min_lon, min_lat, max_lon, max_lat = req.bbox
+    bbox = (min_lat, min_lon, max_lat, max_lon)
+    
+    # Calculate tiles
+    tile_size_deg = 0.05
+    s, w, n, e = bbox
+    tiles = []
+    lat = s
+    while lat < n:
+        lon = w
+        while lon < e:
+            tile_s = lat
+            tile_w = lon
+            tile_n = min(lat + tile_size_deg, n)
+            tile_e = min(lon + tile_size_deg, e)
+            tiles.append((tile_s, tile_w, tile_n, tile_e))
+            lon += tile_size_deg
+        lat += tile_size_deg
+    
+    total_tiles = len(tiles)
+    print(f"DEBUG: Will fetch {total_tiles} tiles")
+    
+    async def generate():
+        # Collect all elements
+        all_elements = []
+        seen_ids = set()
+        
+        try:
+            for i, tile_bbox in enumerate(tiles):
+                query = build_highway_query(tile_bbox)
+                
+                # Fetch tile (blocking, run in executor)
+                loop = asyncio.get_event_loop()
+                tile_data = await loop.run_in_executor(
+                    None,
+                    lambda q=query: fetch_overpass(q, timeout=60)
+                )
+                
+                elements = tile_data.get("elements", [])
+                
+                # Deduplicate elements
+                new_count = 0
+                for elem in elements:
+                    elem_id = (elem.get("type"), elem.get("id"))
+                    if elem_id not in seen_ids:
+                        seen_ids.add(elem_id)
+                        all_elements.append(elem)
+                        new_count += 1
+                
+                print(
+                    f"DEBUG: Tile {i+1}/{total_tiles}: "
+                    f"{len(elements)} raw, {new_count} new, "
+                    f"{len(all_elements)} total"
+                )
+                
+                # Send progress update
+                progress_msg = {
+                    "type": "progress",
+                    "current": i + 1,
+                    "total": total_tiles,
+                    "elements_count": len(all_elements)
+                }
+                yield json_module.dumps(progress_msg) + "\n"
+                
+                # Brief delay to avoid rate limiting
+                await asyncio.sleep(0.5)
+            
+            # Build GeoJSON from all elements
+            data = {
+                "version": 0.6,
+                "generator": "fetch_road_graph",
+                "elements": all_elements
+            }
+            
+            nodes = {
+                el["id"]: el
+                for el in all_elements
+                if el.get("type") == "node"
+            }
+            ways = [
+                el for el in all_elements
+                if el.get("type") == "way"
+            ]
+            
+            features = []
+            for way in ways:
+                tags = way.get("tags", {})
+                if not tags.get("highway"):
+                    continue
+                
+                node_ids = way.get("nodes", [])
+                coords = []
+                for nid in node_ids:
+                    n = nodes.get(nid)
+                    if n and "lon" in n and "lat" in n:
+                        coords.append([n["lon"], n["lat"]])
+                
+                if len(coords) >= 2:
+                    # Create properties dict with ALL tags + way_id
+                    properties = {"way_id": way.get("id")}
+                    properties.update(tags)  # Add all OSM tags
+                    
+                    feature = {
+                        "type": "Feature",
+                        "properties": properties,
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": coords,
+                        },
+                    }
+                    features.append(feature)
+            
+            geojson = {
+                "type": "FeatureCollection",
+                "features": features
+            }
+            
+            print(
+                f"DEBUG: Built GeoJSON with {len(features)} ways "
+                f"from {len(all_elements)} elements"
+            )
+            
+            # Send final result
+            result = {
+                "type": "complete",
+                "geojson": geojson,
+                "total_ways": len(features),
+                "total_elements": len(all_elements)
+            }
+            yield json_module.dumps(result) + "\n"
+            
+            # Save to disk and rebuild graph
+            global G, engine
+            json_path = os.getenv("OSM_JSON_PATH", "data/osm_data.json")
+            os.makedirs(os.path.dirname(json_path), exist_ok=True)
+            save_json(data, json_path)
+            G = build_graph_from_overpass(data)
+            engine = SimpleRouteEngine(G)
+            print(f"DEBUG: Graph rebuilt with {G.number_of_nodes()} nodes")
+            
+        except Exception as e:
+            print(f"ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            error_msg = {
+                "type": "error",
+                "message": str(e)
+            }
+            yield json_module.dumps(error_msg) + "\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson"
+    )
 
 
 @app.get("/tiles/osm/{z}/{x}/{y}.png")

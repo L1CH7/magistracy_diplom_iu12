@@ -221,6 +221,171 @@ class MainWindowHandlers:
         log.info("get_route_clicked")
         # TODO: implement route calculation
     
+    def _on_get_road_graph(self) -> None:
+        """Handle get road graph button click - test for small bbox."""
+        import json
+        import requests
+        from PyQt5.QtWidgets import QMessageBox
+        
+        # Fixed test bbox (small Moscow region)
+        TEST_BBOX = [37.5609, 55.7510, 37.6016, 55.7631]
+        
+        log.info("=== GET_ROAD_GRAPH START ===", bbox=TEST_BBOX)
+        
+        # Disable button and show loading
+        btn = self.sidebar.get_road_graph_btn
+        log.debug("graph_button_found", button=btn, text=btn.text())
+        btn.setEnabled(False)
+        original_text = btn.text()
+        btn.setText("Loading...")
+        log.debug("graph_button_disabled", original_text=original_text)
+        
+        try:
+            # Request graph data
+            url = f"{self.server_url}/osm/fetch_road_graph"
+            log.info("graph_request_start", url=url, bbox=TEST_BBOX)
+            
+            response = requests.post(
+                url,
+                json={"bbox": TEST_BBOX},
+                stream=True,
+                timeout=180
+            )
+            log.info("graph_response_received", status=response.status_code)
+            response.raise_for_status()
+            
+            geojson = None
+            total_ways = 0
+            line_count = 0
+            
+            log.info("graph_parsing_ndjson_stream")
+            
+            # Parse NDJSON stream
+            for line in response.iter_lines():
+                if line:
+                    line_count += 1
+                    decoded = line.decode('utf-8')
+                    log.debug("graph_ndjson_line", line_num=line_count, preview=decoded[:100])
+                    
+                    data = json.loads(decoded)
+                    msg_type = data.get("type")
+                    log.debug("graph_message", type=msg_type, keys=list(data.keys()))
+                    
+                    if msg_type == "progress":
+                        processed = data.get("processed", 0)
+                        btn.setText(f"Loading: {processed}...")
+                        log.info("graph_progress", processed=processed)
+                    
+                    elif msg_type == "complete":
+                        geojson = data.get("geojson")
+                        total_ways = data.get("total_ways", 0)
+                        log.info(
+                            "graph_loaded",
+                            total_ways=total_ways,
+                            bbox=TEST_BBOX,
+                            geojson_type=type(geojson).__name__,
+                            features_count=len(geojson.get("features", [])) if geojson else 0
+                        )
+                    
+                    elif msg_type == "error":
+                        error_msg = data.get("error", "Unknown error")
+                        log.error("graph_load_error", error=error_msg)
+                        QMessageBox.critical(
+                            self,
+                            "Error",
+                            f"Failed to load graph: {error_msg}"
+                        )
+                        return
+            
+            log.info("graph_stream_complete", total_lines=line_count, has_geojson=geojson is not None)
+            
+            # Display graph on map
+            if geojson:
+                # Filter: only drivable roads (exclude pedestrian, cycleway, etc)
+                drivable_highway_types = {
+                    'motorway', 'motorway_link',
+                    'trunk', 'trunk_link',
+                    'primary', 'primary_link',
+                    'secondary', 'secondary_link',
+                    'tertiary', 'tertiary_link',
+                    'unclassified', 'residential',
+                    'living_street', 'service',
+                }
+                
+                original_count = len(geojson.get("features", []))
+                filtered_features = [
+                    f for f in geojson.get("features", [])
+                    if f.get("properties", {}).get("highway") 
+                       in drivable_highway_types
+                ]
+                geojson["features"] = filtered_features
+                
+                log.info("graph_filtered",
+                         original=original_count,
+                         filtered=len(filtered_features),
+                         removed=original_count - len(filtered_features))
+                
+                # Simplify coordinates (round to 6 decimals ~11cm precision)
+                for feature in geojson["features"]:
+                    coords = feature["geometry"]["coordinates"]
+                    feature["geometry"]["coordinates"] = [
+                        [round(lon, 6), round(lat, 6)]
+                        for lon, lat in coords
+                    ]
+                
+                log.info("graph_displaying_on_map",
+                         features=len(filtered_features))
+                
+                js_code = f"""
+                (function() {{
+                    console.log('[GRAPH] Setting graph GeoJSON...');
+                    if (window.app && window.app.setGraphGeoJSON) {{
+                        window.app.setGraphGeoJSON({json.dumps(geojson)});
+                        console.log('[GRAPH] GeoJSON set, fitting to graph...');
+                        window.app.fitToGraph();
+                        console.log('[GRAPH] Done!');
+                    }} else {{
+                        console.error('[GRAPH] window.app or setGraphGeoJSON not found!');
+                    }}
+                }})();
+                """
+                
+                log.debug("graph_executing_js", js_length=len(js_code))
+                self.map_widget.page().runJavaScript(js_code)
+                log.info("graph_js_executed")
+                
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"Loaded {total_ways} road ways"
+                )
+                log.info("graph_messagebox_shown", total_ways=total_ways)
+            else:
+                log.warning("graph_no_data")
+                QMessageBox.warning(
+                    self,
+                    "Warning",
+                    "No graph data received"
+                )
+        
+        except Exception as e:
+            log.error("graph_request_failed", 
+                     error=str(e), 
+                     error_type=type(e).__name__,
+                     exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Request failed: {str(e)}"
+            )
+        
+        finally:
+            # Restore button
+            log.debug("graph_restoring_button", original_text=original_text)
+            btn.setEnabled(True)
+            btn.setText(original_text)
+            log.info("=== GET_ROAD_GRAPH END ===")
+    
     def _update_selected_points(self) -> None:
         """Update selected points display in sidebar."""
         # Skip sync if widget just made a change

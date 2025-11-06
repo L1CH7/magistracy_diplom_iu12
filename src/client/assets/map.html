@@ -263,7 +263,42 @@
         layers: [
           { id: 'background', type: 'background', paint: { 'background-color': '#f3f4f6' } },
           { id: 'osm', type: 'raster', source: 'osm' },
-          { id: 'graph', type: 'line', source: 'graph', paint: { 'line-color': '#9ca3af', 'line-width': 1 } },
+          { 
+            id: 'graph', 
+            type: 'line', 
+            source: 'graph', 
+            paint: { 
+              'line-color': [
+                'match',
+                ['get', 'highway'],
+                ['motorway', 'motorway_link'], '#1e40af',  // dark blue
+                ['trunk', 'trunk_link'], '#1e3a8a',
+                ['primary', 'primary_link'], '#1d4ed8',
+                ['secondary', 'secondary_link'], '#2563eb',
+                ['tertiary', 'tertiary_link'], '#3b82f6',
+                ['residential', 'living_street'], '#60a5fa',
+                '#93c5fd'  // default light blue
+              ],
+              'line-width': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                10, 1,
+                15, ['match', ['get', 'highway'],
+                     ['motorway', 'motorway_link'], 3,
+                     ['trunk', 'trunk_link'], 2.5,
+                     ['primary', 'primary_link'], 2,
+                     1.5
+                    ],
+                18, ['match', ['get', 'highway'],
+                     ['motorway', 'motorway_link'], 6,
+                     ['trunk', 'trunk_link'], 5,
+                     ['primary', 'primary_link'], 4,
+                     3
+                    ]
+              ]
+            } 
+          },
           { id: 'routes', type: 'line', source: 'routes', paint: { 'line-color': ['get', 'color'], 'line-width': 3 } },
         ]
       },

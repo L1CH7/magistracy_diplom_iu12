@@ -74,6 +74,7 @@ class MainWindowUI:
         
         # Connect sidebar buttons
         self.sidebar.get_route_btn.clicked.connect(self._on_get_route)
+        self.sidebar.get_road_graph_btn.clicked.connect(self._on_get_road_graph)
         self.sidebar.quit_btn.clicked.connect(self.close)
     
     def _setup_zoom_controls(self) -> None:

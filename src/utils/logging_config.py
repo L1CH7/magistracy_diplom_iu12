@@ -6,6 +6,16 @@ from pathlib import Path
 import structlog
 
 
+def add_call_site_info(logger, method_name, event_dict):
+    """Add function name and line number to log records."""
+    # Get the frame that called the logger
+    frame = event_dict.get("_frame")
+    if frame:
+        event_dict["func"] = frame.f_code.co_name
+        event_dict["lineno"] = frame.f_lineno
+    return event_dict
+
+
 def setup_logging(
     log_file: str = "logs/navigation_mas.log",
     level: str = "DEBUG"
@@ -27,6 +37,12 @@ def setup_logging(
     pre_chain = [
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
+        structlog.processors.CallsiteParameterAdder(
+            [
+                structlog.processors.CallsiteParameter.FUNC_NAME,
+                structlog.processors.CallsiteParameter.LINENO,
+            ],
+        ),
         structlog.stdlib.ExtraAdder(),
         timestamper,
     ]
@@ -85,6 +101,12 @@ def setup_logging(
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
+            structlog.processors.CallsiteParameterAdder(
+                [
+                    structlog.processors.CallsiteParameter.FUNC_NAME,
+                    structlog.processors.CallsiteParameter.LINENO,
+                ],
+            ),
             structlog.stdlib.PositionalArgumentsFormatter(),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,

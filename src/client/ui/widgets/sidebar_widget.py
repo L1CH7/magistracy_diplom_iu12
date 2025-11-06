@@ -59,6 +59,17 @@ class SidebarWidget(QFrame):
         sidebar_layout.addLayout(k_frame)
 
         btn_layout = QVBoxLayout()
+        
+        # NEW: Get Road Graph Data button
+        self.get_road_graph_btn = QPushButton("Get Road Graph Data")
+        self.get_road_graph_btn.setStyleSheet(
+            "QPushButton { background-color: #8b5cf6; color: white; "
+            "border: none; border-radius: 6px; padding: 8px; "
+            "font-weight: bold; } "
+            "QPushButton:hover { background-color: #7c3aed; }"
+        )
+        btn_layout.addWidget(self.get_road_graph_btn)
+        
         self.get_route_btn = QPushButton("Get Route")
         self.get_route_btn.setStyleSheet("QPushButton { background-color: #3b82f6; color: white; border: none; border-radius: 6px; padding: 8px; font-weight: bold; } QPushButton:hover { background-color: #2563eb; }")
         btn_layout.addWidget(self.get_route_btn)
