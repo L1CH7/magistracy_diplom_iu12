@@ -304,38 +304,72 @@ class RoadGraphRequest(BaseModel):
 
 @app.post("/osm/fetch_road_graph")
 async def fetch_road_graph(req: RoadGraphRequest):
-    """Fetch road graph data from OSM with progress streaming.
+    """Fetch road graph data with PostGIS caching.
     
-    Returns GeoJSON with road network for visualization.
+    Flow:
+    1. Check if bbox overlaps with cached regions
+    2. If fully cached, return from PostGIS immediately
+    3. If not cached, fetch from Overpass + cache + return
+    
+    Returns NDJSON stream with progress and final GeoJSON.
     """
+    from src.data.postgis_manager import PostGISManager
     from src.data.osm_overpass import fetch_overpass, build_highway_query
     import asyncio
     from fastapi.responses import StreamingResponse
     import json as json_module
     
     min_lon, min_lat, max_lon, max_lat = req.bbox
-    bbox = (min_lat, min_lon, max_lat, max_lon)
+    bbox_tuple = (min_lon, min_lat, max_lon, max_lat)
     
-    # Calculate tiles
-    tile_size_deg = 0.05
-    s, w, n, e = bbox
-    tiles = []
-    lat = s
-    while lat < n:
-        lon = w
-        while lon < e:
-            tile_s = lat
-            tile_w = lon
-            tile_n = min(lat + tile_size_deg, n)
-            tile_e = min(lon + tile_size_deg, e)
-            tiles.append((tile_s, tile_w, tile_n, tile_e))
-            lon += tile_size_deg
-        lat += tile_size_deg
-    
-    total_tiles = len(tiles)
-    print(f"DEBUG: Will fetch {total_tiles} tiles")
+    db = PostGISManager()
     
     async def generate():
+        # Try to get from PostGIS cache first
+        try:
+            geojson = db.get_roads_geojson(bbox_tuple)
+            if geojson and geojson.get('features'):
+                # Cache hit!
+                print(f"DEBUG: Bbox cache HIT for {bbox_tuple}")
+                yield json_module.dumps({
+                    'type': 'info',
+                    'message': 'Data loaded from PostGIS cache',
+                }) + '\n'
+                
+                yield json_module.dumps({
+                    'type': 'complete',
+                    'cached': True,
+                    'geojson': geojson,
+                    'total_ways': len(geojson.get('features', [])),
+                }) + '\n'
+                return
+        except Exception as e:
+            print(f"WARN: PostGIS cache check failed: {e}")
+        
+        # Cache miss - fetch from Overpass
+        print(f"DEBUG: Bbox cache MISS for {bbox_tuple}, fetching from Overpass")
+        
+        bbox = (min_lat, min_lon, max_lat, max_lon)
+        
+        # Calculate tiles
+        tile_size_deg = 0.05
+        s, w, n, e = bbox
+        tiles = []
+        lat = s
+        while lat < n:
+            lon = w
+            while lon < e:
+                tile_s = lat
+                tile_w = lon
+                tile_n = min(lat + tile_size_deg, n)
+                tile_e = min(lon + tile_size_deg, e)
+                tiles.append((tile_s, tile_w, tile_n, tile_e))
+                lon += tile_size_deg
+            lat += tile_size_deg
+        
+        total_tiles = len(tiles)
+        print(f"DEBUG: Will fetch {total_tiles} tiles")
+        
         # Collect all elements
         all_elements = []
         seen_ids = set()
@@ -469,33 +503,68 @@ async def fetch_road_graph(req: RoadGraphRequest):
     )
 
 
+@app.post("/osm/cache_region")
+async def cache_region(region_name: str):
+    """Load specified region OSM data into PostGIS cache.
+    
+    Region must be defined in configs/regions.py.
+    Returns streaming NDJSON progress updates.
+    
+    Args:
+        region_name: Region identifier from config (e.g. 'moscow_oblast')
+    """
+    from src.data.region_loader import load_region_to_cache
+    from fastapi.responses import StreamingResponse
+    
+    return StreamingResponse(
+        load_region_to_cache(region_name),
+        media_type="application/x-ndjson"
+    )
+
+
+@app.get("/osm/regions")
+def list_regions():
+    """List all configured and cached regions."""
+    from configs.regions import REGIONS
+    from src.data.postgis_manager import PostGISManager
+    
+    db = PostGISManager()
+    cached = db.list_regions()
+    
+    return {
+        'configured': list(REGIONS.keys()),
+        'cached': cached
+    }
+
+
 @app.get("/tiles/osm/{z}/{x}/{y}.png")
 def proxy_osm_tiles(z: int, x: int, y: int):
+    """Proxy OSM raster tiles with PostGIS caching.
+    
+    Flow:
+    1. Check PostGIS cache first (tiles.get_tile)
+    2. If miss, fetch from upstream OSM
+    3. Save to PostGIS (tiles.insert_tile)
+    4. Return tile
+    
+    This ensures tiles are NEVER re-downloaded.
     """
-    Caching proxy for OSM raster tiles. Caches tiles on disk to reduce
-    network requests. Respects OSM Tile Usage Policy.
-    """
-    from pathlib import Path
+    from src.data.postgis_manager import PostGISManager
     
-    # Setup cache directory
-    cache_dir = Path(os.getenv("TILE_CACHE_DIR", "/app/data/tiles"))
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    db = PostGISManager()
     
-    # Create cache path: tiles/z/x/y.png
-    tile_path = cache_dir / str(z) / str(x)
-    tile_path.mkdir(parents=True, exist_ok=True)
-    tile_file = tile_path / f"{y}.png"
+    # Check PostGIS cache first
+    tile_data = db.get_tile(z, x, y, source='osm')
     
-    # Check cache first
-    if tile_file.exists():
-        print(f"DEBUG: Tile cache HIT for {z}/{x}/{y}")
+    if tile_data:
+        print(f"DEBUG: Tile cache HIT (PostGIS) for {z}/{x}/{y}")
         return Response(
-            content=tile_file.read_bytes(),
+            content=tile_data,
             media_type="image/png",
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Access-Control-Allow-Origin": "*",
-                "X-Cache": "HIT",
+                "X-Cache": "HIT-PostGIS",
             },
         )
     
@@ -516,9 +585,9 @@ def proxy_osm_tiles(z: int, x: int, y: int):
                 detail="Tile fetch failed",
             )
         
-        # Save to cache
-        tile_file.write_bytes(r.content)
-        print(f"DEBUG: Tile cached for {z}/{x}/{y}")
+        # Save to PostGIS
+        db.insert_tile(z, x, y, r.content, source='osm')
+        print(f"DEBUG: Tile cached in PostGIS for {z}/{x}/{y}")
         
         return Response(
             content=r.content,
@@ -526,7 +595,7 @@ def proxy_osm_tiles(z: int, x: int, y: int):
             headers={
                 "Cache-Control": "public, max-age=86400",
                 "Access-Control-Allow-Origin": "*",
-                "X-Cache": "MISS",
+                "X-Cache": "MISS-PostGIS",
             },
         )
     except HTTPException:

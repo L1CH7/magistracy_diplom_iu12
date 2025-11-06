@@ -10,6 +10,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-compile -r requirements.txt
 
 COPY src/ ./src/
+COPY configs/ ./configs/
+COPY db/ ./db/
 
 EXPOSE 8000
 
