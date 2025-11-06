@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MapLibre Client</title>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    html, body, #map {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    .maplibregl-ctrl-logo, .maplibregl-ctrl-attrib {
+      opacity: .7;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script type="module">
+  // Wait for TILE_URL to be injected by PyQt, then initialize map
+  let mapInitialized = false;
+  let tileUrl = null;
+  let map = null; // will be set in initializeMap()
+  
+  // Global variables for picking
+  let allPoints = [];  // Array of {lon, lat, color} - first=from, last=to, middle=via
+  let allMarkers = [];
+  let contextMenuPos = null;
+  let mapLoaded = false;  // Tracks if map.on('load') has fired
+  
+  // Queue for operations before map is ready
+  let pendingOperations = [];
+  
+  // Helper function to create marker element based on display_color
+  function createMarkerElement(color) {
+    const el = document.createElement('div');
+    const isFrom = (color === '#2563eb');
+    const isTo = (color === '#dc2626');
+    
+    if (isFrom || isTo) {
+      el.style.width = '16px';
+      el.style.height = '16px';
+      el.style.borderRadius = '50%';
+      el.style.backgroundColor = '#ffffff';
+      el.style.border = '2px solid ' + color;
+    } else {
+      el.style.width = '10px';
+      el.style.height = '10px';
+      el.style.borderRadius = '50%';
+      el.style.backgroundColor = color;
+      el.style.border = '2px solid #000000';
+    }
+    return el;
+  }
+  
+  // Real functions that work with map
+  function _addMarkerToMap(lngLat, color) {
+    if (!map || !mapLoaded) return null;
+    const el = createMarkerElement(color);
+    const marker = new maplibregl.Marker({ element: el, pitchAlignment: 'map', rotationAlignment: 'map' });
+    const lng = lngLat.lon !== undefined ? lngLat.lon : lngLat.lng;
+    const lat = lngLat.lat;
+    marker.setLngLat([lng, lat]).addTo(map);
+    allMarkers.push(marker);
+    return marker;
+  }
+  
+  function setStart(lngLat) {
+    console.log('setStart called:', lngLat, 'mapLoaded:', mapLoaded);
+    if (!mapLoaded) {
+      pendingOperations.push({ type: 'setStart', lngLat });
+      console.log('Map not loaded, queued setStart');
+      return;
+    }
+    const lon = lngLat.lng !== undefined ? lngLat.lng : lngLat.lon;
+    // Color must be provided from Python
+    const point = {
+      lon: lon,
+      lat: lngLat.lat,
+      color: lngLat.color || '#8b5cf6'  // Fallback to default
+    };
+    
+    if (allPoints.length === 0) {
+      allPoints.push(point);
+    } else {
+      allPoints[0] = point;  // Replace first point
+    }
+    
+    // Redraw all markers
+    _redrawAllMarkers();
+    console.log('Start point set, allPoints:', allPoints.length);
+  }
+  
+  function setEnd(lngLat) {
+    console.log('setEnd called:', lngLat, 'mapLoaded:', mapLoaded);
+    if (!mapLoaded) {
+      pendingOperations.push({ type: 'setEnd', lngLat });
+      console.log('Map not loaded, queued setEnd');
+      return;
+    }
+    const lon = lngLat.lng !== undefined ? lngLat.lng : lngLat.lon;
+    // Color must be provided from Python
+    const point = {
+      lon: lon,
+      lat: lngLat.lat,
+      color: lngLat.color || '#8b5cf6'  // Fallback to default
+    };
+    
+    if (allPoints.length === 0) {
+      allPoints.push(point);
+    } else if (allPoints.length === 1) {
+      allPoints.push(point);
+    } else {
+      allPoints[allPoints.length - 1] = point;  // Replace last point
+    }
+    
+    // Redraw all markers
+    _redrawAllMarkers();
+    console.log('End point set, allPoints:', allPoints.length);
+  }
+  
+  function addMarker(lngLat, color) {
+    if (!mapLoaded) {
+      pendingOperations.push({ type: 'addMarker', lngLat, color });
+      return;
+    }
+    const lon = lngLat.lon !== undefined ? lngLat.lon : lngLat.lng;
+    const point = { lon: lon, lat: lngLat.lat, color: color || '#8b5cf6' };
+    
+    // Add via point (insert before last if we have from+to, else just append)
+    if (allPoints.length >= 2) {
+      allPoints.splice(allPoints.length - 1, 0, point);
+    } else {
+      allPoints.push(point);
+    }
+    
+    // Redraw all markers
+    _redrawAllMarkers();
+    console.log('Via point added, allPoints:', allPoints.length);
+  }
+  
+  function _redrawAllMarkers() {
+    // Clear all existing markers
+    allMarkers.forEach(m => m.remove());
+    allMarkers = [];
+    
+    // Add marker for each point using display_color from presenter
+    allPoints.forEach((point, idx) => {
+      // Use display_color if present (from PointsPresenter)
+      // Fallback to position-based colors for backwards compatibility
+      let markerColor;
+      if (point.display_color) {
+        markerColor = point.display_color;
+      } else if (idx === 0) {
+        markerColor = '#2563eb';  // From fallback
+      } else if (idx === allPoints.length - 1) {
+        markerColor = '#dc2626';  // To fallback
+      } else {
+        markerColor = point.color || '#8b5cf6';  // Via fallback
+      }
+      
+      const marker = _addMarkerToMap(point, markerColor);
+      if (marker) {
+        allMarkers.push(marker);
+      }
+    });
+    console.log('Markers redrawn:', allPoints.length);
+    _notifyPointsChanged();  // Notify Python about changes
+  }
+  
+  // Notify Python that points have changed
+  function _notifyPointsChanged() {
+    if (window.pointsChangedCallback) {
+      window.pointsChangedCallback();
+    }
+  }
+  
+  function addVia(lngLat) {
+    return addMarker(lngLat, '#f59e0b');
+  }
+  
+  function clearVia() {
+    if (!mapLoaded) return;
+    allMarkers.forEach(m => m.remove());
+    allMarkers = [];
+  }
+  
+  function clearAllMarkers() {
+    allMarkers.forEach(m => m.remove());
+    allMarkers = [];
+    allPoints = [];
+  }
+  
+  function getPickedPoints() {
+    // Return points in old format for compatibility
+    const start = allPoints.length > 0 ? allPoints[0] : null;
+    const end = allPoints.length > 1 ? allPoints[allPoints.length - 1] : null;
+    const via = allPoints.length > 2 ? allPoints.slice(1, -1) : [];
+    return { start: start, end: end, via: via };
+  }
+  
+  function setAllPoints(points) {
+    // Replace entire allPoints array and redraw markers
+    // Do NOT modify point.color - colors in the array must stay as is!
+    // Display colors are overridden locally in _redrawAllMarkers()
+    allPoints = points.slice();  // Make a copy
+    
+    console.log('setAllPoints called with:', allPoints.length, 'points');
+    console.log('Display colors:', allPoints.map(p => p.display_color || 'N/A'));
+    console.log('Display types:', allPoints.map(p => p.display_type || 'N/A'));
+    console.log('Original colors:', allPoints.map(p => p.color || 'N/A'));
+    
+    _redrawAllMarkers();
+  }
+  
+  function setPickMode(mode) {
+    console.log('setPickMode:', mode);
+  }
+  
+  function clearPicked() {
+    clearAllMarkers();
+  }
+  
+  function ensureMarker(color) {
+    const el = createMarkerElement(color);
+    return new maplibregl.Marker({ element: el, pitchAlignment: 'map', rotationAlignment: 'map' });
+  }
+  
+  // Map methods will be available through window.map after init
+  // Create stubs just in case
+  window.map = {
+    getZoom: function() { return 12; },
+    setZoom: function(z) {},
+    zoomIn: function() {},
+    zoomOut: function() {},
+    getBounds: function() { return null; },
+    getCanvas: function() { return null; },
+    on: function() {},
+  };
+
+  function initializeMap() {
+    if (mapInitialized) return;
+    mapInitialized = true;
+
+    tileUrl = window.TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+    // Create map
+  map = new maplibregl.Map({
+      container: 'map',
+      style: {
+        version: 8,
+        sources: {
+          osm: {
+            type: 'raster',
+            tiles: [tileUrl],
+            tileSize: 256,
+          },
+          graph: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+          routes: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+        },
+        layers: [
+          { id: 'background', type: 'background', paint: { 'background-color': '#f3f4f6' } },
+          { id: 'osm', type: 'raster', source: 'osm' },
+          { 
+            id: 'graph', 
+            type: 'line', 
+            source: 'graph', 
+            paint: { 
+              'line-color': [
+                'match',
+                ['get', 'highway'],
+                ['motorway', 'motorway_link'], '#1e40af',  // dark blue
+                ['trunk', 'trunk_link'], '#1e3a8a',
+                ['primary', 'primary_link'], '#1d4ed8',
+                ['secondary', 'secondary_link'], '#2563eb',
+                ['tertiary', 'tertiary_link'], '#3b82f6',
+                ['residential', 'living_street'], '#60a5fa',
+                '#93c5fd'  // default light blue
+              ],
+              'line-width': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                10, 1,
+                15, ['match', ['get', 'highway'],
+                     ['motorway', 'motorway_link'], 3,
+                     ['trunk', 'trunk_link'], 2.5,
+                     ['primary', 'primary_link'], 2,
+                     1.5
+                    ],
+                18, ['match', ['get', 'highway'],
+                     ['motorway', 'motorway_link'], 6,
+                     ['trunk', 'trunk_link'], 5,
+                     ['primary', 'primary_link'], 4,
+                     3
+                    ]
+              ]
+            } 
+          },
+          { id: 'routes', type: 'line', source: 'routes', paint: { 'line-color': ['get', 'color'], 'line-width': 3 } },
+        ]
+      },
+      center: [37.6173, 55.7558],
+      zoom: 12,
+      hash: false,
+      attributionControl: true,
+      antialias: true,
+    });
+
+    // Agent marker + smooth animation
+    const agentEl = document.createElement('div');
+    agentEl.className = 'marker-agent';
+    const agentMarker = new maplibregl.Marker({ element: agentEl, pitchAlignment: 'map', rotationAlignment: 'map' });
+    let agentCur = null; // [lng, lat]
+    let agentTarget = null; // [lng, lat]
+    let lastFrame = 0;
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+
+    function animate(ts) {
+      requestAnimationFrame(animate);
+      if (!agentCur || !agentTarget || !map) return;
+      const dt = Math.min((ts - lastFrame) / 1000, 0.05); // cap step
+      lastFrame = ts;
+      const alpha = 0.25; // smoothing factor
+      const next = [
+        lerp(agentCur[0], agentTarget[0], alpha),
+        lerp(agentCur[1], agentTarget[1], alpha)
+      ];
+      agentCur = next;
+      agentMarker.setLngLat(next);
+      if (!agentMarker._map) agentMarker.addTo(map);
+    }
+  requestAnimationFrame(animate);
+
+  // Expose map globally for PyQt callbacks
+  window.map = map;
+  
+  // Mark map as loaded immediately - don't wait for 'load' event
+  // The 'load' event may not fire if tiles fail to load
+  mapLoaded = true;
+  console.log('Map initialized, marking as loaded');
+  
+  // Setup event listeners immediately
+  // Track last mouse position for Ctrl shortcuts
+  let lastMousePosition = null; // {lon, lat}
+  map.on('mousemove', (e) => {
+    lastMousePosition = { lon: e.lngLat.lng, lat: e.lngLat.lat };
+    window.lastMousePosition = lastMousePosition; // expose to Python
+  });
+  
+  // Basic error logging
+  map.on('error', (e) => {
+    try {
+      console.log('[MapLibre error]', e && (e.error && e.error.message ? e.error.message : JSON.stringify(e)));
+    } catch (err) {
+      // ignore
+    }
+  });
+  
+  // Optional: setup map load callback for tile loading
+  map.on('load', () => {
+    console.log('Map tiles loaded successfully');
+    
+    // Process any pending operations that happened before map was ready
+    const ops = pendingOperations.slice();
+    pendingOperations = [];
+    ops.forEach(op => {
+      switch(op.type) {
+        case 'setStart':
+          setStart(op.lngLat);
+          break;
+        case 'setEnd':
+          setEnd(op.lngLat);
+          break;
+        case 'addMarker':
+          addMarker(op.lngLat, op.color);
+          break;
+      }
+    });
+  });
+  
+  // Zoom changed - notify PyQt via QWebChannel
+  let _skip_next_zoom_update = false;
+  map.on('zoom', () => {
+    const zoom = Math.floor(map.getZoom());
+    const fromUI = !_skip_next_zoom_update;
+    _skip_next_zoom_update = false;
+    
+    if (fromUI && window.qt && window.qt.webChannelTransport) {
+      new QWebChannel(window.qt.webChannelTransport, function(channel) {
+        if (channel.objects.zoom_bridge) {
+          channel.objects.zoom_bridge.notify_zoom(zoom);
+        }
+      });
+    }
+    
+    if (window.onZoomChanged) {
+      window.onZoomChanged(zoom, fromUI);
+    }
+  });
+
+  // Right-click context menu for picking
+  map.getCanvas().addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    contextMenuPos = map.unproject([e.clientX, e.clientY]);
+    window.lastContextMenuPos = contextMenuPos;
+    console.log('Right-click at:', contextMenuPos);
+    if (window.onMapContextMenu) {
+      window.onMapContextMenu(contextMenuPos);
+    }
+  });
+  
+  // setPickMode is now a no-op; picking is via right-click context menu
+  function setPickMode(mode) {
+      console.log('setPickMode called with:', mode, '(deprecated; use context menu)');
+    }
+    function clearPicked() {
+      clearAllMarkers();
+    }
+
+    // Public API bridged from PyQt
+    window.app = {
+      setGraphGeoJSON(geojson) {
+        const src = map.getSource('graph');
+        if (src) src.setData(geojson);
+      },
+      fitToGraph() {
+        const src = map.getSource('graph');
+        if (!src) return;
+        const data = src._data || src._options?.data;
+        if (!data || !data.features || data.features.length === 0) return;
+        const coords = data.features.flatMap(f => f.geometry.coordinates);
+        if (!coords || coords.length === 0) return;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        coords.forEach(([x, y]) => {
+          if (x < minX) minX = x; if (y < minY) minY = y;
+          if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+        });
+        if (isFinite(minX)) {
+          map.fitBounds(
+            [[minX, minY], [maxX, maxY]],
+            { padding: 40, duration: 400, maxZoom: 16 }
+          );
+        }
+      },
+      setRoutes(routes) {
+        // routes: [{ id, coords: [[lon,lat], ...], color?: '#rrggbb' }]
+        const features = routes.map(r => ({
+          type: 'Feature',
+          properties: { id: r.id ?? '', color: r.color ?? '#2563eb' },
+          geometry: { type: 'LineString', coordinates: r.coords }
+        }));
+        const src = map.getSource('routes');
+        if (src) src.setData({ type: 'FeatureCollection', features });
+      },
+      updateAgent(pos) {
+        // pos: { lat, lon }
+        const lngLat = [pos.lon, pos.lat];
+        if (!agentCur) agentCur = lngLat;
+        agentTarget = lngLat;
+      },
+      fitToRoutes() {
+        const src = map.getSource('routes');
+        if (!src) return;
+        const data = src._data || src._options?.data;
+        if (!data || !data.features || data.features.length === 0) return;
+        const coords = data.features.flatMap(f => f.geometry.coordinates);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        coords.forEach(([x, y]) => {
+          if (x < minX) minX = x; if (y < minY) minY = y;
+          if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+        });
+        if (isFinite(minX)) {
+          map.fitBounds(
+            [[minX, minY], [maxX, maxY]],
+            { padding: 60, duration: 600, maxZoom: 16 }
+          );
+        }
+      },
+      addMarker(lngLat, color = '#8b5cf6') {
+        return addMarker(lngLat, color);
+      },
+      setPickMode,
+      getPickedPoints,
+      setAllPoints,
+      clearPicked,
+      setStart,
+      setEnd,
+      addVia,
+      clearVia,
+      clearAllMarkers,
+      zoomIn() {
+        if (map) map.zoomIn({ duration: 200 });  // Fast zoom animation
+      },
+      zoomOut() {
+        if (map) map.zoomOut({ duration: 200 });  // Fast zoom animation
+      },
+      setZoom(level) {
+        if (map) {
+          _skip_next_zoom_update = true;  // Mark that this zoom change came from Python
+          // Use jumpTo for instant zoom (no animation)
+          map.jumpTo({ zoom: level });
+        }
+      },
+      getZoom() {
+        if (map) return map.getZoom();
+        return null;
+      },
+    };
+  } // end of initializeMap()
+  
+  // Call initializeMap as soon as TILE_URL is available
+  // PyQt will set window.TILE_URL, then we init
+  console.log('Script started, map=' + (typeof map));
+  console.log('Checking for TILE_URL...');
+  if (window.TILE_URL) {
+    console.log('TILE_URL found immediately:', window.TILE_URL);
+    initializeMap();
+  } else {
+    // Small delay to wait for PyQt injection
+    console.log('TILE_URL not found, waiting 100ms...');
+    setTimeout(() => {
+      if (window.TILE_URL) {
+        console.log('TILE_URL found after delay:', window.TILE_URL);
+        initializeMap();
+      } else {
+        console.error('TILE_URL NOT SET! Using OSM fallback.');
+        window.TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+        initializeMap();
+      }
+    }, 100);
+  }
+  </script>
+</body>
+</html>
