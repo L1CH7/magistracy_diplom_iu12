@@ -1,6 +1,28 @@
 ---
 
 services:
+  # PostgreSQL with PostGIS for road graph storage
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: diplom-postgis
+    environment:
+      POSTGRES_DB: road_graphs
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - nav-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diplom -d road_graphs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   server:
     build:
       context: .
@@ -12,10 +34,18 @@ services:
       - "8000:8000"
     environment:
       OSM_JSON_PATH: /app/data/osm_data.json
+      POSTGRES_HOST: postgis
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: road_graphs
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
     volumes:
       - ./data:/app/data
     networks:
       - nav-net
+    depends_on:
+      postgis:
+        condition: service_healthy
     develop:
       watch:
         - action: sync
@@ -63,4 +93,6 @@ networks:
   nav-net:
     driver: bridge
 
-  
+volumes:
+  postgis_data:
+    driver: local
