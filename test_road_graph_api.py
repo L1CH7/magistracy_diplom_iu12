@@ -2,17 +2,25 @@
 """
 Test script for road graph API endpoint.
 Tests the full cycle: fetch from OSM, convert to GeoJSON, display progress.
+Uses configuration from DataConfig.
 """
 import requests
 import json
 import time
+import sys
+import os
+
+# Add src to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from client.config import DataConfig
 
 SERVER_URL = "http://localhost:8000"
 
 def test_fetch_road_graph():
     """Test /osm/fetch_road_graph endpoint with streaming."""
-    # Test bbox: Moscow district (sw=[37.5609, 55.7510], ne=[37.6016, 55.7631])
-    bbox = [37.5609, 55.7510, 37.6016, 55.7631]
+    # Use bbox from config
+    bbox = DataConfig.DEFAULT_TEST_BBOX
     
     print(f"Fetching road graph for bbox: {bbox}")
     print("=" * 60)

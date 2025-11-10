@@ -70,7 +70,8 @@ services:
       QTWEBENGINE_DISABLE_SANDBOX: "1"
       QT_DEBUG_PLUGINS: "1"
       QTWEBENGINE_CHROMIUM_FLAGS: --enable-gpu-rasterization --ignore-gpu-blocklist
-      TILE_URL: ${TILE_URL:-https://tile.openstreetmap.org/{z}/{x}/{y}.png}
+      # Use our PostGIS-caching proxy instead of direct OSM
+      TILE_URL: ${TILE_URL:-http://server:8000/tiles/osm/{z}/{x}/{y}.png}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.Xauthority:/root/.Xauthority:rw

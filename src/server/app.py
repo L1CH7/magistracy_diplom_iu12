@@ -1,20 +1,54 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import List, Dict, Any
 from itertools import cycle
 
 import networkx as nx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.data.graph_builder import build_graph_from_overpass, nearest_node
 from src.data.osm_loader import fetch_osm, save_json
 from src.routing.simple_engine import SimpleRouteEngine, Route
+from src.utils.logger import setup_logger
 
+log = setup_logger(__name__)
 
 app = FastAPI(title="Coordinator Server")
+
+
+# Logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all HTTP requests with unified format."""
+    start_time = time.time()
+    
+    response = await call_next(request)
+    
+    duration_ms = (time.time() - start_time) * 1000
+    log.info(
+        "HTTP request",
+        method=request.method,
+        path=request.url.path,
+        status=response.status_code,
+        duration_ms=f"{duration_ms:.1f}",
+    )
+    
+    return response
+
+
+# Add CORS middleware to allow browser access from client
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify actual origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class Point(BaseModel):
@@ -73,23 +107,24 @@ def _load_graph() -> nx.DiGraph:
     # Try to load OSM data
     if os.path.exists(json_path):
         try:
-            print(f"DEBUG: Loading graph from {json_path}")
+            log.info("Loading graph from cache", path=json_path)
             import json
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
             graph = build_graph_from_overpass(data)
-            print(
-                f"DEBUG: Loaded OSM graph with {graph.number_of_nodes()} "
-                f"nodes and {graph.number_of_edges()} edges"
+            log.info(
+                "OSM graph loaded",
+                nodes=graph.number_of_nodes(),
+                edges=graph.number_of_edges()
             )
             return graph
         except Exception as e:
-            print(f"WARN: Failed to load OSM graph: {e}")
-            print("DEBUG: Falling back to demo graph")
+            log.warning("Failed to load OSM graph", error=str(e))
+            log.info("Falling back to demo graph")
     
     # Demo graph fallback
-    print("DEBUG: Using demo graph (no OSM data available)")
+    log.info("Using demo graph (no OSM data)")
     demo = nx.DiGraph()
     demo.add_node(1, lat=55.75, lon=37.61)
     demo.add_node(2, lat=55.76, lon=37.62)
@@ -110,13 +145,11 @@ def startup_event() -> None:
     global G, engine
     try:
         G = _load_graph()
-        print(f"DEBUG: Graph loaded with {G.number_of_nodes()} nodes")
+        log.info("Graph loaded for routing", nodes=G.number_of_nodes())
         engine = SimpleRouteEngine(G)
-        print("DEBUG: Engine initialized successfully")
+        log.info("Route engine initialized")
     except Exception as e:
-        print(f"ERROR during startup: {e}")
-        import traceback
-        traceback.print_exc()
+        log.error("Startup failed", error=str(e), exc_info=True)
         raise
 
 
@@ -248,16 +281,34 @@ def agent_step(agent_id: int) -> AgentState:
 
 @app.get("/graph")
 def get_graph():
-    global G
-    if G is None:
-        raise HTTPException(status_code=500, detail="Graph not loaded")
-    nodes = []
-    edges = []
-    for n, d in G.nodes(data=True):
-        nodes.append({'id': n, 'lat': d['lat'], 'lon': d['lon']})
-    for u, v in G.edges():
-        edges.append({'u': u, 'v': v})
-    return {'nodes': nodes, 'edges': edges}
+    """Get full graph from PostgreSQL.
+    
+    Returns nodes and edges with all attributes.
+    For large graphs, consider using bbox-filtered query instead.
+    """
+    from src.data.postgis_manager import PostGISManager
+    
+    try:
+        db = PostGISManager()
+        nodes, edges = db.load_full_graph()
+        
+        log.info(
+            "Graph loaded from DB",
+            nodes=len(nodes),
+            edges=len(edges)
+        )
+        
+        return {
+            'nodes': nodes,
+            'edges': edges,
+            'stats': db.get_graph_stats()
+        }
+    except Exception as e:
+        log.error("Graph load failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load graph from DB: {str(e)}"
+        )
 
 
 @app.post("/nearest", response_model=Point)
@@ -325,29 +376,95 @@ async def fetch_road_graph(req: RoadGraphRequest):
     db = PostGISManager()
     
     async def generate():
-        # Try to get from PostGIS cache first
+        # LAYER 1: Try processed GeoJSON cache (fastest)
         try:
-            geojson = db.get_roads_geojson(bbox_tuple)
-            if geojson and geojson.get('features'):
-                # Cache hit!
-                print(f"DEBUG: Bbox cache HIT for {bbox_tuple}")
+            from src.utils.logger import setup_logger
+            from src.server.road_styling import filter_geojson
+            log = setup_logger(__name__)
+            
+            log.info(f"Fetching road graph for bbox={bbox_tuple}")
+            
+            # Check processed cache first
+            processed_geojson = db.get_processed_geojson(
+                bbox_tuple,
+                style_version='v1'
+            )
+            
+            if processed_geojson and processed_geojson.get('features'):
+                # Processed cache HIT - instant response!
+                feature_count = len(processed_geojson['features'])
+                log.info(
+                    f"Processed GeoJSON cache HIT: "
+                    f"bbox={bbox_tuple} features={feature_count}"
+                )
                 yield json_module.dumps({
                     'type': 'info',
-                    'message': 'Data loaded from PostGIS cache',
+                    'message': 'Loaded from processed cache (instant)',
                 }) + '\n'
                 
                 yield json_module.dumps({
                     'type': 'complete',
                     'cached': True,
-                    'geojson': geojson,
-                    'total_ways': len(geojson.get('features', [])),
+                    'processed': True,
+                    'geojson': processed_geojson,
+                    'total_ways': feature_count,
+                    'bbox': list(bbox_tuple),
                 }) + '\n'
                 return
+            
+            # LAYER 2: Try raw OSM cache (need to process)
+            geojson = db.get_roads_geojson(bbox_tuple)
+            
+            if geojson and geojson.get('features'):
+                # Raw cache HIT - need to filter + classify
+                feature_count = len(geojson['features'])
+                log.info(
+                    f"Raw OSM cache HIT: bbox={bbox_tuple} "
+                    f"features={feature_count}, will process"
+                )
+                yield json_module.dumps({
+                    'type': 'info',
+                    'message': 'Processing cached OSM data...',
+                }) + '\n'
+                
+                # Filter GeoJSON server-side (только фильтрация)
+                filtered_geojson = filter_geojson(
+                    geojson,
+                    drivable_only=True
+                )
+                
+                # Save to processed cache for next time
+                db.save_processed_geojson(
+                    bbox_tuple,
+                    filtered_geojson,
+                    style_version='v1'
+                )
+                
+                filtered_count = len(filtered_geojson['features'])
+                log.info(
+                    f"OSM data filtered: "
+                    f"{feature_count} → {filtered_count} drivable roads"
+                )
+                
+                yield json_module.dumps({
+                    'type': 'complete',
+                    'cached': True,
+                    'processed': True,
+                    'geojson': filtered_geojson,
+                    'total_ways': filtered_count,
+                    'bbox': list(bbox_tuple),
+                }) + '\n'
+                return
+            else:
+                log.info(
+                    f"OSM Cache MISS: bbox={bbox_tuple}, "
+                    f"will fetch from Overpass"
+                )
         except Exception as e:
-            print(f"WARN: PostGIS cache check failed: {e}")
+            log.error(f"PostGIS cache check FAILED: {e}")
         
-        # Cache miss - fetch from Overpass
-        print(f"DEBUG: Bbox cache MISS for {bbox_tuple}, fetching from Overpass")
+        # LAYER 3: Cache miss - fetch from Overpass
+        log.info(f"Fetching from Overpass: bbox={bbox_tuple}")
         
         bbox = (min_lat, min_lon, max_lat, max_lon)
         
@@ -368,7 +485,7 @@ async def fetch_road_graph(req: RoadGraphRequest):
             lat += tile_size_deg
         
         total_tiles = len(tiles)
-        print(f"DEBUG: Will fetch {total_tiles} tiles")
+        log.info(f"Calculated {total_tiles} tiles for Overpass fetch")
         
         # Collect all elements
         all_elements = []
@@ -376,6 +493,7 @@ async def fetch_road_graph(req: RoadGraphRequest):
         
         try:
             for i, tile_bbox in enumerate(tiles):
+                log.debug(f"Fetching tile {i+1}/{total_tiles}")
                 query = build_highway_query(tile_bbox)
                 
                 # Fetch tile (blocking, run in executor)
@@ -396,10 +514,13 @@ async def fetch_road_graph(req: RoadGraphRequest):
                         all_elements.append(elem)
                         new_count += 1
                 
-                print(
-                    f"DEBUG: Tile {i+1}/{total_tiles}: "
-                    f"{len(elements)} raw, {new_count} new, "
-                    f"{len(all_elements)} total"
+                log.debug(
+                    "Tile fetched",
+                    current=i+1,
+                    total=total_tiles,
+                    raw=len(elements),
+                    new=new_count,
+                    accumulated=len(all_elements)
                 )
                 
                 # Send progress update
@@ -469,23 +590,81 @@ async def fetch_road_graph(req: RoadGraphRequest):
                 f"from {len(all_elements)} elements"
             )
             
-            # Send final result
+            # Save to PostGIS database FIRST
+            try:
+                log.info(f"Saving {len(features)} ways to PostGIS...")
+                way_list = []
+                for feature in features:
+                    props = feature.get("properties", {})
+                    geom = feature.get("geometry", {})
+                    way_id = props.get("way_id")
+                    coords = geom.get("coordinates", [])
+                    
+                    # Extract tags (all properties except way_id)
+                    tags = {k: v for k, v in props.items() if k != "way_id"}
+                    
+                    if way_id and len(coords) >= 2:
+                        way_list.append((way_id, coords, tags))
+                
+                if way_list:
+                    db.bulk_insert_ways(way_list)
+                    log.info(
+                        f"Successfully cached {len(way_list)} ways "
+                        f"in PostGIS"
+                    )
+            except Exception as e:
+                log.error(f"Failed to save ways to PostGIS: {e}")
+            
+            # Filter GeoJSON for client (remove non-drivable roads)
+            from src.server.road_styling import filter_geojson
+            
+            filtered_geojson = filter_geojson(
+                geojson,
+                drivable_only=True
+            )
+            filtered_count = len(filtered_geojson['features'])
+            
+            log.info(
+                f"Filtered Overpass data: "
+                f"{len(features)} → {filtered_count} drivable roads"
+            )
+            
+            # Save filtered GeoJSON to cache
+            try:
+                db.save_processed_geojson(
+                    bbox_tuple,
+                    filtered_geojson,
+                    style_version='v1'
+                )
+                log.info(
+                    f"Filtered GeoJSON cached for future requests"
+                )
+            except Exception as e:
+                log.error(
+                    f"Failed to cache filtered GeoJSON: {e}"
+                )
+            
+            # Send final result (filtered version with all OSM properties)
             result = {
                 "type": "complete",
-                "geojson": geojson,
-                "total_ways": len(features),
-                "total_elements": len(all_elements)
+                "cached": False,
+                "processed": True,
+                "geojson": filtered_geojson,
+                "total_ways": filtered_count,
+                "total_elements": len(all_elements),
+                "bbox": list(bbox_tuple),
             }
             yield json_module.dumps(result) + "\n"
             
-            # Save to disk and rebuild graph
+            # Rebuild graph ONLY for cache MISS (fresh Overpass data)
+            # Graph building is expensive - skip for cached data
             global G, engine
             json_path = os.getenv("OSM_JSON_PATH", "data/osm_data.json")
             os.makedirs(os.path.dirname(json_path), exist_ok=True)
             save_json(data, json_path)
             G = build_graph_from_overpass(data)
             engine = SimpleRouteEngine(G)
-            print(f"DEBUG: Graph rebuilt with {G.number_of_nodes()} nodes")
+            log.info(f"Graph rebuilt with {G.number_of_nodes()} nodes")
             
         except Exception as e:
             print(f"ERROR: {e}")
@@ -557,7 +736,7 @@ def proxy_osm_tiles(z: int, x: int, y: int):
     tile_data = db.get_tile(z, x, y, source='osm')
     
     if tile_data:
-        print(f"DEBUG: Tile cache HIT (PostGIS) for {z}/{x}/{y}")
+        log.debug("Tile cache HIT", z=z, x=x, y=y, source="PostGIS")
         return Response(
             content=tile_data,
             media_type="image/png",
@@ -577,7 +756,7 @@ def proxy_osm_tiles(z: int, x: int, y: int):
             "User-Agent": "Diplom-MapClient/0.1 (+https://example.invalid)",
             "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         }
-        print(f"DEBUG: Fetching tile {z}/{x}/{y} from {url}")
+        log.debug("Fetching tile from OSM", z=z, x=x, y=y, url=url)
         r = _req.get(url, headers=headers, timeout=10)
         if r.status_code != 200:
             raise HTTPException(
@@ -587,7 +766,7 @@ def proxy_osm_tiles(z: int, x: int, y: int):
         
         # Save to PostGIS
         db.insert_tile(z, x, y, r.content, source='osm')
-        print(f"DEBUG: Tile cached in PostGIS for {z}/{x}/{y}")
+        log.debug("Tile cached", z=z, x=x, y=y, size=len(r.content))
         
         return Response(
             content=r.content,

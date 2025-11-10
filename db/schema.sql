@@ -148,7 +148,7 @@ BEGIN
                         'name', name,
                         'lanes', lanes,
                         'maxspeed', maxspeed
-                    ) || tags  -- Merge tags
+                    )::jsonb || tags  -- Merge tags (convert json to jsonb)
                 )
             )
             FROM osm.ways

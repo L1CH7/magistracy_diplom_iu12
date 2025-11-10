@@ -44,7 +44,7 @@ async def load_region_to_cache(
     
     # Check if already cached
     if db.is_region_cached(region_name):
-        print("region_already_cached", region=region_name)
+        log.info(f"Region ALREADY cached: {region_name}")
         yield json.dumps({
             'type': 'info',
             'message': f'Region "{region_name}" already cached',
@@ -65,18 +65,16 @@ async def load_region_to_cache(
     # Create region metadata
     region_id = db.create_region(region_name, tuple(bbox))
     
-    print(
-        "region_load_start",
-        region=region_name,
-        region_id=region_id,
-        bbox=bbox
+    log.info(
+        f"Region load START: region={region_name} id={region_id} "
+        f"bbox={bbox}"
     )
     
     # Calculate tiles
     tiles = _calculate_tiles(bbox, TILE_SIZE_DEG)
     total_tiles = len(tiles)
     
-    print("region_tiles_calculated", total=total_tiles, region=region_name)
+    log.info(f"Tiles calculated: total={total_tiles} region={region_name}")
     
     yield json.dumps({
         'type': 'start',
@@ -103,7 +101,10 @@ async def load_region_to_cache(
                 lambda q=query: fetch_overpass(q, timeout=OVERPASS_TIMEOUT_SEC)
             )
         except Exception as e:
-            print("tile_fetch_failed", tile=i+1, error=str(e))
+            log.error(
+                f"Tile fetch FAILED: tile={i+1}/{total_tiles} "
+                f"error={str(e)}"
+            )
             yield json.dumps({
                 'type': 'error',
                 'tile': i + 1,
@@ -159,12 +160,10 @@ async def load_region_to_cache(
             'percent': round((i + 1) / total_tiles * 100, 1),
         }) + '\n'
         
-        print(
-            "region_tile_processed",
-            region=region_name,
-            tile=f"{i+1}/{total_tiles}",
-            ways=len(ways_data),
-            total_ways=all_ways_count
+        log.debug(
+            f"Tile processed: region={region_name} "
+            f"tile={i+1}/{total_tiles} ways={len(ways_data)} "
+            f"total_ways={all_ways_count}"
         )
         
         # Delay to avoid rate limiting
@@ -173,11 +172,9 @@ async def load_region_to_cache(
     # Mark region as complete
     db.mark_region_complete(region_name, all_ways_count, all_elements_count)
     
-    print(
-        "region_load_complete",
-        region=region_name,
-        total_ways=all_ways_count,
-        total_elements=all_elements_count
+    log.info(
+        f"Region load COMPLETE: region={region_name} "
+        f"total_ways={all_ways_count} total_elements={all_elements_count}"
     )
     
     # Return final GeoJSON

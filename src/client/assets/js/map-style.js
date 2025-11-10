@@ -5,49 +5,84 @@
 import { MAP_CONFIG } from './map-config.js';
 
 /**
- * Build MapLibre expression for graph line colors based on highway type.
+ * Build MapLibre expression for graph line colors based on OSM highway type.
  */
 function buildGraphColorExpression() {
   const colors = MAP_CONFIG.layers.graph.colors;
   return [
     'match',
     ['get', 'highway'],
-    ['motorway', 'motorway_link'], colors.motorway,
-    ['trunk', 'trunk_link'], colors.trunk,
-    ['primary', 'primary_link'], colors.primary,
-    ['secondary', 'secondary_link'], colors.secondary,
-    ['tertiary', 'tertiary_link'], colors.tertiary,
-    ['residential', 'living_street'], colors.residential,
+    'motorway', colors.motorway,
+    'motorway_link', colors.motorway_link,
+    'trunk', colors.trunk,
+    'trunk_link', colors.trunk_link,
+    'primary', colors.primary,
+    'primary_link', colors.primary_link,
+    'secondary', colors.secondary,
+    'secondary_link', colors.secondary_link,
+    'tertiary', colors.tertiary,
+    'tertiary_link', colors.tertiary_link,
+    'residential', colors.residential,
+    'living_street', colors.living_street,
+    'unclassified', colors.unclassified,
+    'service', colors.service,
     colors.default,
   ];
 }
 
 /**
- * Build MapLibre expression for graph line width based on zoom and highway type.
+ * Build MapLibre expression for graph line width.
+ * Considers: zoom level, highway type, and lane count from OSM.
  */
 function buildGraphWidthExpression() {
-  const widthCfg = MAP_CONFIG.layers.graph.width;
+  const baseWidth = MAP_CONFIG.layers.graph.baseWidth;
+  const laneMultipliers = MAP_CONFIG.layers.graph.widthByLanes;
+
+  // Get base width by highway type
+  const baseByType = [
+    'match',
+    ['get', 'highway'],
+    'motorway', baseWidth.motorway,
+    'motorway_link', baseWidth.motorway,
+    'trunk', baseWidth.trunk,
+    'trunk_link', baseWidth.trunk,
+    'primary', baseWidth.primary,
+    'primary_link', baseWidth.primary,
+    'secondary', baseWidth.secondary,
+    'secondary_link', baseWidth.secondary,
+    'tertiary', baseWidth.tertiary,
+    'tertiary_link', baseWidth.tertiary,
+    'residential', baseWidth.residential,
+    'living_street', baseWidth.living_street,
+    'service', baseWidth.service,
+    baseWidth.default,
+  ];
+
+  // Multiply by lane count (if available)
+  const withLanes = [
+    '*',
+    baseByType,
+    [
+      'match',
+      ['to-number', ['get', 'lanes'], 1],
+      1, laneMultipliers[1],
+      2, laneMultipliers[2],
+      3, laneMultipliers[3],
+      4, laneMultipliers[4],
+      5, laneMultipliers[5],
+      6, laneMultipliers[6],
+      laneMultipliers[2], // default: 2 lanes
+    ],
+  ];
+
+  // Scale by zoom
   return [
     'interpolate',
     ['linear'],
     ['zoom'],
-    10, widthCfg.zoom10,
-    15, [
-      'match',
-      ['get', 'highway'],
-      ['motorway', 'motorway_link'], widthCfg.zoom15.motorway,
-      ['trunk', 'trunk_link'], widthCfg.zoom15.trunk,
-      ['primary', 'primary_link'], widthCfg.zoom15.primary,
-      widthCfg.zoom15.default,
-    ],
-    18, [
-      'match',
-      ['get', 'highway'],
-      ['motorway', 'motorway_link'], widthCfg.zoom18.motorway,
-      ['trunk', 'trunk_link'], widthCfg.zoom18.trunk,
-      ['primary', 'primary_link'], widthCfg.zoom18.primary,
-      widthCfg.zoom18.default,
-    ],
+    10, ['*', withLanes, 0.3],  // Thin at low zoom
+    15, withLanes,               // Base width at zoom 15
+    18, ['*', withLanes, 1.5],   // Thicker at high zoom
   ];
 }
 

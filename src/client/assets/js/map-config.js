@@ -17,37 +17,47 @@ export const MAP_CONFIG = {
       color: '#f3f4f6',
     },
 
-    // Road graph styling
+    // Road graph styling (based on OSM highway types)
     graph: {
       colors: {
-        motorway: '#1e40af',      // Dark blue
-        trunk: '#1e3a8a',         // Navy blue
-        primary: '#1d4ed8',       // Blue
-        secondary: '#2563eb',     // Medium blue
-        tertiary: '#3b82f6',      // Light blue
-        residential: '#60a5fa',   // Very light blue
-        living_street: '#60a5fa',
-        default: '#93c5fd',       // Pale blue
+        motorway: '#1e40af',       // Pink (high-priority highways)
+        motorway_link: '#1e40af',
+        trunk: '#6200ffff',          // Pale orange
+        trunk_link: '#6200ffff',
+        primary: '#9c00aaff',        // Light orange
+        primary_link: '#9c00aaff',
+        secondary: '#ff5effff',      // Yellow
+        secondary_link: '#ff5effff',
+        tertiary: '#ff2e2eff',       // White
+        tertiary_link: '#ff2e2eff',
+        residential: '#ff8635ff',    // White
+        living_street: '#ff8635ff',  // Light grey
+        unclassified: '#5c5c5cff',
+        service: '#008d0cff',        // Grey
+        default: '#353535ff',        // Dark grey
       },
 
-      // Width configuration by zoom and highway type
-      width: {
-        // Base width at zoom 10
-        zoom10: 1,
-        // Width at zoom 15 by highway type
-        zoom15: {
-          motorway: 3,
-          trunk: 2.5,
-          primary: 2,
-          default: 1.5,
-        },
-        // Width at zoom 18 by highway type
-        zoom18: {
-          motorway: 6,
-          trunk: 5,
-          primary: 4,
-          default: 3,
-        },
+      // Width multipliers based on lanes (base × multiplier)
+      widthByLanes: {
+        1: 1.0,
+        2: 1.5,
+        3: 2.0,
+        4: 2.5,
+        5: 3.0,
+        6: 3.5,
+      },
+
+      // Base width by highway type at zoom 15
+      baseWidth: {
+        motorway: 8,
+        trunk: 7,
+        primary: 6,
+        secondary: 5,
+        tertiary: 4,
+        residential: 3,
+        living_street: 2,
+        service: 2,
+        default: 2,
       },
     },
 

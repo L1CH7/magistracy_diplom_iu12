@@ -34,12 +34,12 @@ class PostGISManager:
         try:
             conn = self.get_connection()
             conn.close()
-            print(
-                f"postgis_connected host={self.conn_params['host']} "
+            log.info(
+                f"PostGIS connected: host={self.conn_params['host']}, "
                 f"db={self.conn_params['database']}"
             )
         except Exception as e:
-            print(f"postgis_connection_failed error={str(e)}")
+            log.error(f"PostGIS connection FAILED: {str(e)}")
             raise
     
     def get_connection(self):
@@ -66,17 +66,25 @@ class PostGISManager:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT tiles.get_tile(%s, %s, %s, %s)",
+                    "SELECT tiles.get_tile(%s::smallint, %s, %s, %s::varchar)",
                     (z, x, y, source)
                 )
                 result = cur.fetchone()
                 if result and result[0]:
-                    print(
-                        "tile_cache_hit",
-                        z=z, x=x, y=y, source=source
+                    log.debug(
+                        f"Tile cache HIT: z={z} x={x} y={y} "
+                        f"source={source}"
                     )
                     return bytes(result[0])
+                else:
+                    log.debug(
+                        f"Tile cache MISS: z={z} x={x} y={y} "
+                        f"source={source}"
+                    )
                 return None
+        except Exception as e:
+            log.error(f"Tile get FAILED: z={z} x={x} y={y} error={str(e)}")
+            raise
         finally:
             conn.close()
     
@@ -93,14 +101,20 @@ class PostGISManager:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT tiles.insert_tile(%s, %s, %s, %s, %s)",
+                    "SELECT tiles.insert_tile("
+                    "%s::smallint, %s, %s, %s, %s::varchar)",
                     (z, x, y, psycopg2.Binary(tile_data), source)
                 )
             conn.commit()
-            print("tile_cached", z=z, x=x, y=y, source=source)
+            log.info(
+                f"Tile CACHED: z={z} x={x} y={y} size={len(tile_data)} "
+                f"source={source}"
+            )
         except Exception as e:
             conn.rollback()
-            print("tile_cache_failed", z=z, x=x, y=y, error=str(e))
+            log.error(
+                f"Tile cache FAILED: z={z} x={x} y={y} error={str(e)}"
+            )
             raise
         finally:
             conn.close()
@@ -144,11 +158,18 @@ class PostGISManager:
                 )
                 result = cur.fetchone()
                 if result and result[0]:
-                    print("osm_geojson_fetched", bbox=bbox)
-                    return result[0]
+                    geojson = result[0]
+                    feature_count = len(geojson.get('features', []))
+                    log.info(
+                        f"OSM GeoJSON fetched from cache: "
+                        f"bbox={bbox} features={feature_count}"
+                    )
+                    return geojson
+                else:
+                    log.debug(f"OSM cache MISS for bbox={bbox}")
                 return None
         except Exception as e:
-            print("osm_geojson_failed", bbox=bbox, error=str(e))
+            log.error(f"OSM GeoJSON fetch FAILED: bbox={bbox} error={str(e)}")
             return None
         finally:
             conn.close()
@@ -173,14 +194,12 @@ class PostGISManager:
                         (osm_id, Json(coords), Json(tags), region)
                     )
             conn.commit()
-            print(
-                "osm_ways_inserted",
-                count=len(ways_data),
-                region=region
+            log.info(
+                f"OSM ways INSERTED: count={len(ways_data)} region={region}"
             )
         except Exception as e:
             conn.rollback()
-            print("osm_bulk_insert_failed", error=str(e))
+            log.error(f"OSM bulk insert FAILED: error={str(e)}")
             raise
         finally:
             conn.close()
@@ -216,11 +235,13 @@ class PostGISManager:
                 )
                 region_id = cur.fetchone()[0]
             conn.commit()
-            print("region_created", name=region_name, id=region_id)
+            log.info(f"Region CREATED: name={region_name} id={region_id}")
             return region_id
         except Exception as e:
             conn.rollback()
-            print("region_create_failed", name=region_name, error=str(e))
+            log.error(
+                f"Region create FAILED: name={region_name} error={str(e)}"
+            )
             raise
         finally:
             conn.close()
@@ -247,15 +268,15 @@ class PostGISManager:
                     (total_ways, total_elements, region_name)
                 )
             conn.commit()
-            print(
-                "region_marked_complete",
-                name=region_name,
-                ways=total_ways,
-                elements=total_elements
+            log.info(
+                f"Region marked COMPLETE: name={region_name} "
+                f"ways={total_ways} elements={total_elements}"
             )
         except Exception as e:
             conn.rollback()
-            print("region_mark_failed", name=region_name, error=str(e))
+            log.error(
+                f"Region mark FAILED: name={region_name} error={str(e)}"
+            )
             raise
         finally:
             conn.close()
@@ -278,13 +299,417 @@ class PostGISManager:
             conn.close()
     
     # ========================================================================
-    # GRAPHS SCHEMA - routing graphs (future use)
+    # GRAPHS SCHEMA - processed GeoJSON cache
     # ========================================================================
     
-    # Reserved for future graph operations
-    # def build_graph_from_region(self, region_name: str): ...
-    # def cache_route(self, from_id, to_id, edges): ...
-    # def get_cached_route(self, from_id, to_id): ...
+    def get_processed_geojson(
+        self,
+        bbox: Tuple[float, float, float, float],
+        style_version: str = 'v1'
+    ) -> Optional[Dict[str, Any]]:
+        """Get cached processed (filtered + classified) GeoJSON.
+        
+        This cache stores GeoJSON after:
+        - Filtering to drivable roads
+        - Adding classification metadata (colors, widths, etc.)
+        - Coordinate rounding
+        
+        Args:
+            bbox: (min_lon, min_lat, max_lon, max_lat)
+            style_version: Style version identifier (for cache invalidation)
+            
+        Returns:
+            Processed GeoJSON FeatureCollection or None if cache miss
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                min_lon, min_lat, max_lon, max_lat = bbox
+                cur.execute(
+                    """
+                    SELECT data FROM graphs.processed_geojson
+                    WHERE min_lon = %s AND min_lat = %s
+                      AND max_lon = %s AND max_lat = %s
+                      AND style_version = %s
+                    """,
+                    (min_lon, min_lat, max_lon, max_lat, style_version)
+                )
+                result = cur.fetchone()
+                if result and result[0]:
+                    geojson = result[0]
+                    feature_count = len(geojson.get('features', []))
+                    log.info(
+                        f"Processed GeoJSON cache HIT: "
+                        f"bbox={bbox} features={feature_count}"
+                    )
+                    return geojson
+                else:
+                    log.debug(
+                        f"Processed GeoJSON cache MISS: bbox={bbox}"
+                    )
+                return None
+        except Exception as e:
+            log.error(
+                f"Processed GeoJSON fetch FAILED: "
+                f"bbox={bbox} error={str(e)}"
+            )
+            return None
+        finally:
+            conn.close()
+    
+    def save_processed_geojson(
+        self,
+        bbox: Tuple[float, float, float, float],
+        geojson: Dict[str, Any],
+        style_version: str = 'v1'
+    ):
+        """Save processed GeoJSON to cache.
+        
+        Args:
+            bbox: (min_lon, min_lat, max_lon, max_lat)
+            geojson: Processed GeoJSON FeatureCollection
+            style_version: Style version identifier
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                min_lon, min_lat, max_lon, max_lat = bbox
+                feature_count = len(geojson.get('features', []))
+                
+                cur.execute(
+                    """
+                    INSERT INTO graphs.processed_geojson 
+                        (min_lon, min_lat, max_lon, max_lat, 
+                         style_version, data, feature_count)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (min_lon, min_lat, max_lon, max_lat, style_version)
+                    DO UPDATE SET
+                        data = EXCLUDED.data,
+                        feature_count = EXCLUDED.feature_count,
+                        updated_at = NOW()
+                    """,
+                    (min_lon, min_lat, max_lon, max_lat, 
+                     style_version, Json(geojson), feature_count)
+                )
+            conn.commit()
+            log.info(
+                f"Processed GeoJSON SAVED: "
+                f"bbox={bbox} features={feature_count}"
+            )
+        except Exception as e:
+            conn.rollback()
+            log.error(
+                f"Processed GeoJSON save FAILED: "
+                f"bbox={bbox} error={str(e)}"
+            )
+            raise
+        finally:
+            conn.close()
+    
+    # ========================================================================
+    # GRAPH OPERATIONS - nodes and edges tables
+    # ========================================================================
+    
+    def insert_nodes(self, nodes: List[Tuple[int, float, float]]):
+        """Bulk insert nodes into graph.
+        
+        Args:
+            nodes: List of (osm_node_id, lat, lon) tuples
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Use ON CONFLICT DO NOTHING для idempotency
+                node_data = [
+                    (osm_id, lat, lon, lon, lat)
+                    for osm_id, lat, lon in nodes
+                ]
+                cur.executemany(
+                    """
+                    INSERT INTO nodes (osm_node_id, lat, lon, geometry)
+                    VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326))
+                    ON CONFLICT (osm_node_id) DO NOTHING
+                    """,
+                    node_data
+                )
+            conn.commit()
+            log.info(f"Nodes INSERTED: count={len(nodes)}")
+        except Exception as e:
+            conn.rollback()
+            log.error(f"Nodes insert FAILED: error={str(e)}")
+            raise
+        finally:
+            conn.close()
+    
+    def insert_edges(self, edges: List[Dict[str, Any]]):
+        """Bulk insert edges into graph.
+        
+        Args:
+            edges: List of edge dicts with keys:
+                osm_way_id, start_node_id, end_node_id,
+                geometry_coords (list of [lon, lat]),
+                length_m, speed_limit_kmh, lanes, oneway, highway_type,
+                osm_tags (optional dict)
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                for edge in edges:
+                    # Build LineString from coordinates
+                    coords = edge['geometry_coords']
+                    linestring = 'LINESTRING(' + ','.join(
+                        f"{lon} {lat}" for lon, lat in coords
+                    ) + ')'
+                    
+                    cur.execute(
+                        """
+                        INSERT INTO edges (
+                            osm_way_id, start_node_id, end_node_id,
+                            geometry, length_m, speed_limit_kmh, lanes,
+                            oneway, highway_type, osm_tags
+                        )
+                        VALUES (
+                            %s, %s, %s,
+                            ST_GeomFromText(%s, 4326),
+                            %s, %s, %s, %s, %s, %s
+                        )
+                        ON CONFLICT (osm_way_id, start_node_id, end_node_id)
+                        DO UPDATE SET
+                            osm_tags = EXCLUDED.osm_tags,
+                            last_updated = NOW()
+                        """,
+                        (
+                            edge['osm_way_id'],
+                            edge['start_node_id'],
+                            edge['end_node_id'],
+                            linestring,
+                            edge['length_m'],
+                            edge['speed_limit_kmh'],
+                            edge['lanes'],
+                            edge['oneway'],
+                            edge['highway_type'],
+                            Json(edge.get('osm_tags', {}))
+                        )
+                    )
+            conn.commit()
+            log.info(f"Edges INSERTED: count={len(edges)}")
+        except Exception as e:
+            conn.rollback()
+            log.error(f"Edges insert FAILED: error={str(e)}")
+            raise
+        finally:
+            conn.close()
+    
+    def get_node_ids(
+        self,
+        osm_node_ids: List[int]
+    ) -> Dict[int, int]:
+        """Map OSM node IDs to internal database IDs.
+        
+        Args:
+            osm_node_ids: List of OSM node IDs
+            
+        Returns:
+            Dict mapping osm_node_id → node.id
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT osm_node_id, id
+                    FROM nodes
+                    WHERE osm_node_id = ANY(%s)
+                    """,
+                    (osm_node_ids,)
+                )
+                return dict(cur.fetchall())
+        finally:
+            conn.close()
+    
+    def load_full_graph(self) -> Tuple[List[Dict], List[Dict]]:
+        """Load entire graph from database.
+        
+        Returns:
+            (nodes, edges) where each is a list of dicts
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Load nodes
+                cur.execute(
+                    """
+                    SELECT id, osm_node_id, lat, lon
+                    FROM nodes
+                    ORDER BY id
+                    """
+                )
+                nodes = [dict(row) for row in cur.fetchall()]
+                # Load edges with all attributes
+                cur.execute(
+                    """
+                    SELECT
+                        id, osm_way_id, start_node_id, end_node_id,
+                        length_m, speed_limit_kmh, lanes, oneway,
+                        highway_type, capacity, base_travel_time_sec,
+                        current_load, effective_speed_kmh
+                    FROM edges
+                    ORDER BY id
+                    """
+                )
+                edges = [dict(row) for row in cur.fetchall()]
+                
+                log.info(
+                    f"Full graph LOADED: nodes={len(nodes)} edges={len(edges)}"
+                )
+                return nodes, edges
+        finally:
+            conn.close()
+    
+    def load_graph_by_bbox(
+        self,
+        bbox: Tuple[float, float, float, float]
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """Load graph subset intersecting with bbox.
+        
+        Args:
+            bbox: (min_lon, min_lat, max_lon, max_lat)
+            
+        Returns:
+            (nodes, edges) for visualization
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                min_lon, min_lat, max_lon, max_lat = bbox
+                # Find edges intersecting bbox
+                cur.execute(
+                    """
+                    SELECT
+                        id, osm_way_id, start_node_id, end_node_id,
+                        length_m, speed_limit_kmh, lanes, oneway,
+                        highway_type, capacity, base_travel_time_sec,
+                        current_load, effective_speed_kmh
+                    FROM edges
+                    WHERE ST_Intersects(
+                        geometry,
+                        ST_MakeEnvelope(%s, %s, %s, %s, 4326)
+                    )
+                    """,
+                    (min_lon, min_lat, max_lon, max_lat)
+                )
+                edges = [dict(row) for row in cur.fetchall()]
+                
+                # Get unique node IDs from edges
+                node_ids = set()
+                for edge in edges:
+                    node_ids.add(edge['start_node_id'])
+                    node_ids.add(edge['end_node_id'])
+                
+                # Load nodes
+                if node_ids:
+                    cur.execute(
+                        """
+                        SELECT id, osm_node_id, lat, lon
+                        FROM nodes
+                        WHERE id = ANY(%s)
+                        """,
+                        (list(node_ids),)
+                    )
+                    nodes = [dict(row) for row in cur.fetchall()]
+                else:
+                    nodes = []
+                
+                log.info(
+                    f"Graph by bbox LOADED: bbox={bbox} "
+                    f"nodes={len(nodes)} edges={len(edges)}"
+                )
+                return nodes, edges
+        finally:
+            conn.close()
+    
+    def update_edge_load(
+        self,
+        edge_id: int,
+        current_load: int,
+        effective_speed_kmh: float
+    ):
+        """Update dynamic edge attributes during simulation.
+        
+        Args:
+            edge_id: Edge database ID
+            current_load: Current number of agents on edge
+            effective_speed_kmh: Current effective speed
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE edges
+                    SET current_load = %s,
+                        effective_speed_kmh = %s,
+                        last_updated = NOW()
+                    WHERE id = %s
+                    """,
+                    (current_load, effective_speed_kmh, edge_id)
+                )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log.error(
+                f"Edge load update FAILED: edge_id={edge_id} "
+                f"error={str(e)}"
+            )
+            raise
+        finally:
+            conn.close()
+    
+    def batch_update_edge_loads(
+        self,
+        updates: List[Tuple[int, int, float]]
+    ):
+        """Batch update edge loads.
+        
+        Args:
+            updates: List of (edge_id, current_load, effective_speed_kmh)
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    UPDATE edges
+                    SET current_load = %s,
+                        effective_speed_kmh = %s,
+                        last_updated = NOW()
+                    WHERE id = %s
+                    """,
+                    [(load, speed, eid) for eid, load, speed in updates]
+                )
+            conn.commit()
+            log.debug(f"Edge loads UPDATED: count={len(updates)}")
+        except Exception as e:
+            conn.rollback()
+            log.error(f"Batch edge load update FAILED: error={str(e)}")
+            raise
+        finally:
+            conn.close()
+    
+    def get_graph_stats(self) -> Dict[str, Any]:
+        """Get graph statistics using PostgreSQL function.
+        
+        Returns:
+            Dict with total_nodes, total_edges, total_length_km, etc.
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM get_graph_stats()")
+                result = cur.fetchone()
+                return dict(result) if result else {}
+        finally:
+            conn.close()
     
     # ========================================================================
     # STATISTICS
