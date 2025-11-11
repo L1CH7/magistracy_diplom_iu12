@@ -107,6 +107,10 @@ export function createMapStyle(tileUrl) {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       },
+      'k-routes': {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      },
     },
     layers: [
       {
@@ -137,6 +141,28 @@ export function createMapStyle(tileUrl) {
         paint: {
           'line-color': ['get', 'color'],
           'line-width': MAP_CONFIG.layers.routes.width,
+        },
+      },
+      {
+        id: 'k-routes-inactive',
+        type: 'line',
+        source: 'k-routes',
+        filter: ['!=', ['get', 'route_id'], -1],  // Will be updated dynamically
+        paint: {
+          'line-color': MAP_CONFIG.layers.kRoutes.inactive.color,
+          'line-width': MAP_CONFIG.layers.kRoutes.inactive.width,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.inactive.opacity,
+        },
+      },
+      {
+        id: 'k-routes-active',
+        type: 'line',
+        source: 'k-routes',
+        filter: ['==', ['get', 'route_id'], -1],  // Will be updated dynamically
+        paint: {
+          'line-color': MAP_CONFIG.layers.kRoutes.active.color,
+          'line-width': MAP_CONFIG.layers.kRoutes.active.width,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.active.opacity,
         },
       },
     ],

@@ -13,7 +13,10 @@ from pydantic import BaseModel, Field
 
 from src.data.graph_builder import build_graph_from_overpass, nearest_node
 from src.data.osm_loader import fetch_osm, save_json
-from src.routing.simple_engine import SimpleRouteEngine, Route
+from src.routing.simple_engine import SimpleRouteEngine
+from src.routing.graph import Graph
+from src.routing.route_builder import build_routes
+from src.data.postgis_manager import PostGISManager
 from src.utils.logger import setup_logger
 
 log = setup_logger(__name__)
@@ -57,9 +60,18 @@ class Point(BaseModel):
 
 
 class RouteRequest(BaseModel):
-    start: Point
-    end: Point
-    k: int = Field(1, ge=1, le=5)
+    points: List[Point] = Field(
+        ...,
+        min_length=2,
+        description="List of points (lat, lon) where first=from, last=to"
+    )
+    k: int = Field(5, ge=1, le=10, description="Number of best routes")
+    snap_k: int = Field(
+        5,
+        ge=1,
+        le=10,
+        description="Number of nearest nodes to consider when snapping"
+    )
 
 
 class RouteResponse(BaseModel):
@@ -92,40 +104,56 @@ class OsmLoadRequest(BaseModel):
     )  # [min_lon, min_lat, max_lon, max_lat]
 
 
-G: nx.DiGraph | None = None
+G: nx.MultiDiGraph | None = None
 engine: SimpleRouteEngine | None = None
+cached_graph: 'Graph' | None = None  # Custom Graph for k-routing
 agents: Dict[int, Dict] = {}
 route_cache: Dict[str, RouteResponse] = {}
 next_agent_id = 1
 _tile_hosts = cycle(["a", "b", "c"])  # for upstream OSM subdomains
 
 
-def _load_graph() -> nx.DiGraph:
-    """Load graph from OSM data if available, otherwise use demo."""
-    json_path = os.getenv("OSM_JSON_PATH", "data/osm_data.json")
+def _load_graph() -> nx.MultiDiGraph:
+    """Load graph from PostgreSQL (preferred) or JSON fallback."""
+    # Try PostgreSQL first
+    try:
+        from src.data.postgis_manager import PostGISManager
+        from src.data.graph_builder import load_graph_from_postgis
+        
+        db = PostGISManager()
+        graph = load_graph_from_postgis(db)
+        log.info(
+            "graph_loaded_from_postgres",
+            nodes=graph.number_of_nodes(),
+            edges=graph.number_of_edges()
+        )
+        return graph
+    except Exception as e:
+        log.warning("Failed to load from PostgreSQL", error=str(e))
+        log.info("Falling back to JSON cache")
     
-    # Try to load OSM data
+    # Fallback to JSON
+    json_path = os.getenv("OSM_JSON_PATH", "data/osm_data.json")
     if os.path.exists(json_path):
         try:
-            log.info("Loading graph from cache", path=json_path)
+            log.info("Loading graph from JSON cache", path=json_path)
             import json
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
             graph = build_graph_from_overpass(data)
             log.info(
-                "OSM graph loaded",
+                "OSM graph loaded from JSON",
                 nodes=graph.number_of_nodes(),
                 edges=graph.number_of_edges()
             )
             return graph
         except Exception as e:
-            log.warning("Failed to load OSM graph", error=str(e))
-            log.info("Falling back to demo graph")
+            log.warning("Failed to load OSM graph from JSON", error=str(e))
     
     # Demo graph fallback
-    log.info("Using demo graph (no OSM data)")
-    demo = nx.DiGraph()
+    log.info("Using demo graph (no PostgreSQL or OSM data)")
+    demo = nx.MultiDiGraph()
     demo.add_node(1, lat=55.75, lon=37.61)
     demo.add_node(2, lat=55.76, lon=37.62)
     demo.add_node(3, lat=55.77, lon=37.63)
@@ -142,12 +170,19 @@ def _load_graph() -> nx.DiGraph:
 
 @app.on_event("startup")
 def startup_event() -> None:
-    global G, engine
+    global G, engine, cached_graph
     try:
         G = _load_graph()
         log.info("Graph loaded for routing", nodes=G.number_of_nodes())
         engine = SimpleRouteEngine(G)
         log.info("Route engine initialized")
+        
+        # Load custom Graph for k-routing
+        from src.data.postgis_manager import PostGISManager
+        from src.routing.graph import Graph
+        db = PostGISManager()
+        cached_graph = Graph.load_from_db(db)
+        log.info("Custom graph cached", **cached_graph.get_stats())
     except Exception as e:
         log.error("Startup failed", error=str(e), exc_info=True)
         raise
@@ -165,33 +200,90 @@ def health_check():
     }
 
 
-@app.post("/route", response_model=RouteResponse)
-def post_route(req: RouteRequest) -> RouteResponse:
-    cache_key = (
-        f"{req.start.lat:.6f},{req.start.lon:.6f}_"
-        f"{req.end.lat:.6f},{req.end.lon:.6f}_{req.k}"
+@app.post("/routes", response_model=RouteResponse)
+def post_routes(req: RouteRequest) -> RouteResponse:
+    """
+    Build K best routes through multiple points (from → via → to).
+
+    Args:
+        req: RouteRequest with points array, k, snap_k
+
+    Returns:
+        RouteResponse with routes array and selected index
+    """
+    # Generate cache key from all points
+    points_str = "_".join(
+        f"{p.lat:.6f},{p.lon:.6f}" for p in req.points
     )
+    cache_key = f"{points_str}_{req.k}_{req.snap_k}"
+
     if cache_key in route_cache:
+        log.debug("Route cache hit", cache_key=cache_key)
         return route_cache[cache_key]
-    if engine is None or G is None:
-        raise HTTPException(status_code=500, detail="Graph not loaded")
-    s = nearest_node(G, req.start.lat, req.start.lon)
-    t = nearest_node(G, req.end.lat, req.end.lon)
-    routes = []
-    for i in range(req.k):
-        # For simplicity, return the same route k times
-        route: Route = engine.get_route(s, t)
-        routes.append({
-            "nodes": route.nodes,
-            "total_distance": route.total_distance,
-            "estimated_time": route.estimated_time,
-            "positions": [
-                {"lat": G.nodes[n]["lat"], "lon": G.nodes[n]["lon"]}
-                for n in route.nodes
-            ]
+
+    log.info(
+        "Building routes",
+        num_points=len(req.points),
+        k=req.k,
+        snap_k=req.snap_k
+    )
+
+    # Use cached graph
+    global cached_graph
+    if cached_graph is None:
+        log.error("Cached graph not loaded")
+        raise HTTPException(
+            status_code=500,
+            detail="Graph not initialized"
+        )
+    graph = cached_graph
+
+    # Convert points to tuples
+    points_tuples = [(p.lat, p.lon) for p in req.points]
+
+    # Build routes
+    try:
+        routes = build_routes(
+            graph,
+            points_tuples,
+            k=req.k,
+            snap_k=req.snap_k
+        )
+    except Exception as e:
+        log.error("Failed to build routes", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to build routes: {str(e)}"
+        )
+
+    if not routes:
+        log.warning("No routes found")
+        raise HTTPException(
+            status_code=404,
+            detail="No routes found for given points"
+        )
+
+    # Convert to response format
+    routes_data = []
+    for route in routes:
+        routes_data.append({
+            "id": route.id,
+            "edges": route.edge_ids,
+            "total_distance_m": route.total_distance_m,
+            "total_time_sec": route.total_time_sec,
+            "geometry": route.geometry,  # List[(lon, lat)]
         })
-    response = RouteResponse(routes=routes)
+
+    response = RouteResponse(routes=routes_data)
     route_cache[cache_key] = response
+
+    log.info(
+        "Routes built successfully",
+        num_routes=len(routes),
+        best_time_sec=routes[0].total_time_sec,
+        best_distance_m=routes[0].total_distance_m
+    )
+
     return response
 
 
@@ -286,8 +378,6 @@ def get_graph():
     Returns nodes and edges with all attributes.
     For large graphs, consider using bbox-filtered query instead.
     """
-    from src.data.postgis_manager import PostGISManager
-    
     try:
         db = PostGISManager()
         nodes, edges = db.load_full_graph()
@@ -364,7 +454,6 @@ async def fetch_road_graph(req: RoadGraphRequest):
     
     Returns NDJSON stream with progress and final GeoJSON.
     """
-    from src.data.postgis_manager import PostGISManager
     from src.data.osm_overpass import fetch_overpass, build_highway_query
     import asyncio
     from fastapi.responses import StreamingResponse
@@ -705,7 +794,6 @@ async def cache_region(region_name: str):
 def list_regions():
     """List all configured and cached regions."""
     from configs.regions import REGIONS
-    from src.data.postgis_manager import PostGISManager
     
     db = PostGISManager()
     cached = db.list_regions()
@@ -728,8 +816,6 @@ def proxy_osm_tiles(z: int, x: int, y: int):
     
     This ensures tiles are NEVER re-downloaded.
     """
-    from src.data.postgis_manager import PostGISManager
-    
     db = PostGISManager()
     
     # Check PostGIS cache first

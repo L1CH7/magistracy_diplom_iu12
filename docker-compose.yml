@@ -41,6 +41,7 @@ services:
       POSTGRES_PASSWORD: diplom_pass
     volumes:
       - ./data:/app/data
+      - ./scripts:/app/scripts
     networks:
       - nav-net
     depends_on:

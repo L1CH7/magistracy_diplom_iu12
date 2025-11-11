@@ -552,7 +552,7 @@ class PostGISManager:
                         id, osm_way_id, start_node_id, end_node_id,
                         length_m, speed_limit_kmh, lanes, oneway,
                         highway_type, capacity, base_travel_time_sec,
-                        current_load, effective_speed_kmh
+                        bearing, current_load, effective_speed_kmh
                     FROM edges
                     ORDER BY id
                     """
@@ -708,6 +708,88 @@ class PostGISManager:
                 cur.execute("SELECT * FROM get_graph_stats()")
                 result = cur.fetchone()
                 return dict(result) if result else {}
+        finally:
+            conn.close()
+    
+    # ========================================================================
+    # TURN RESTRICTIONS
+    # ========================================================================
+    
+    def insert_turn_restrictions(
+        self,
+        restrictions: List[Dict[str, Any]]
+    ):
+        """Bulk insert turn restrictions.
+        
+        Args:
+            restrictions: List of dicts with keys:
+                osm_relation_id, restriction_type, from_way_id,
+                via_node_id, to_way_id, is_prohibitive, is_mandatory
+        """
+        if not restrictions:
+            log.info("No turn restrictions to insert")
+            return
+        
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                for r in restrictions:
+                    cur.execute(
+                        """
+                        INSERT INTO turn_restrictions (
+                            osm_relation_id, restriction_type,
+                            from_way_id, via_node_id, to_way_id,
+                            is_prohibitive, is_mandatory
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (osm_relation_id) DO NOTHING
+                        """,
+                        (
+                            r['osm_relation_id'],
+                            r['restriction_type'],
+                            r['from_way_id'],
+                            r['via_node_id'],
+                            r['to_way_id'],
+                            r['is_prohibitive'],
+                            r['is_mandatory']
+                        )
+                    )
+            conn.commit()
+            log.info(
+                "turn_restrictions_inserted",
+                count=len(restrictions)
+            )
+        except Exception as e:
+            conn.rollback()
+            log.error(
+                "turn_restrictions_insert_failed",
+                error=str(e)
+            )
+            raise
+        finally:
+            conn.close()
+    
+    def load_turn_restrictions(self) -> List[Dict[str, Any]]:
+        """Load all turn restrictions from database.
+        
+        Returns:
+            List of restriction dicts
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        osm_relation_id, restriction_type,
+                        from_way_id, via_node_id, to_way_id,
+                        is_prohibitive, is_mandatory
+                    FROM turn_restrictions
+                    ORDER BY via_node_id
+                    """
+                )
+                results = cur.fetchall()
+                return [dict(row) for row in results]
         finally:
             conn.close()
     

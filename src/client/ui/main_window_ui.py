@@ -76,6 +76,14 @@ class MainWindowUI:
         self.sidebar.get_route_btn.clicked.connect(self._on_get_route)
         self.sidebar.get_road_graph_btn.clicked.connect(self._on_get_road_graph)
         self.sidebar.quit_btn.clicked.connect(self.close)
+        
+        # Connect route panel signals
+        self.sidebar.route_panel.get_routes_clicked.connect(
+            self._on_get_k_routes
+        )
+        self.sidebar.route_panel.route_selected.connect(
+            self._on_route_selected
+        )
     
     def _setup_zoom_controls(self) -> None:
         """Setup zoom controls (slider + buttons)."""

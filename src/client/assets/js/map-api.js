@@ -10,6 +10,7 @@ export class MapAPI {
     this.pointsManager = pointsManager;
     this.agentAnimator = agentAnimator;
     this._skipNextZoomUpdate = false;
+    this._activeRouteId = null;  // Currently highlighted route
   }
 
   setGraphGeoJSON(geojson) {
@@ -159,6 +160,77 @@ export class MapAPI {
     const skip = this._skipNextZoomUpdate;
     this._skipNextZoomUpdate = false;
     return skip;
+  }
+
+  // K-routes API - display multiple alternative routes
+  displayRoutes(geojson) {
+    /**
+     * Display K alternative routes on the map.
+     * @param {Object} geojson - GeoJSON FeatureCollection with route_id properties
+     * Expected format:
+     * {
+     *   type: 'FeatureCollection',
+     *   features: [
+     *     {
+     *       type: 'Feature',
+     *       properties: { route_id: 0, distance: 1234.5, time: 567.8 },
+     *       geometry: { type: 'LineString', coordinates: [[lon, lat], ...] }
+     *     },
+     *     ...
+     *   ]
+     * }
+     */
+    const src = this.map.getSource('k-routes');
+    if (src) {
+      src.setData(geojson);
+      console.log(`Displayed ${geojson.features.length} routes on map`);
+      
+      // Reset active route when displaying new routes
+      this._activeRouteId = null;
+      this._updateKRouteFilters();
+    } else {
+      console.error('k-routes source not found');
+    }
+  }
+
+  highlightRoute(routeId) {
+    /**
+     * Highlight a specific route by route_id.
+     * @param {number} routeId - The route_id to highlight
+     */
+    this._activeRouteId = routeId;
+    this._updateKRouteFilters();
+    console.log(`Highlighted route ${routeId}`);
+  }
+
+  _updateKRouteFilters() {
+    /**
+     * Update MapLibre layer filters to show active/inactive routes.
+     * Active route (highlighted) uses 'k-routes-active' layer (green, thick).
+     * Inactive routes use 'k-routes-inactive' layer (gray, thin).
+     */
+    if (this._activeRouteId !== null) {
+      // Show active route in green layer
+      this.map.setFilter('k-routes-active', ['==', ['get', 'route_id'], this._activeRouteId]);
+      // Show other routes in gray layer
+      this.map.setFilter('k-routes-inactive', ['!=', ['get', 'route_id'], this._activeRouteId]);
+    } else {
+      // No active route - show all routes as inactive
+      this.map.setFilter('k-routes-active', ['==', ['get', 'route_id'], -1]);
+      this.map.setFilter('k-routes-inactive', ['!=', ['get', 'route_id'], -1]);
+    }
+  }
+
+  clearKRoutes() {
+    /**
+     * Clear all K routes from the map.
+     */
+    const src = this.map.getSource('k-routes');
+    if (src) {
+      src.setData({ type: 'FeatureCollection', features: [] });
+      this._activeRouteId = null;
+      console.log('Cleared K routes');
+    }
   }
 
   // Deprecated/stub methods for compatibility

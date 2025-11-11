@@ -40,6 +40,33 @@
 
 ---
 
+### RD-3: K Routes Implementation (2025-11-11)
+**File**: [k_routes_complete_2025_11_11.md](k_routes_complete_2025_11_11.md)  
+**Status**: ✅ Completed  
+**Summary**: Complete K alternative routes implementation with OSRM profiles and turn penalties:
+- OSRM car profile with Russian maxspeed (ru:urban=60, tolerance=0.2)
+- OSM way processing with bearing calculation for turn penalties
+- Turn restrictions from OSM relations (118 loaded)
+- A* pathfinding with (node, prev_edge) state for turn costs
+- PostgreSQL integration with custom Graph class
+- Client UI handlers and MapLibre visualization layers
+
+**Key Achievements**:
+- API returns K routes: 3 routes with different paths (50-54 edges, 2.3km)
+- Turn penalties: 0-30°: 0s, 60-120°: 7.5s, U-turn: 20s
+- Graph: 12669 nodes, 13154 edges, 118 turn restrictions
+- Routing performance: ~70ms for 2.3km with K=3
+- Tests: 12/12 OSRM profile tests passing
+
+**Problems Solved**:
+1. Bearing None in turn penalty calculation → Added None check
+2. Generated column insert error → Removed bearing from INSERT
+3. Graph loading confusion (NetworkX vs custom) → Cached custom Graph
+4. Coordinates outside bbox → Documented Arbat bbox limits
+5. Client method error → Fixed get_all_points() → get_raw_points()
+
+---
+
 ## Supporting Documentation
 
 ### Architecture

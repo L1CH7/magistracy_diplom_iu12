@@ -1,6 +1,6 @@
 # Makefile для управления проектом через make
 
-.PHONY: xhost build build-% up down logs
+.PHONY: xhost build build-% up up-% down logs
 
 xhost:
 	xhost +local:docker
@@ -15,6 +15,9 @@ build-%:
 # Start services
 up: xhost
 	docker compose up -d
+
+up-%: xhost
+	docker compose up -d $*
 
 down:
 	docker compose down

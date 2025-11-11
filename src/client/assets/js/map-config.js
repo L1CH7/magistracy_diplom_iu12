@@ -66,6 +66,20 @@ export const MAP_CONFIG = {
       defaultColor: '#2563eb',
       width: 3,
     },
+
+    // K-routes styling (multiple alternative routes)
+    kRoutes: {
+      inactive: {
+        color: '#94a3b8',      // Gray for inactive routes
+        width: 3,
+        opacity: 0.6,
+      },
+      active: {
+        color: '#22c55e',      // Green for selected route
+        width: 5,
+        opacity: 1.0,
+      },
+    },
   },
 
   // Marker styles

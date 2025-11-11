@@ -1,13 +1,15 @@
 """Graph building utilities from OSM Overpass data with PostgreSQL persistence.
 
 This module builds graphs from OSM data and saves them to PostgreSQL.
-For R&D-1 simplification: one OSM way = one edge (no splitting by segments).
+Uses OSMWayProcessor for OSRM-style way processing with turn penalties.
 """
 
 from typing import Dict, Any, List, Tuple
 import math
 import networkx as nx
 from src.data.postgis_manager import PostGISManager
+from src.data.osm_way_processor import OSMWayProcessor, ProcessedSegment
+from src.data.osrm_profile import get_car_profile
 from src.utils.logger import setup_logger
 
 log = setup_logger(__name__)
@@ -131,102 +133,44 @@ def extract_nodes_from_overpass(
     return nodes
 
 
-def way_to_edge(
-    way: Dict[str, Any],
-    nodes_dict: Dict[int, Dict[str, float]]
+def segments_to_edge_dicts(
+    segments: List[ProcessedSegment],
+    way_id: int
 ) -> List[Dict[str, Any]]:
-    """Convert OSM way to edges.
-    
-    R&D-1 SIMPLIFICATION: One way = one edge (no splitting by segments).
+    """Convert ProcessedSegments to edge dicts for PostgreSQL.
     
     Args:
-        way: OSM way dict with 'nodes', 'tags', etc.
-        nodes_dict: Dict mapping osm_node_id → {"lat": ..., "lon": ...}
+        segments: List of ProcessedSegment from OSMWayProcessor
+        way_id: OSM way ID
         
     Returns:
-        List of edge dicts (1 or 2 edges if bidirectional)
+        List of edge dicts ready for database insertion
     """
-    tags = way.get("tags", {})
+    edge_dicts = []
     
-    # Filter: only highway roads
-    if "highway" not in tags:
-        return []
+    for seg in segments:
+        # Build geometry (simple 2-point line for now)
+        geometry_coords = [
+            [seg.source_lon, seg.source_lat],
+            [seg.target_lon, seg.target_lat]
+        ]
+        
+        edge_dict = {
+            "osm_way_id": way_id,
+            "start_node_osm_id": seg.source_node,
+            "end_node_osm_id": seg.target_node,
+            "geometry_coords": geometry_coords,
+            "length_m": seg.distance_m,
+            "speed_limit_kmh": seg.speed_kmh,
+            "lanes": seg.lanes,
+            "oneway": seg.oneway,
+            "highway_type": seg.highway_type,
+            "bearing": seg.bearing,
+            "osm_tags": seg.tags,
+        }
+        edge_dicts.append(edge_dict)
     
-    highway_type = tags["highway"]
-    
-    # Skip non-drivable roads
-    non_drivable = {
-        "footway", "path", "steps", "pedestrian", "cycleway",
-        "bridleway", "corridor", "construction"
-    }
-    if highway_type in non_drivable:
-        return []
-    
-    # Parse attributes
-    oneway = tags.get("oneway") in ("yes", "true", "1")
-    lanes_str = str(tags.get("lanes", "1"))
-    lanes = int(lanes_str) if lanes_str.isdigit() else 1
-    max_speed = parse_speed(tags.get("maxspeed"))
-    speed_limit_kmh = max_speed * 3.6  # m/s → km/h
-    
-    # Get node sequence
-    node_ids = way.get("nodes", [])
-    if len(node_ids) < 2:
-        return []
-    
-    # Get coordinates
-    geometry_coords = []
-    for nid in node_ids:
-        if nid in nodes_dict:
-            node_data = nodes_dict[nid]
-            geometry_coords.append([node_data["lon"], node_data["lat"]])
-        else:
-            # Node not in dict (shouldn't happen with Overpass 'out geom')
-            log.warning(
-                f"Node {nid} not found in nodes_dict "
-                f"for way {way['id']}"
-            )
-            return []
-    
-    # Calculate total length
-    total_length = 0.0
-    for i in range(len(geometry_coords) - 1):
-        lon1, lat1 = geometry_coords[i]
-        lon2, lat2 = geometry_coords[i + 1]
-        total_length += haversine(lat1, lon1, lat2, lon2)
-    
-    if total_length < 1.0:  # Skip very short edges (< 1m)
-        return []
-    
-    # Build edge dict
-    osm_way_id = way["id"]
-    start_node_osm_id = node_ids[0]
-    end_node_osm_id = node_ids[-1]
-    
-    edge = {
-        "osm_way_id": osm_way_id,
-        "start_node_osm_id": start_node_osm_id,
-        "end_node_osm_id": end_node_osm_id,
-        "geometry_coords": geometry_coords,
-        "length_m": total_length,
-        "speed_limit_kmh": speed_limit_kmh,
-        "lanes": lanes,
-        "oneway": oneway,
-        "highway_type": highway_type,
-        "osm_tags": tags,
-    }
-    
-    edges = [edge]
-    
-    # Add reverse edge if not oneway
-    if not oneway:
-        reverse_edge = edge.copy()
-        reverse_edge["start_node_osm_id"] = end_node_osm_id
-        reverse_edge["end_node_osm_id"] = start_node_osm_id
-        reverse_edge["geometry_coords"] = list(reversed(geometry_coords))
-        edges.append(reverse_edge)
-    
-    return edges
+    return edge_dicts
 
 
 def save_graph_to_postgres(
@@ -258,14 +202,34 @@ def save_graph_to_postgres(
     node_id_map = db.get_node_ids(osm_node_ids)
     log.info(f"Mapped {len(node_id_map)} node IDs")
     
-    # Step 5: Convert ways to edges
+    # Step 5: Convert ways to edges using OSMWayProcessor
     edges = []
     elements = overpass_data.get("elements", [])
     ways = [el for el in elements if el.get("type") == "way"]
-    log.info(f"Converting {len(ways)} ways to edges...")
+    log.info(f"Converting {len(ways)} ways to edges with OSRM profile...")
     
+    # Initialize processor with OSRM profile
+    profile = get_car_profile()
+    processor = OSMWayProcessor(profile)
+    
+    # Build nodes_coords for processor: {osm_id: (lat, lon)}
+    nodes_coords = {
+        osm_id: (data["lat"], data["lon"])
+        for osm_id, data in nodes_dict.items()
+    }
+    
+    processed_count = 0
     for way in ways:
-        way_edges = way_to_edge(way, nodes_dict)
+        # Process way with OSRM-style logic
+        segments = processor.process_way(way, nodes_coords)
+        
+        if not segments:
+            continue
+        
+        # Convert segments to edge dicts
+        way_edges = segments_to_edge_dicts(segments, way["id"])
+        processed_count += len(way_edges)
+        
         for edge in way_edges:
             # Map OSM node IDs to internal IDs
             start_osm_id = edge.pop("start_node_osm_id")
@@ -285,14 +249,109 @@ def save_graph_to_postgres(
             edges.append(edge)
     
     # Step 6: Insert edges to PostgreSQL
-    log.info(f"Inserting {len(edges)} edges to PostgreSQL...")
+    log.info(
+        f"Inserting {len(edges)} edges to PostgreSQL "
+        f"(processed {processed_count} segments from {len(ways)} ways)..."
+    )
     db.insert_edges(edges)
     
-    # Step 7: Get statistics
+    # Step 7: Load turn restrictions from OSM relations
+    relations = [el for el in elements if el.get("type") == "relation"]
+    restriction_relations = [
+        r for r in relations
+        if r.get("tags", {}).get("type") == "restriction"
+    ]
+    
+    if restriction_relations:
+        log.info(
+            f"Loading {len(restriction_relations)} turn restrictions..."
+        )
+        
+        from src.data.turn_restrictions import TurnRestrictionManager
+        restrictions_mgr = TurnRestrictionManager()
+        restrictions_mgr.load_from_osm_relations(restriction_relations)
+        
+        # Convert to DB format
+        restriction_dicts = []
+        for r in restrictions_mgr.restrictions:
+            restriction_dicts.append({
+                'osm_relation_id': r.relation_id,
+                'restriction_type': r.restriction_type,
+                'from_way_id': r.from_way,
+                'via_node_id': r.via_node,
+                'to_way_id': r.to_way,
+                'is_prohibitive': r.is_prohibitive,
+                'is_mandatory': r.is_mandatory
+            })
+        
+        db.insert_turn_restrictions(restriction_dicts)
+    else:
+        log.info("No turn restrictions found in OSM data")
+    
+    # Step 8: Get statistics
     stats = db.get_graph_stats()
-    log.info(
-        f"Graph build COMPLETE: "
-        f"nodes={stats.get('total_nodes', 0)} "
-        f"edges={stats.get('total_edges', 0)} "
-        f"length={stats.get('total_length_km', 0):.2f} km"
+    restr_count = (
+        len(restriction_dicts) if restriction_relations else 0
     )
+    log.info(
+        "graph_build_complete",
+        nodes=stats.get('total_nodes', 0),
+        edges=stats.get('total_edges', 0),
+        length_km=round(stats.get('total_length_km', 0), 2),
+        avg_edge_length_m=round(stats.get('avg_edge_length_m', 0), 1),
+        turn_restrictions=restr_count,
+        profile_used="car"
+    )
+
+
+def load_graph_from_postgis(db: PostGISManager) -> nx.MultiDiGraph:
+    """Load graph from PostgreSQL and convert to NetworkX.
+    
+    Args:
+        db: PostGISManager instance
+        
+    Returns:
+        NetworkX MultiDiGraph with node and edge attributes
+    """
+    log.info("Loading graph from PostgreSQL...")
+    
+    # Load nodes and edges from DB
+    nodes, edges = db.load_full_graph()
+    
+    # Build NetworkX MultiDiGraph to support multiple edges
+    graph = nx.MultiDiGraph()
+    
+    # Add nodes
+    for node in nodes:
+        graph.add_node(
+            node['id'],
+            osm_node_id=node['osm_node_id'],
+            lat=node['lat'],
+            lon=node['lon']
+        )
+    
+    # Add edges
+    for edge in edges:
+        graph.add_edge(
+            edge['start_node_id'],
+            edge['end_node_id'],
+            edge_id=edge['id'],
+            osm_way_id=edge['osm_way_id'],
+            length_m=edge['length_m'],
+            speed_limit_kmh=edge['speed_limit_kmh'],
+            lanes=edge['lanes'],
+            oneway=edge.get('oneway', False),
+            highway_type=edge['highway_type'],
+            capacity=edge['capacity'],
+            base_travel_time_sec=edge['base_travel_time_sec'],
+            bearing=edge.get('bearing'),
+            time_s=edge['base_travel_time_sec']  # For compatibility
+        )
+    
+    log.info(
+        "graph_loaded_from_postgis",
+        nodes=graph.number_of_nodes(),
+        edges=graph.number_of_edges()
+    )
+    
+    return graph

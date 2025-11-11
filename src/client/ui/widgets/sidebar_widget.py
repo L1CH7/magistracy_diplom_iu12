@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (
 )
 from .collapsible import CollapsibleSection
 from .selected_points_widget import SelectedPointsWidget
+from .route_panel import RoutePanel
 
 class SidebarWidget(QFrame):
     def __init__(self, parent=None):
@@ -82,6 +83,10 @@ class SidebarWidget(QFrame):
         self.restart_btn.setStyleSheet("QPushButton { background-color: #f59e0b; color: white; border: none; border-radius: 6px; padding: 8px; font-weight: bold; } QPushButton:hover { background-color: #d97706; } QPushButton:disabled { background-color: #d1d5db; }")
         btn_layout.addWidget(self.restart_btn)
         sidebar_layout.addLayout(btn_layout)
+
+        # Route panel for K routes display
+        self.route_panel = RoutePanel()
+        sidebar_layout.addWidget(self.route_panel)
 
         bounds_layout = QVBoxLayout()
         bounds_layout.addWidget(QLabel("Map bounds:"))

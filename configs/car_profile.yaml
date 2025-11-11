@@ -1,0 +1,258 @@
+# OSRM Car Profile Configuration
+# Based on https://github.com/Project-OSRM/osrm-backend/blob/master/profiles/car.lua
+
+# Profile metadata
+profile:
+  name: "car"
+  version: "1.0"
+  api_version: 4
+
+# Vehicle properties
+vehicle:
+  height: 2.0  # meters (slightly above biggest SUVs)
+  width: 1.9   # meters
+  length: 4.8  # meters (large/family car)
+  weight: 2000 # kilograms
+
+# Penalties (seconds)
+penalties:
+  turn_penalty: 7.5          # Normal turn (60-120°)
+  u_turn_penalty: 20.0       # U-turn (150-180°)
+  traffic_light_penalty: 2.0 # Traffic light delay
+
+# Speed tolerance (percentage over limit without penalty)
+# OSRM allows slight overspeeding in reality
+speed_tolerance: 0.2  # 20% over profile speed is allowed
+
+# Default speeds by highway type (km/h)
+# Source: OSRM profiles/car.lua speeds.highway
+highway_speeds:
+  motorway: 90
+  motorway_link: 45
+  trunk: 85
+  trunk_link: 40
+  primary: 65
+  primary_link: 30
+  secondary: 55
+  secondary_link: 25
+  tertiary: 40
+  tertiary_link: 20
+  unclassified: 25
+  residential: 25
+  living_street: 10
+  service: 15
+
+# Service road penalties (multipliers)
+# Source: OSRM profiles/car.lua service_penalties
+service_penalties:
+  alley: 0.5
+  parking: 0.5
+  parking_aisle: 0.5
+  driveway: 0.5
+  drive-through: 0.5
+  drive-thru: 0.5
+
+# Country-specific maxspeed defaults
+# Source: OSRM profiles/car.lua maxspeed_table_default
+maxspeed_defaults:
+  urban: 50
+  rural: 90
+  trunk: 110
+  motorway: 130
+
+# Country-specific maxspeed exceptions
+# Source: OSRM profiles/car.lua maxspeed_table
+# Format: "country:type" -> speed in km/h
+maxspeed_table:
+  # Austria
+  "at:rural": 100
+  "at:trunk": 100
+  
+  # Belgium
+  "be:motorway": 120
+  "be-bru:rural": 70
+  "be-bru:urban": 30
+  "be-vlg:rural": 70
+  
+  # Bulgaria
+  "bg:motorway": 140
+  
+  # Belarus
+  "by:urban": 60
+  "by:motorway": 110
+  
+  # Canada
+  "ca-on:rural": 80
+  
+  # Switzerland
+  "ch:rural": 80
+  "ch:trunk": 100
+  "ch:motorway": 120
+  
+  # Czech Republic
+  "cz:trunk": 0  # No default limit
+  "cz:motorway": 0
+  
+  # Germany
+  "de:living_street": 7
+  "de:rural": 100
+  "de:motorway": 0  # No default limit (Autobahn)
+  
+  # Denmark
+  "dk:rural": 80
+  
+  # Spain
+  "es:trunk": 90
+  
+  # France
+  "fr:rural": 80
+  
+  # Great Britain (UK)
+  "gb:nsl_single": 96.56  # 60 mph
+  "gb:nsl_dual": 112.65   # 70 mph
+  "gb:motorway": 112.65   # 70 mph
+  
+  # Netherlands
+  "nl:rural": 80
+  "nl:trunk": 100
+  
+  # Norway
+  "no:rural": 80
+  "no:motorway": 110
+  
+  # Philippines
+  "ph:urban": 40
+  "ph:rural": 80
+  "ph:motorway": 100
+  
+  # Poland
+  "pl:rural": 100
+  "pl:expressway": 120
+  "pl:motorway": 140
+  
+  # Romania
+  "ro:trunk": 100
+  
+  # Russia (important for our project!)
+  "ru:living_street": 20
+  "ru:urban": 60
+  "ru:motorway": 110
+  
+  # United Kingdom
+  "uk:nsl_single": 96.56  # 60 mph
+  "uk:nsl_dual": 112.65   # 70 mph
+  "uk:motorway": 112.65   # 70 mph
+  
+  # South Africa
+  "za:urban": 60
+  "za:rural": 100
+  
+  # Special
+  "none": 140
+
+# Surface speed limits (km/h)
+# Source: OSRM profiles/car.lua surface_speeds
+# null means no limit
+surface_speeds:
+  asphalt: null
+  concrete: null
+  "concrete:plates": null
+  "concrete:lanes": null
+  paved: null
+  
+  cement: 80
+  compacted: 80
+  fine_gravel: 80
+  
+  paving_stones: 60
+  metal: 60
+  bricks: 60
+  
+  grass: 40
+  wood: 40
+  sett: 40
+  grass_paver: 40
+  gravel: 40
+  unpaved: 40
+  ground: 40
+  dirt: 40
+  pebblestone: 40
+  tartan: 40
+  
+  cobblestone: 30
+  clay: 30
+  
+  earth: 20
+  stone: 20
+  rocky: 20
+  sand: 20
+  
+  mud: 10
+
+# Tracktype speed limits (km/h)
+# Source: OSRM profiles/car.lua tracktype_speeds
+tracktype_speeds:
+  grade1: 60
+  grade2: 40
+  grade3: 30
+  grade4: 25
+  grade5: 20
+
+# Smoothness speed limits (km/h)
+# Source: OSRM profiles/car.lua smoothness_speeds
+smoothness_speeds:
+  intermediate: 80
+  bad: 40
+  very_bad: 20
+  horrible: 10
+  very_horrible: 5
+  impassable: 0
+
+# Highway tags to avoid
+avoid_tags:
+  - area
+  - reversible
+  - impassable
+  - hov_lanes
+  - steps
+  - construction
+  - proposed
+  - abandoned
+  - platform
+  - raceway
+  - razed
+
+# Access tags that block routing
+access_blacklist:
+  - "no"
+  - agricultural
+  - forestry
+  - emergency
+  - psv
+  - customers
+  - private
+  - delivery
+  - destination
+
+# Access tags that allow routing
+access_whitelist:
+  - "yes"
+  - motorcar
+  - motor_vehicle
+  - vehicle
+  - permissive
+  - designated
+  - hov
+
+# Barrier types that allow passage
+barrier_whitelist:
+  - cattle_grid
+  - border_control
+  - toll_booth
+  - sally_port
+  - gate
+  - lift_gate
+  - "no"
+  - entrance
+  - height_restrictor
+  - arch

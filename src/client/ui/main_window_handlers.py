@@ -417,3 +417,142 @@ class MainWindowHandlers:
                 log.debug("map_bounds_updated", sw=sw, ne=ne)
         
         self.map_widget.page().runJavaScript(js, callback)
+    
+    def _on_get_k_routes(self, k: int) -> None:
+        """Handle Get K Routes button click.
+        
+        Args:
+            k: Number of routes to request
+        """
+        log.info("get_k_routes_requested", k=k)
+        
+        # Get points from presenter
+        points = self.points_presenter.get_raw_points()
+        
+        if not points:
+            log.warning("no_points_set")
+            return
+        
+        # Convert to API format
+        points_list = []
+        for point in points:
+            points_list.append({
+                "lat": point["lat"],
+                "lon": point["lon"]
+            })
+        
+        log.info(
+            "requesting_routes",
+            num_points=len(points_list),
+            k=k
+        )
+        
+        # Call API (TODO: use api_client)
+        import requests
+        try:
+            response = requests.post(
+                f"{self.server_url}/routes",
+                json={
+                    "points": points_list,
+                    "k": k,
+                    "snap_k": 5
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            routes = data.get("routes", [])
+            log.info("routes_received", count=len(routes))
+            
+            # Display in route panel
+            self.sidebar.route_panel.display_routes(routes)
+            
+            # Display all routes on map
+            self._display_routes_on_map(routes)
+            
+        except Exception as e:
+            log.error("get_routes_failed", error=str(e), exc_info=True)
+    
+    def _on_route_selected(self, route_id: int) -> None:
+        """Handle route selection in panel.
+        
+        Args:
+            route_id: Selected route ID
+        """
+        log.info("route_selected", route_id=route_id)
+        
+        # Get route data from panel
+        routes = self.sidebar.route_panel.routes_data
+        if route_id >= len(routes):
+            log.warning("invalid_route_id", route_id=route_id)
+            return
+        
+        selected_route = routes[route_id]
+        
+        # Highlight selected route on map
+        self._highlight_route_on_map(selected_route)
+    
+    def _display_routes_on_map(self, routes: list) -> None:
+        """Display all K routes on map (inactive state).
+        
+        Args:
+            routes: List of route dicts with geometry
+        """
+        if not routes:
+            return
+        
+        # Build GeoJSON FeatureCollection
+        features = []
+        for route in routes:
+            geometry_coords = route.get("geometry", [])
+            if not geometry_coords:
+                continue
+            
+            feature = {
+                "type": "Feature",
+                "properties": {
+                    "route_id": route["id"],
+                    "distance_m": route["total_distance_m"],
+                    "time_sec": route["total_time_sec"]
+                },
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": geometry_coords
+                }
+            }
+            features.append(feature)
+        
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        
+        # Send to map
+        import json
+        geojson_str = json.dumps(geojson)
+        js = f"""
+        if (window.app && window.app.displayRoutes) {{
+            window.app.displayRoutes({geojson_str});
+        }}
+        """
+        self.map_widget.page().runJavaScript(js)
+        
+        log.debug("routes_displayed_on_map", count=len(routes))
+    
+    def _highlight_route_on_map(self, route: dict) -> None:
+        """Highlight selected route on map.
+        
+        Args:
+            route: Route dict with geometry
+        """
+        route_id = route["id"]
+        
+        js = f"""
+        if (window.app && window.app.highlightRoute) {{
+            window.app.highlightRoute({route_id});
+        }}
+        """
+        self.map_widget.page().runJavaScript(js)
+        
+        log.debug("route_highlighted", route_id=route_id)
