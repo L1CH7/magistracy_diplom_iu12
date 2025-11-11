@@ -13,8 +13,12 @@ class DataConfig:
     # Moscow city center
     TEST_BBOX_MOSCOW_CENTER = [37.612, 55.752, 37.622, 55.758]
     
+    # bbox в пределах МКАД +5км
+    TEST_BBOX_MOSCOW = [37.32, 55.49, 37.90, 55.93]
+
     # Default test bbox (used by "Get Graph Data" button)
-    DEFAULT_TEST_BBOX = TEST_BBOX_MOSCOW_SMALL
+    DEFAULT_TEST_BBOX = TEST_BBOX_MOSCOW
+    # DEFAULT_TEST_BBOX = TEST_BBOX_MOSCOW_SMALL
     
     # API timeouts (seconds)
     API_TIMEOUT_DEFAULT = 30

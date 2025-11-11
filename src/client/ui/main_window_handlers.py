@@ -441,11 +441,6 @@ class MainWindowHandlers:
             if result:
                 sw = result['sw']
                 ne = result['ne']
-                bounds_text = (
-                    f"SW: {sw['lng']:.4f}, {sw['lat']:.4f}\n"
-                    f"NE: {ne['lng']:.4f}, {ne['lat']:.4f}"
-                )
-                self.sidebar.bounds_label.setText(bounds_text)
                 log.debug("map_bounds_updated", sw=sw, ne=ne)
         
         self.map_widget.page().runJavaScript(js, callback)
@@ -541,6 +536,11 @@ class MainWindowHandlers:
         """
         log.info("route_selected", route_id=route_id)
         
+        # Update agent route if agent is running
+        if self.sim_agent_id is not None:
+            log.info("route_changed_update_agent_route")
+            self._update_agent_route(route_id)
+        
         # Get route data from panel
         routes = self.sidebar.route_panel.routes_data
         if route_id >= len(routes):
@@ -553,8 +553,23 @@ class MainWindowHandlers:
         self._highlight_route_on_map(selected_route)
     
     def _on_points_changed(self) -> None:
-        """Handle points changed (added/removed) - clear routes."""
-        log.info("points_changed_clear_routes")
+        """Handle points changed (added/removed) - clear routes and stop agent."""
+        log.info("points_changed_clear_routes_stop_agent")
+        
+        # Stop and delete agent if running
+        if self.sim_agent_id is not None:
+            self._on_delete_agent()
+        
+        # Clear route cache on server (new points = new routes)
+        import requests
+        try:
+            requests.post(
+                f"{self.server_url}/routes/clear_cache",
+                timeout=5
+            )
+            log.info("route_cache_cleared_on_server")
+        except Exception as e:
+            log.warning("clear_cache_failed", error=str(e))
         
         # Clear routes from panel
         self.sidebar.route_panel.clear_routes()
@@ -626,3 +641,319 @@ class MainWindowHandlers:
         self.map_widget.page().runJavaScript(js)
         
         log.debug("route_highlighted", route_id=route_id)
+    
+    # ========================================================================
+    # Simulation Handlers
+    # ========================================================================
+    
+    def _on_start_agent(self) -> None:
+        """Handle Start Agent button click."""
+        from PyQt5.QtWidgets import QMessageBox
+        log.info("start_agent_clicked")
+        
+        # Get selected route from route panel
+        routes = self.sidebar.route_panel.routes_data
+        if not routes:
+            log.warning("no_routes_available")
+            QMessageBox.warning(
+                self,
+                "No Routes",
+                "Please select routes first using 'Get Routes' button"
+            )
+            return
+        
+        # Use selected route (or first if none selected)
+        selected_id = self.sidebar.route_panel.selected_route_id
+        if selected_id is None or selected_id >= len(routes):
+            selected_id = 0
+        
+        route = routes[selected_id]
+        route_id = route['id']
+        
+        # Get simulation speed from panel
+        sim_speed = self.sidebar.simulation_panel.sim_speed_spinbox.value()
+        
+        # Call API to start agent
+        import requests
+        try:
+            response = requests.post(
+                f"{self.server_url}/sim/agent/start",
+                json={
+                    "route_id": route_id,
+                    "sim_speed": sim_speed
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            self.sim_agent_id = data['agent_id']
+            
+            # Update UI
+            self.sidebar.simulation_panel.set_agent_active(True)
+            self.sidebar.simulation_panel.update_agent_status(
+                speed_kmh=data['speed_kmh'],
+                eta_seconds=data['eta_seconds'],
+                state=data['state']
+            )
+            
+            # Start animation timer
+            self._start_simulation_timer()
+            
+            log.info("agent_started", agent_id=self.sim_agent_id)
+            
+        except Exception as e:
+            log.error("start_agent_failed", error=str(e))
+            self.sidebar.simulation_panel.status_label.setText(
+                f"Error starting agent: {str(e)}"
+            )
+    
+    def _on_stop_agent(self) -> None:
+        """Handle Stop Agent button click."""
+        log.info("stop_agent_clicked")
+        
+        if self.sim_agent_id is None:
+            return
+        
+        import requests
+        try:
+            response = requests.post(
+                f"{self.server_url}/sim/agent/{self.sim_agent_id}/stop",
+                timeout=5
+            )
+            response.raise_for_status()
+            
+            # Stop timer
+            self._stop_simulation_timer()
+            
+            # Update UI
+            self.sidebar.simulation_panel.update_agent_status(
+                speed_kmh=0.0,
+                eta_seconds=0.0,
+                state="Stopped"
+            )
+            
+            log.info("agent_stopped", agent_id=self.sim_agent_id)
+            
+        except Exception as e:
+            log.error("stop_agent_failed", error=str(e))
+    
+    def _on_restart_agent(self) -> None:
+        """Handle Restart Agent button click."""
+        log.info("restart_agent_clicked")
+        
+        if self.sim_agent_id is None:
+            return
+        
+        import requests
+        try:
+            response = requests.post(
+                f"{self.server_url}/sim/agent/{self.sim_agent_id}/restart",
+                timeout=5
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Restart timer
+            self._start_simulation_timer()
+            
+            # Update UI
+            self.sidebar.simulation_panel.update_agent_status(
+                speed_kmh=data['speed_kmh'],
+                eta_seconds=data['eta_seconds'],
+                state=data['state']
+            )
+            
+            log.info("agent_restarted", agent_id=self.sim_agent_id)
+            
+        except Exception as e:
+            log.error("restart_agent_failed", error=str(e))
+    
+    def _update_agent_route(self, route_id: int) -> None:
+        """Update agent's route when user selects different route."""
+        if self.sim_agent_id is None:
+            return
+        
+        # Get route data
+        routes = self.sidebar.route_panel.routes_data
+        if route_id >= len(routes):
+            return
+        
+        route = routes[route_id]
+        route_api_id = route['id']
+        
+        # Get current sim_speed
+        sim_speed = self.sidebar.simulation_panel.sim_speed_spinbox.value()
+        
+        import requests
+        try:
+            response = requests.post(
+                f"{self.server_url}/sim/agent/{self.sim_agent_id}/update_route",
+                json={
+                    "route_id": route_api_id,
+                    "sim_speed": sim_speed
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Restart timer
+            self._start_simulation_timer()
+            
+            # Update UI
+            self.sidebar.simulation_panel.update_agent_status(
+                speed_kmh=data['speed_kmh'],
+                eta_seconds=data['eta_seconds'],
+                state=data['state']
+            )
+            
+            log.info("agent_route_updated", new_route_id=route_api_id)
+            
+        except Exception as e:
+            log.error("update_agent_route_failed", error=str(e))
+    
+    def _on_delete_agent(self) -> None:
+        """Handle Delete Agent button click."""
+        log.info("delete_agent_clicked")
+        
+        if self.sim_agent_id is None:
+            return
+        
+        import requests
+        try:
+            response = requests.delete(
+                f"{self.server_url}/sim/agent/{self.sim_agent_id}",
+                timeout=5
+            )
+            response.raise_for_status()
+            
+            # Stop timer
+            self._stop_simulation_timer()
+            
+            # Remove agent from map
+            js = "if (window.app && window.app.removeAgent) { window.app.removeAgent(); }"
+            self.map_widget.page().runJavaScript(js)
+            
+            # Clear state
+            self.sim_agent_id = None
+            
+            # Update UI
+            self.sidebar.simulation_panel.set_agent_active(False)
+            self.sidebar.simulation_panel.clear_agent_status()
+            
+            log.info("agent_deleted")
+            
+        except Exception as e:
+            log.error("delete_agent_failed", error=str(e))
+    
+    def _on_clear_routes(self) -> None:
+        """Handle Clear Routes button click."""
+        log.info("clear_routes_clicked")
+        
+        # Clear routes from panel
+        self.sidebar.route_panel.clear_routes()
+        
+        # Clear routes from map
+        js = (
+            "if (window.app) { "
+            "window.app.displayRoutes({type: 'FeatureCollection', features: []}); "
+            "}"
+        )
+        self.map_widget.page().runJavaScript(js)
+    
+    def _on_clear_all_points(self) -> None:
+        """Handle Clear All Points button click."""
+        log.info("clear_all_points_clicked")
+        
+        # Clear points from widget
+        self.sidebar.selected_points_widget.update_points([])
+        
+        # Clear points from map
+        js = (
+            "if (window.app && window.app.clearAllMarkers) { "
+            "window.app.clearAllMarkers(); "
+            "}"
+        )
+        self.map_widget.page().runJavaScript(js)
+    
+    def _on_sim_speed_changed(self, speed: float) -> None:
+        """Handle simulation speed change."""
+        log.info("sim_speed_changed", speed=speed)
+        
+        # TODO: Update agent simulation speed via API or local timer
+    
+    def _on_fps_changed(self, fps: int) -> None:
+        """Handle FPS change."""
+        log.info("fps_changed", fps=fps)
+        
+        self.sim_fps = fps
+        
+        # Restart timer with new interval if running
+        if self.sim_timer and self.sim_timer.isActive():
+            self._start_simulation_timer()
+    
+    def _start_simulation_timer(self) -> None:
+        """Start or restart animation timer."""
+        # Stop existing timer
+        if self.sim_timer:
+            self.sim_timer.stop()
+        
+        # Create new timer
+        from PyQt5.QtCore import QTimer
+        self.sim_timer = QTimer()
+        self.sim_timer.timeout.connect(self._update_agent_position)
+        
+        # Calculate interval from FPS (milliseconds)
+        interval_ms = int(1000 / self.sim_fps)
+        self.sim_timer.start(interval_ms)
+        
+        log.info("simulation_timer_started", fps=self.sim_fps, interval_ms=interval_ms)
+    
+    def _update_agent_position(self) -> None:
+        """Timer callback: fetch agent position and update map."""
+        if self.sim_agent_id is None:
+            return
+        
+        import requests
+        try:
+            response = requests.get(
+                f"{self.server_url}/sim/agent/{self.sim_agent_id}/position",
+                timeout=2
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Update map
+            position = data['position']
+            js = f"""
+            if (window.app && window.app.updateAgent) {{
+                window.app.updateAgent({{
+                    lon: {position['lon']},
+                    lat: {position['lat']},
+                    bearing_degrees: {position['bearing_degrees']}
+                }});
+            }}
+            """
+            self.map_widget.page().runJavaScript(js)
+            
+            # Update status panel
+            self.sidebar.simulation_panel.update_agent_status(
+                speed_kmh=data['speed_kmh'],
+                eta_seconds=data['eta_seconds'],
+                state=data['state']
+            )
+            
+            # Stop timer if finished
+            if data['is_finished']:
+                self._stop_simulation_timer()
+                log.info("agent_finished", agent_id=self.sim_agent_id)
+                
+        except Exception as e:
+            log.error("update_agent_position_failed", error=str(e))
+    
+    def _stop_simulation_timer(self) -> None:
+        """Stop animation timer."""
+        if self.sim_timer:
+            self.sim_timer.stop()
+            log.info("simulation_timer_stopped")

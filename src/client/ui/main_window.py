@@ -5,7 +5,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from functools import partial
 
 from PyQt5.QtWidgets import QMainWindow, QWidget, QShortcut
-from PyQt5.QtCore import QUrl
+from PyQt5.QtCore import QUrl, QTimer
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtGui import QKeySequence
 
@@ -45,6 +45,11 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         
         # Points presenter: single source of truth for points with styling
         self.points_presenter = PointsPresenter()
+        
+        # Simulation state
+        self.sim_agent_id = None
+        self.sim_timer = None
+        self.sim_fps = 30  # Default FPS from config
         
         # Start HTTP server for map.html assets (to avoid CORS)
         self._start_assets_httpd()

@@ -67,6 +67,34 @@
 
 ---
 
+### R-D-1[0x08ee67e]: K Routes Bug Fixes and UI Polish (2025-11-11)
+**File**: N/A (commit-level fixes)  
+**Status**: ✅ Completed  
+**Summary**: Critical bug fixes and UI improvements for K routes system:
+- Fixed route panel highlighting (green background updates correctly)
+- Fixed geometry rendering (routes follow actual LINESTRING, not straight lines)
+- Fixed snapping logic (restored snap_k for better pathfinding)
+- Improved error handling (user-friendly 404/500 messages)
+- Route deduplication (75% edge similarity threshold)
+- Auto-clear routes on point changes
+- Metrics tracking for all operations
+
+**Key Achievements**:
+- Route geometry: Full LINESTRING coordinates from PostGIS ST_AsText()
+- Error messages: "No path found between selected points. Try selecting points closer..."
+- UI polish: Black borders (casing layers), reversed drawing order, marker normalization
+- Code cleanup: Removed duplicate UI elements (sidebar.py, controls_panel.py)
+- 17 files changed, 292 insertions(+), 486 deletions(-)
+
+**Problems Solved**:
+1. Straight-line routes through buildings → Load full LINESTRING from database
+2. Panel highlighting stuck on first route → Remove stale darkGreen styling
+3. Pathfinding failures after k=1 snap → Restore snap_k for all points
+4. Generic 404 errors → Add user-friendly error messages in UI
+5. Route duplication → 75% similarity threshold in k_shortest_paths
+
+---
+
 ## Supporting Documentation
 
 ### Architecture

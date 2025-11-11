@@ -10,6 +10,7 @@ export class AgentAnimator {
     this.map = map;
     this.agentCur = null;  // [lng, lat]
     this.agentTarget = null;  // [lng, lat]
+    this.currentBearing = 0;  // degrees, 0=North
     this.lastFrame = 0;
     
     // Create agent marker
@@ -22,12 +23,37 @@ export class AgentAnimator {
   }
 
   updateAgent(pos) {
-    // pos: { lat, lon }
+    // pos: { lat, lon, bearing_degrees (optional) }
     const lngLat = [pos.lon, pos.lat];
     if (!this.agentCur) {
       this.agentCur = lngLat;
     }
     this.agentTarget = lngLat;
+    
+    // Update bearing if provided
+    if (pos.bearing_degrees !== undefined) {
+      this.currentBearing = pos.bearing_degrees;
+      this._rotateMarker(this.currentBearing);
+    }
+  }
+  
+  removeAgent() {
+    if (this.agentMarker && this.agentMarker._map) {
+      this.agentMarker.remove();
+    }
+    this.agentCur = null;
+    this.agentTarget = null;
+    console.log('Agent removed');
+  }
+  
+  _rotateMarker(bearingDegrees) {
+    if (!this.agentMarker) return;
+    
+    const el = this.agentMarker.getElement();
+    if (!el) return;
+    
+    // Rotate marker to face direction of movement
+    el.style.transform = `rotate(${bearingDegrees}deg)`;
   }
 
   animate(timestamp) {

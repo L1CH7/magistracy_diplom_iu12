@@ -17,6 +17,7 @@ from src.routing.simple_engine import SimpleRouteEngine
 from src.routing.graph import Graph
 from src.routing.route_builder import build_routes
 from src.data.postgis_manager import PostGISManager
+from src.simulation.agent import SimulationAgent
 from src.utils.logger import setup_logger
 
 log = setup_logger(__name__)
@@ -98,6 +99,22 @@ class AgentState(BaseModel):
     progress: float = 0.0
 
 
+class SimAgentStartRequest(BaseModel):
+    """Request to start simulation agent."""
+    route_id: int  # ID of selected route
+    sim_speed: float = Field(1.0, ge=1.0, le=100.0)
+
+
+class SimAgentPositionResponse(BaseModel):
+    """Agent position at current simulation time."""
+    agent_id: int
+    position: Dict[str, float]  # {lon, lat, bearing_degrees}
+    speed_kmh: float
+    eta_seconds: float
+    state: str  # moving, stopped, waiting, etc
+    is_finished: bool
+
+
 class OsmLoadRequest(BaseModel):
     bbox: List[float] = Field(
         ..., min_items=4, max_items=4
@@ -110,6 +127,11 @@ cached_graph: 'Graph' | None = None  # Custom Graph for k-routing
 agents: Dict[int, Dict] = {}
 route_cache: Dict[str, RouteResponse] = {}
 next_agent_id = 1
+
+# Simulation agents storage
+sim_agents: Dict[int, 'SimulationAgent'] = {}  # agent_id -> SimulationAgent
+sim_routes: Dict[int, Dict] = {}  # agent_id -> route_data (edges, coords, distance)
+next_sim_agent_id = 1
 _tile_hosts = cycle(["a", "b", "c"])  # for upstream OSM subdomains
 
 
@@ -211,6 +233,10 @@ def post_routes(req: RouteRequest) -> RouteResponse:
     Returns:
         RouteResponse with routes array and selected index
     """
+    # Note: We do NOT clear sim_agents here anymore.
+    # Agent persists across route changes.
+    # Only client-side _on_points_changed() deletes agent.
+    
     # Generate cache key from all points
     points_str = "_".join(
         f"{p.lat:.6f},{p.lon:.6f}" for p in req.points
@@ -292,6 +318,34 @@ def post_routes(req: RouteRequest) -> RouteResponse:
     )
 
     return response
+
+
+@app.post("/routes/clear_cache")
+def clear_route_cache() -> dict:
+    """Clear route cache (called when user changes points)."""
+    global route_cache, sim_agents, sim_routes
+    
+    num_cached = len(route_cache)
+    num_agents = len(sim_agents)
+    
+    # Clear route cache
+    route_cache.clear()
+    
+    # Delete all agents (routes no longer valid)
+    sim_agents.clear()
+    sim_routes.clear()
+    
+    log.info(
+        "Route cache and agents cleared",
+        num_routes_cleared=num_cached,
+        num_agents_cleared=num_agents
+    )
+    
+    return {
+        "status": "cleared",
+        "num_routes": num_cached,
+        "num_agents": num_agents
+    }
 
 
 @app.post("/agent/start", response_model=AgentState)
@@ -376,6 +430,267 @@ def agent_step(agent_id: int) -> AgentState:
         position=pos,
         progress=progress,
     )
+
+
+# ========================================================================
+# Simulation Agent Endpoints (новая система)
+# ========================================================================
+
+@app.post("/sim/agent/start")
+def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
+    """Start simulation agent on selected route."""
+    global next_sim_agent_id, route_cache
+    
+    if cached_graph is None:
+        raise HTTPException(status_code=500, detail="Graph not loaded")
+    
+    # Find route in cache (simple lookup by route_id)
+    # TODO: Better route storage/retrieval
+    route_data = None
+    for cached_response in route_cache.values():
+        for route in cached_response.routes:
+            if route['id'] == req.route_id:
+                route_data = route
+                break
+        if route_data:
+            break
+    
+    if not route_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Route {req.route_id} not found in cache"
+        )
+    
+    # Create simulation agent
+    agent_id = next_sim_agent_id
+    next_sim_agent_id += 1
+    
+    # Extract speed limits for each edge from graph
+    edge_speed_limits = []
+    for edge_id in route_data['edges']:
+        edge = cached_graph.get_edge(edge_id)
+        if edge:
+            edge_speed_limits.append(edge.speed_limit_kmh)
+        else:
+            edge_speed_limits.append(50.0)  # fallback
+    
+    agent = SimulationAgent(
+        agent_id=agent_id,
+        route_edges=route_data['edges'],
+        route_coords=route_data['geometry'],
+        edge_speed_limits=edge_speed_limits,
+        sim_speed=req.sim_speed
+    )
+    
+    sim_agents[agent_id] = agent
+    sim_routes[agent_id] = route_data
+    
+    # Get initial position
+    lon, lat, bearing, current_speed = agent.get_current_position(
+        route_distance_m=route_data['total_distance_m'],
+        elapsed_time_sec=0.0
+    )
+    
+    # Convert m/s to km/h
+    speed_kmh = current_speed * 3.6
+    
+    log.info(
+        "Simulation agent started",
+        agent_id=agent_id,
+        route_id=req.route_id,
+        sim_speed=req.sim_speed,
+        distance_m=route_data['total_distance_m']
+    )
+    
+    return SimAgentPositionResponse(
+        agent_id=agent_id,
+        position={"lon": lon, "lat": lat, "bearing_degrees": bearing},
+        speed_kmh=speed_kmh,
+        eta_seconds=route_data['total_time_sec'] / req.sim_speed,
+        state="Moving",
+        is_finished=False
+    )
+
+
+@app.get("/sim/agent/{agent_id}/position")
+def sim_agent_position(agent_id: int) -> SimAgentPositionResponse:
+    """Get current agent position."""
+    agent = sim_agents.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    route_data = sim_routes.get(agent_id)
+    if not route_data:
+        raise HTTPException(status_code=500, detail="Route data lost")
+    
+    # Calculate elapsed time
+    elapsed_time = time.time() - agent.start_time
+    
+    # Get position
+    lon, lat, bearing, current_speed = agent.get_current_position(
+        route_distance_m=route_data['total_distance_m'],
+        elapsed_time_sec=elapsed_time
+    )
+    
+    # Convert m/s to km/h
+    speed_kmh = current_speed * 3.6
+    
+    # Calculate ETA in SIMULATION time (not real time)
+    # Remaining distance
+    remaining_distance = route_data['total_distance_m'] * (
+        1.0 - agent.current_progress
+    )
+    # Average speed for remaining distance (assume max_speed)
+    avg_speed = agent.params.max_speed  # m/s
+    # Simulation time remaining
+    sim_time_remaining = (
+        remaining_distance / avg_speed if avg_speed > 0 else 0
+    )
+    
+    return SimAgentPositionResponse(
+        agent_id=agent_id,
+        position={"lon": lon, "lat": lat, "bearing_degrees": bearing},
+        speed_kmh=speed_kmh,
+        eta_seconds=sim_time_remaining,
+        state="Moving" if agent.is_running else "Stopped",
+        is_finished=agent.current_progress >= 1.0
+    )
+
+
+@app.post("/sim/agent/{agent_id}/stop")
+def sim_agent_stop(agent_id: int) -> dict:
+    """Stop simulation agent."""
+    agent = sim_agents.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    agent.stop()
+    log.info("Agent stopped", agent_id=agent_id)
+    
+    return {"status": "stopped"}
+
+
+@app.post("/sim/agent/{agent_id}/restart")
+def sim_agent_restart(agent_id: int) -> SimAgentPositionResponse:
+    """Restart simulation agent from beginning."""
+    agent = sim_agents.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    route_data = sim_routes.get(agent_id)
+    if not route_data:
+        raise HTTPException(status_code=500, detail="Route data lost")
+    
+    agent.restart()
+    
+    # Get initial position
+    lon, lat, bearing, current_speed = agent.get_current_position(
+        route_distance_m=route_data['total_distance_m'],
+        elapsed_time_sec=0.0
+    )
+    
+    # Convert m/s to km/h
+    speed_kmh = current_speed * 3.6
+    
+    log.info("Agent restarted", agent_id=agent_id)
+    
+    return SimAgentPositionResponse(
+        agent_id=agent_id,
+        position={"lon": lon, "lat": lat, "bearing_degrees": bearing},
+        speed_kmh=speed_kmh,
+        eta_seconds=route_data['total_time_sec'] / agent.sim_speed,
+        state="Moving",
+        is_finished=False
+    )
+
+
+@app.post("/sim/agent/{agent_id}/update_route")
+def sim_agent_update_route(
+    agent_id: int,
+    req: SimAgentStartRequest
+) -> SimAgentPositionResponse:
+    """Update agent's route (swap to different route)."""
+    global cached_graph
+    
+    agent = sim_agents.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    if cached_graph is None:
+        raise HTTPException(status_code=500, detail="Graph not loaded")
+    
+    # Find new route in cache
+    route_data = None
+    for cached_response in route_cache.values():
+        for route in cached_response.routes:
+            if route['id'] == req.route_id:
+                route_data = route
+                break
+        if route_data:
+            break
+    
+    if not route_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Route {req.route_id} not found in cache"
+        )
+    
+    # Extract speed limits for new route
+    edge_speed_limits = []
+    for edge_id in route_data['edges']:
+        edge = cached_graph.get_edge(edge_id)
+        if edge:
+            edge_speed_limits.append(edge.speed_limit_kmh)
+        else:
+            edge_speed_limits.append(50.0)
+    
+    # Update agent's route data
+    agent.route_edges = route_data['edges']
+    agent.route_coords = route_data['geometry']
+    agent.edge_speed_limits = edge_speed_limits
+    agent.sim_speed = req.sim_speed
+    
+    # Restart from beginning
+    agent.restart()
+    
+    # Update stored route data
+    sim_routes[agent_id] = route_data
+    
+    # Get initial position
+    lon, lat, bearing, current_speed = agent.get_current_position(
+        route_distance_m=route_data['total_distance_m'],
+        elapsed_time_sec=0.0
+    )
+    
+    speed_kmh = current_speed * 3.6
+    
+    log.info(
+        "Agent route updated",
+        agent_id=agent_id,
+        new_route_id=req.route_id
+    )
+    
+    return SimAgentPositionResponse(
+        agent_id=agent_id,
+        position={"lon": lon, "lat": lat, "bearing_degrees": bearing},
+        speed_kmh=speed_kmh,
+        eta_seconds=route_data['total_time_sec'] / agent.sim_speed,
+        state="Moving",
+        is_finished=False
+    )
+
+
+@app.delete("/sim/agent/{agent_id}")
+def sim_agent_delete(agent_id: int) -> dict:
+    """Delete simulation agent."""
+    if agent_id in sim_agents:
+        del sim_agents[agent_id]
+    if agent_id in sim_routes:
+        del sim_routes[agent_id]
+    
+    log.info("Agent deleted", agent_id=agent_id)
+    
+    return {"status": "deleted"}
 
 
 @app.get("/graph")

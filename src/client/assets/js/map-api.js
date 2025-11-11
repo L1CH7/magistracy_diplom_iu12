@@ -70,6 +70,10 @@ export class MapAPI {
   updateAgent(pos) {
     this.agentAnimator.updateAgent(pos);
   }
+  
+  removeAgent() {
+    this.agentAnimator.removeAgent();
+  }
 
   fitToRoutes() {
     const src = this.map.getSource('routes');

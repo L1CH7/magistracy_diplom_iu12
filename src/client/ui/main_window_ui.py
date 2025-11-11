@@ -90,6 +90,32 @@ class MainWindowUI:
         self.sidebar.selected_points_widget.points_changed.connect(
             self._on_points_changed
         )
+        
+        # Connect simulation panel signals
+        self.sidebar.simulation_panel.start_agent_clicked.connect(
+            self._on_start_agent
+        )
+        self.sidebar.simulation_panel.stop_agent_clicked.connect(
+            self._on_stop_agent
+        )
+        self.sidebar.simulation_panel.restart_agent_clicked.connect(
+            self._on_restart_agent
+        )
+        self.sidebar.simulation_panel.delete_agent_clicked.connect(
+            self._on_delete_agent
+        )
+        self.sidebar.simulation_panel.clear_routes_clicked.connect(
+            self._on_clear_routes
+        )
+        self.sidebar.simulation_panel.clear_points_clicked.connect(
+            self._on_clear_all_points
+        )
+        self.sidebar.simulation_panel.sim_speed_changed.connect(
+            self._on_sim_speed_changed
+        )
+        self.sidebar.simulation_panel.fps_changed.connect(
+            self._on_fps_changed
+        )
     
     def _setup_zoom_controls(self) -> None:
         """Setup zoom controls (slider + buttons)."""

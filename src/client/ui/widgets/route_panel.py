@@ -37,6 +37,9 @@ class RoutePanel(QWidget):
     def __init__(self, parent: QWidget = None):
         """Initialize routing panel."""
         super().__init__(parent)
+        
+        # Track currently selected route
+        self.selected_route_id = None  # int or None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -60,7 +63,7 @@ class RoutePanel(QWidget):
         k_layout.addLayout(k_row)
 
         # Get Routes button
-        self.get_routes_btn = QPushButton("🗺️ Get Routes")
+        self.get_routes_btn = QPushButton("Get Routes")
         self.get_routes_btn.setStyleSheet(
             "QPushButton { "
             "background-color: #10b981; "
@@ -141,6 +144,7 @@ class RoutePanel(QWidget):
         route_id = item.data(Qt.UserRole)
         if route_id is not None:
             log.info("Route selected", route_id=route_id)
+            self.selected_route_id = route_id  # Store selected route
             self._highlight_selected_route(route_id)
             self.route_selected.emit(route_id)
     
@@ -205,8 +209,8 @@ class RoutePanel(QWidget):
 
             # Create item text
             item_text = f"Route {route_id + 1}\n"
-            item_text += f"📏 {distance_str}  ⏱️ {time_str}\n"
-            item_text += f"🛣️ {num_edges} edges"
+            item_text += f"Dist: {distance_str}  Time: {time_str}\n"
+            item_text += f"Edges: {num_edges}"
 
             # Create list item
             item = QListWidgetItem(item_text)
@@ -215,6 +219,7 @@ class RoutePanel(QWidget):
             self.routes_list.addItem(item)
 
         # Highlight first route (best) by default
+        self.selected_route_id = 0  # Select first route
         self._highlight_selected_route(0)
         self.routes_list.setCurrentRow(0)
 
@@ -224,6 +229,7 @@ class RoutePanel(QWidget):
         """Clear routes list."""
         self.routes_list.clear()
         self.routes_data = []
+        self.selected_route_id = None  # Reset selection
         self.status_label.setText("No routes found yet")
         self.status_label.show()
         self.routes_list.hide()
@@ -242,7 +248,7 @@ class RoutePanel(QWidget):
         """
         if loading:
             self.get_routes_btn.setEnabled(False)
-            self.get_routes_btn.setText("⏳ Loading...")
+            self.get_routes_btn.setText("Loading...")
         else:
             self.get_routes_btn.setEnabled(True)
-            self.get_routes_btn.setText("🗺️ Get Routes")
+            self.get_routes_btn.setText("Get Routes")
