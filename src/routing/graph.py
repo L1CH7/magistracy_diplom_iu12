@@ -12,6 +12,31 @@ from src.utils.logger import setup_logger
 log = setup_logger(__name__)
 
 
+def _parse_linestring_wkt(wkt: str) -> List[Tuple[float, float]]:
+    """Parse WKT LINESTRING into list of (lon, lat) coordinates.
+    
+    Args:
+        wkt: WKT string like 'LINESTRING(lon1 lat1, lon2 lat2, ...)'
+        
+    Returns:
+        List of (lon, lat) tuples
+    """
+    if not wkt or not wkt.startswith('LINESTRING'):
+        return []
+    
+    # Extract coordinates from "LINESTRING(x y, x y, ...)"
+    coords_str = wkt[len('LINESTRING('):-1]
+    coords = []
+    
+    for pair in coords_str.split(','):
+        parts = pair.strip().split()
+        if len(parts) == 2:
+            lon, lat = float(parts[0]), float(parts[1])
+            coords.append((lon, lat))
+    
+    return coords
+
+
 @dataclass
 class Node:
     """Graph node (intersection or endpoint)."""
@@ -38,6 +63,7 @@ class Edge:
     bearing: Optional[float] = None  # Edge bearing in degrees (0-360)
     current_load: int = 0
     effective_speed_kmh: Optional[float] = None
+    geometry: Optional[List[Tuple[float, float]]] = None  # Path coordinates [(lon, lat)]
     
     def get_travel_time(self) -> float:
         """Get current travel time considering congestion."""
@@ -89,6 +115,12 @@ class Graph:
         
         # Load edges and build adjacency list
         for edge_dict in edges_data:
+            # Parse geometry from WKT
+            geometry_wkt = edge_dict.get('geometry_wkt')
+            geometry_coords = None
+            if geometry_wkt:
+                geometry_coords = _parse_linestring_wkt(geometry_wkt)
+            
             edge = Edge(
                 id=edge_dict['id'],
                 osm_way_id=edge_dict['osm_way_id'],
@@ -103,7 +135,8 @@ class Graph:
                 base_travel_time_sec=edge_dict['base_travel_time_sec'],
                 bearing=edge_dict.get('bearing'),
                 current_load=edge_dict.get('current_load', 0),
-                effective_speed_kmh=edge_dict.get('effective_speed_kmh')
+                effective_speed_kmh=edge_dict.get('effective_speed_kmh'),
+                geometry=geometry_coords
             )
             graph.edges[edge.id] = edge
             

@@ -6,11 +6,16 @@ import { MAP_CONFIG } from './map-config.js';
 
 /**
  * Create marker element based on type and color.
- * @param {string} type - 'start', 'end', 'via', or 'agent'
+ * @param {string} type - 'start'/'from', 'end'/'to', 'via', or 'agent'
  * @param {string} [color] - Custom color (for via markers)
  */
 export function createMarkerElement(type, color = null) {
   const el = document.createElement('div');
+  
+  // Normalize type: 'from' → 'start', 'to' → 'end'
+  if (type === 'from') type = 'start';
+  if (type === 'to') type = 'end';
+  
   const cfg = MAP_CONFIG.markers[type];
 
   if (!cfg) {
@@ -56,10 +61,14 @@ export function getMarkerType(index, totalPoints, point) {
 
 /**
  * Get marker color from point data.
- * @param {string} type - Marker type
+ * @param {string} type - Marker type ('start'/'from', 'end'/'to', 'via')
  * @param {Object} point - Point object with display_color/color
  */
 export function getMarkerColor(type, point) {
+  // Normalize type: 'from' → 'start', 'to' → 'end'
+  if (type === 'from') type = 'start';
+  if (type === 'to') type = 'end';
+  
   if (type === 'start') {
     return point.display_color || '#2563eb';
   }
@@ -69,5 +78,7 @@ export function getMarkerColor(type, point) {
   if (type === 'via') {
     return point.display_color || point.color || '#8b5cf6';
   }
+  
+  console.warn(`Unknown marker type: ${type}`);
   return MAP_CONFIG.markers[type]?.color || '#8b5cf6';
 }

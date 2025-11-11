@@ -2,7 +2,7 @@
 
 ## Research & Development Reports
 
-### RD-1: UI Completion (2025-10-19)
+### R-D-1[0x...]: UI Completion (2025-10-19)
 **File**: [rd1_ui_completion_2025_10_19.md](rd1_ui_completion_2025_10_19.md)  
 **Status**: ✅ Completed  
 **Summary**: Comprehensive UI feature implementation including:
@@ -19,7 +19,7 @@
 
 ---
 
-### RD-2: Async UI Fix - Cache Performance Optimization (2025-11-06)
+### R-D-1[0x...]: Async UI Fix - Cache Performance Optimization (2025-11-06)
 **File**: [rd2_async_ui_fix_2025_11_06.md](rd2_async_ui_fix_2025_11_06.md)  
 **Status**: ✅ Completed  
 **Summary**: Performance optimization addressing UI freeze issues:
@@ -40,7 +40,7 @@
 
 ---
 
-### RD-3: K Routes Implementation (2025-11-11)
+### R-D-1[0x111c862]: K Routes Implementation (2025-11-11)
 **File**: [k_routes_complete_2025_11_11.md](k_routes_complete_2025_11_11.md)  
 **Status**: ✅ Completed  
 **Summary**: Complete K alternative routes implementation with OSRM profiles and turn penalties:

@@ -143,6 +143,29 @@ export function createMapStyle(tileUrl) {
           'line-width': MAP_CONFIG.layers.routes.width,
         },
       },
+      // K routes with black borders (casing layers first, then main layers)
+      {
+        id: 'k-routes-inactive-casing',
+        type: 'line',
+        source: 'k-routes',
+        filter: ['!=', ['get', 'route_id'], -1],
+        paint: {
+          'line-color': '#000000',
+          'line-width': MAP_CONFIG.layers.kRoutes.inactive.width + 2,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.inactive.opacity,
+        },
+      },
+      {
+        id: 'k-routes-active-casing',
+        type: 'line',
+        source: 'k-routes',
+        filter: ['==', ['get', 'route_id'], -1],
+        paint: {
+          'line-color': '#000000',
+          'line-width': MAP_CONFIG.layers.kRoutes.active.width + 2,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.active.opacity,
+        },
+      },
       {
         id: 'k-routes-inactive',
         type: 'line',

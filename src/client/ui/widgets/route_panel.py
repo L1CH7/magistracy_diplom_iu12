@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QListWidget, QListWidgetItem, QGroupBox
 )
 from PyQt5.QtCore import pyqtSignal, Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QColor
 
 from src.utils.logger import setup_logger
 
@@ -141,7 +141,23 @@ class RoutePanel(QWidget):
         route_id = item.data(Qt.UserRole)
         if route_id is not None:
             log.info("Route selected", route_id=route_id)
+            self._highlight_selected_route(route_id)
             self.route_selected.emit(route_id)
+    
+    def _highlight_selected_route(self, route_id: int):
+        """Highlight selected route in list with green background."""
+        for i in range(self.routes_list.count()):
+            item = self.routes_list.item(i)
+            item_route_id = item.data(Qt.UserRole)
+            
+            if item_route_id == route_id:
+                # Selected route: green background
+                item.setBackground(QColor("#10b981"))
+                item.setForeground(Qt.white)
+            else:
+                # Other routes: default transparent background
+                item.setBackground(Qt.transparent)
+                item.setForeground(Qt.black)
 
     def display_routes(self, routes: list):
         """
@@ -196,16 +212,10 @@ class RoutePanel(QWidget):
             item = QListWidgetItem(item_text)
             item.setData(Qt.UserRole, route_id)
 
-            # Style first route (best) differently
-            if route_id == 0:
-                font = QFont()
-                font.setBold(True)
-                item.setFont(font)
-                item.setForeground(Qt.darkGreen)
-
             self.routes_list.addItem(item)
 
-        # Select first route by default
+        # Highlight first route (best) by default
+        self._highlight_selected_route(0)
         self.routes_list.setCurrentRow(0)
 
         log.info("Routes displayed", num_routes=len(routes))

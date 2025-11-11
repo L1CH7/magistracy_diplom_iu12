@@ -129,6 +129,7 @@ export class PointsManager {
 
   _redrawAllMarkers() {
     // Clear all existing markers
+    console.log('_redrawAllMarkers: Clearing', this.allMarkers.length, 'markers');
     this.allMarkers.forEach(m => m.remove());
     this.allMarkers = [];
 
@@ -136,13 +137,16 @@ export class PointsManager {
     this.allPoints.forEach((point, idx) => {
       const type = getMarkerType(idx, this.allPoints.length, point);
       const color = getMarkerColor(type, point);
+      console.log(`Creating marker ${idx}: type=${type}, color=${color}, lat=${point.lat}, lon=${point.lon}`);
       const marker = this._addMarkerToMap(point, type, color);
       if (marker) {
         this.allMarkers.push(marker);
+      } else {
+        console.warn(`Failed to create marker ${idx}`);
       }
     });
 
-    console.log('Markers redrawn:', this.allPoints.length);
+    console.log('Markers redrawn:', this.allPoints.length, 'points,', this.allMarkers.length, 'markers');
     this._notifyPointsChanged();
   }
 

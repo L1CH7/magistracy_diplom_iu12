@@ -220,14 +220,17 @@ def _build_route_geometry(
     edge_ids: List[int]
 ) -> List[Tuple[float, float]]:
     """
-    Build route geometry from edge IDs.
+    Build route geometry from edge IDs using full edge geometries.
+    
+    Uses edge.geometry (LINESTRING coordinates) if available,
+    otherwise falls back to node coordinates.
 
     Args:
         graph: Graph instance
         edge_ids: List of edge IDs
 
     Returns:
-        List of (lon, lat) coordinates
+        List of (lon, lat) coordinates following actual road paths
     """
     if not edge_ids:
         return []
@@ -239,17 +242,28 @@ def _build_route_geometry(
         if not edge:
             continue
 
-        # Add start node
-        start_node = graph.get_node(edge.start_node_id)
-        if start_node:
-            coords.append((start_node.lon, start_node.lat))
+        # Use full edge geometry if available
+        if edge.geometry and len(edge.geometry) > 0:
+            # Add all points from edge geometry (except last to avoid duplicates)
+            for coord in edge.geometry[:-1]:
+                coords.append(coord)
+        else:
+            # Fallback: use start node only
+            start_node = graph.get_node(edge.start_node_id)
+            if start_node:
+                coords.append((start_node.lon, start_node.lat))
 
-    # Add last node
+    # Add final coordinate from last edge
     last_edge = graph.get_edge(edge_ids[-1])
     if last_edge:
-        end_node = graph.get_node(last_edge.end_node_id)
-        if end_node:
-            coords.append((end_node.lon, end_node.lat))
+        if last_edge.geometry and len(last_edge.geometry) > 0:
+            # Add last coordinate from last edge's geometry
+            coords.append(last_edge.geometry[-1])
+        else:
+            # Fallback: use end node
+            end_node = graph.get_node(last_edge.end_node_id)
+            if end_node:
+                coords.append((end_node.lon, end_node.lat))
 
     return coords
 
@@ -288,7 +302,7 @@ def build_routes(
              snap_k=snap_k)
 
     # Step 1: Snap all points to nearest nodes
-    snapped_nodes = _snap_points_to_nodes(graph, points, k=snap_k)
+    snapped_nodes = _snap_points_to_nodes(graph, points, snap_k)
 
     # Step 2: Find K paths between each consecutive pair
     all_segment_options = []

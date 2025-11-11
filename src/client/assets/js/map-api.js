@@ -179,11 +179,20 @@ export class MapAPI {
      *     ...
      *   ]
      * }
+     * 
+     * Routes are reversed so last route draws first (appears underneath).
      */
     const src = this.map.getSource('k-routes');
     if (src) {
-      src.setData(geojson);
-      console.log(`Displayed ${geojson.features.length} routes on map`);
+      // Reverse features so last route (highest route_id) draws first
+      const reversedFeatures = [...geojson.features].reverse();
+      const reversedGeojson = {
+        type: 'FeatureCollection',
+        features: reversedFeatures
+      };
+      
+      src.setData(reversedGeojson);
+      console.log(`Displayed ${geojson.features.length} routes (reversed order)`);
       
       // Reset active route when displaying new routes
       this._activeRouteId = null;
@@ -196,11 +205,12 @@ export class MapAPI {
   highlightRoute(routeId) {
     /**
      * Highlight a specific route by route_id.
+     * Allows changing selection (not locked after first selection).
      * @param {number} routeId - The route_id to highlight
      */
+    console.log(`Highlighting route ${routeId} (previous: ${this._activeRouteId})`);
     this._activeRouteId = routeId;
     this._updateKRouteFilters();
-    console.log(`Highlighted route ${routeId}`);
   }
 
   _updateKRouteFilters() {
@@ -208,16 +218,21 @@ export class MapAPI {
      * Update MapLibre layer filters to show active/inactive routes.
      * Active route (highlighted) uses 'k-routes-active' layer (green, thick).
      * Inactive routes use 'k-routes-inactive' layer (gray, thin).
+     * Both layers have black casing layers underneath.
      */
     if (this._activeRouteId !== null) {
       // Show active route in green layer
       this.map.setFilter('k-routes-active', ['==', ['get', 'route_id'], this._activeRouteId]);
+      this.map.setFilter('k-routes-active-casing', ['==', ['get', 'route_id'], this._activeRouteId]);
       // Show other routes in gray layer
       this.map.setFilter('k-routes-inactive', ['!=', ['get', 'route_id'], this._activeRouteId]);
+      this.map.setFilter('k-routes-inactive-casing', ['!=', ['get', 'route_id'], this._activeRouteId]);
     } else {
       // No active route - show all routes as inactive
       this.map.setFilter('k-routes-active', ['==', ['get', 'route_id'], -1]);
+      this.map.setFilter('k-routes-active-casing', ['==', ['get', 'route_id'], -1]);
       this.map.setFilter('k-routes-inactive', ['!=', ['get', 'route_id'], -1]);
+      this.map.setFilter('k-routes-inactive-casing', ['!=', ['get', 'route_id'], -1]);
     }
   }
 

@@ -1,9 +1,45 @@
 """Event handlers for MainWindow - separated for clarity."""
 import random
+import time
+from functools import wraps
 
 from src.utils.logging_config import get_logger
 
 log = get_logger(__name__)
+
+
+def track_metric(operation_name: str):
+    """Decorator to track operation duration metrics.
+    
+    Args:
+        operation_name: Name of the operation for logging
+    
+    Works with both functions and methods (preserves self).
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            start_time = time.time()
+            try:
+                result = func(self, *args, **kwargs)
+                duration = time.time() - start_time
+                log.info(
+                    f"METRIC_{operation_name}",
+                    duration_sec=round(duration, 3),
+                    success=True
+                )
+                return result
+            except Exception as e:
+                duration = time.time() - start_time
+                log.error(
+                    f"METRIC_{operation_name}",
+                    duration_sec=round(duration, 3),
+                    success=False,
+                    error=str(e)
+                )
+                raise
+        return wrapper
+    return decorator
 
 
 class MainWindowHandlers:
@@ -216,11 +252,7 @@ class MainWindowHandlers:
         
         self.map_widget.page().runJavaScript(js, callback)
     
-    def _on_get_route(self) -> None:
-        """Handle get route button click."""
-        log.info("get_route_clicked")
-        # TODO: implement route calculation
-    
+    @track_metric("GRAPH_FETCH")
     def _on_get_road_graph(self) -> None:
         """Handle get road graph button click - async fetch from config bbox."""
         from PyQt5.QtWidgets import QMessageBox
@@ -418,6 +450,7 @@ class MainWindowHandlers:
         
         self.map_widget.page().runJavaScript(js, callback)
     
+    @track_metric("ROUTE_DELIVERY")
     def _on_get_k_routes(self, k: int) -> None:
         """Handle Get K Routes button click.
         
@@ -471,9 +504,35 @@ class MainWindowHandlers:
             # Display all routes on map
             self._display_routes_on_map(routes)
             
+        except requests.exceptions.HTTPError as e:
+            # Server returned error response (404, 500, etc)
+            try:
+                error_detail = e.response.json().get("detail", "Unknown error")
+            except Exception:
+                error_detail = str(e)
+
+            log.error("get_routes_failed",
+                      status_code=e.response.status_code,
+                      detail=error_detail)
+            
+            # Show error in UI
+            self.sidebar.route_panel.status_label.setText(
+                f"❌ {error_detail}"
+            )
+            self.sidebar.route_panel.status_label.show()
+            self.sidebar.route_panel.routes_list.hide()
+            
         except Exception as e:
             log.error("get_routes_failed", error=str(e), exc_info=True)
+            
+            # Show generic error in UI
+            self.sidebar.route_panel.status_label.setText(
+                f"❌ Error: {str(e)}"
+            )
+            self.sidebar.route_panel.status_label.show()
+            self.sidebar.route_panel.routes_list.hide()
     
+    @track_metric("ROUTE_SELECTION")
     def _on_route_selected(self, route_id: int) -> None:
         """Handle route selection in panel.
         
@@ -492,6 +551,17 @@ class MainWindowHandlers:
         
         # Highlight selected route on map
         self._highlight_route_on_map(selected_route)
+    
+    def _on_points_changed(self) -> None:
+        """Handle points changed (added/removed) - clear routes."""
+        log.info("points_changed_clear_routes")
+        
+        # Clear routes from panel
+        self.sidebar.route_panel.clear_routes()
+        
+        # Clear routes from map
+        js = "window.mapAPI.clearKRoutes();"
+        self.map_widget.page().runJavaScript(js)
     
     def _display_routes_on_map(self, routes: list) -> None:
         """Display all K routes on map (inactive state).

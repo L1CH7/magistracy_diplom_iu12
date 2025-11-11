@@ -72,17 +72,23 @@ class MainWindowUI:
         self.toggle_btn.clicked.connect(self._toggle_sidebar)
         self.toggle_btn.hide()  # Hidden when sidebar is visible
         
-        # Connect sidebar buttons
-        self.sidebar.get_route_btn.clicked.connect(self._on_get_route)
-        self.sidebar.get_road_graph_btn.clicked.connect(self._on_get_road_graph)
+        # Connect sidebar buttons (lambda to ignore clicked signal arg)
+        self.sidebar.get_road_graph_btn.clicked.connect(
+            lambda: self._on_get_road_graph()
+        )
         self.sidebar.quit_btn.clicked.connect(self.close)
         
-        # Connect route panel signals
+        # Connect route panel signals (K routes)
         self.sidebar.route_panel.get_routes_clicked.connect(
             self._on_get_k_routes
         )
         self.sidebar.route_panel.route_selected.connect(
             self._on_route_selected
+        )
+        
+        # Clear routes when points change
+        self.sidebar.selected_points_widget.points_changed.connect(
+            self._on_points_changed
         )
     
     def _setup_zoom_controls(self) -> None:

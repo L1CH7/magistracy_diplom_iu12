@@ -257,10 +257,17 @@ def post_routes(req: RouteRequest) -> RouteResponse:
         )
 
     if not routes:
-        log.warning("No routes found")
+        log.warning(
+            "No routes found",
+            num_points=len(points_tuples),
+            points=points_tuples,
+            k=req.k,
+            snap_k=req.snap_k
+        )
         raise HTTPException(
             status_code=404,
-            detail="No routes found for given points"
+            detail="No path found between selected points. "
+                   "Try selecting points closer together or on connected roads."
         )
 
     # Convert to response format

@@ -257,6 +257,30 @@ def _astar_simple(
     return None
 
 
+def _paths_similar(path1: List[int], path2: List[int], threshold: float = 0.75) -> bool:
+    """Check if two paths share too many edges (are too similar).
+    
+    Args:
+        path1: First path (list of edge IDs)
+        path2: Second path (list of edge IDs)
+        threshold: Similarity threshold (0.0-1.0), default 0.75
+        
+    Returns:
+        True if paths share >= threshold fraction of edges
+    """
+    if not path1 or not path2:
+        return False
+    
+    set1 = set(path1)
+    set2 = set(path2)
+    
+    common = len(set1 & set2)
+    max_len = max(len(set1), len(set2))
+    
+    similarity = common / max_len if max_len > 0 else 0.0
+    return similarity >= threshold
+
+
 def k_shortest_paths(
     graph: Graph,
     start_id: int,
@@ -264,9 +288,10 @@ def k_shortest_paths(
     k: int = 5,
     use_turn_penalties: bool = False
 ) -> List[List[int]]:
-    """Yen's K-shortest paths algorithm.
+    """Yen's K-shortest paths algorithm with similarity filtering.
     
     Finds K shortest simple paths (no cycles) between start and goal.
+    Filters out paths that are too similar (share >75% edges).
     
     Args:
         graph: Graph instance
@@ -340,8 +365,14 @@ def k_shortest_paths(
                     for eid in total_path
                 )
                 
-                # Add to candidates if not duplicate
-                if not any(path == total_path for _, path in B):
+                # Add to candidates if not duplicate and not too similar
+                is_duplicate = any(path == total_path for _, path in B)
+                is_too_similar = any(
+                    _paths_similar(total_path, existing_path)
+                    for _, existing_path in A
+                )
+                
+                if not is_duplicate and not is_too_similar:
                     heapq.heappush(B, (total_cost, total_path))
         
         if not B:

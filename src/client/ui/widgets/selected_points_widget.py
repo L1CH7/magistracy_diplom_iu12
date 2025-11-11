@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from src.utils.logging_config import get_logger
 
 log = get_logger(__name__)
@@ -9,6 +9,9 @@ log = get_logger(__name__)
 
 class SelectedPointsWidget(QFrame):
     """Sandwich-style list of selected points (From, Via, To)."""
+    
+    # Signal emitted when points change (added/removed/cleared)
+    points_changed = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -60,8 +63,15 @@ class SelectedPointsWidget(QFrame):
             ]
         )
         
+        # Check if points actually changed
+        points_changed = len(points) != len(self.points)
+        
         self.points = points
         self._rebuild_list()
+        
+        # Emit signal if points changed
+        if points_changed:
+            self.points_changed.emit()
     
     def _rebuild_list(self) -> None:
         """Rebuild sandwich list from current self.points."""
@@ -277,6 +287,9 @@ class SelectedPointsWidget(QFrame):
             
             # Update both widgets with new styled points
             self._refresh_from_presenter()
+            
+            # Emit signal to clear routes
+            self.points_changed.emit()
             
             log.info(
                 "widget_remove_point_COMPLETE",

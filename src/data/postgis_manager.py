@@ -545,14 +545,15 @@ class PostGISManager:
                     """
                 )
                 nodes = [dict(row) for row in cur.fetchall()]
-                # Load edges with all attributes
+                # Load edges with all attributes including geometry
                 cur.execute(
                     """
                     SELECT
                         id, osm_way_id, start_node_id, end_node_id,
                         length_m, speed_limit_kmh, lanes, oneway,
                         highway_type, capacity, base_travel_time_sec,
-                        bearing, current_load, effective_speed_kmh
+                        bearing, current_load, effective_speed_kmh,
+                        ST_AsText(geometry) as geometry_wkt
                     FROM edges
                     ORDER BY id
                     """
