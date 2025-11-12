@@ -532,33 +532,51 @@ class MainWindowHandlers:
         """Handle route selection in panel.
         
         Args:
-            route_id: Selected route ID
+            route_id: Actual route ID (not index!)
         """
         log.info("route_selected", route_id=route_id)
         
-        # Update agent route if agent is running
-        if self.sim_agent_id is not None:
-            log.info("route_changed_update_agent_route")
-            self._update_agent_route(route_id)
-        
         # Get route data from panel
         routes = self.sidebar.route_panel.routes_data
-        if route_id >= len(routes):
-            log.warning("invalid_route_id", route_id=route_id)
+        
+        # Find route by actual ID
+        selected_route = None
+        for r in routes:
+            if r['id'] == route_id:
+                selected_route = r
+                break
+        
+        if selected_route is None:
+            log.warning("route_not_found", route_id=route_id)
             return
         
-        selected_route = routes[route_id]
-        
-        # Highlight selected route on map
+        # Highlight selected route on map (blue)
         self._highlight_route_on_map(selected_route)
+        
+        # Notify server if agent is running (for auto-switch logic)
+        if self.sim_agent_id is not None:
+            import requests
+            try:
+                response = requests.post(
+                    f"{self.server_url}/sim/agent/{self.sim_agent_id}/consider_route",
+                    params={"route_id": route_id},
+                    timeout=2
+                )
+                response.raise_for_status()
+                log.info(
+                    "agent_considering_route",
+                    agent_id=self.sim_agent_id,
+                    route_id=route_id
+                )
+            except Exception as e:
+                log.error("consider_route_failed", error=str(e))
     
     def _on_points_changed(self) -> None:
-        """Handle points changed (added/removed) - clear routes and stop agent."""
-        log.info("points_changed_clear_routes_stop_agent")
+        """Handle points changed (added/removed) - clear routes but keep agent running."""
+        log.info("points_changed_clear_routes")
         
-        # Stop and delete agent if running
-        if self.sim_agent_id is not None:
-            self._on_delete_agent()
+        # DON'T stop agent - let it finish current route!
+        # User can manually stop with Delete Agent button
         
         # Clear route cache on server (new points = new routes)
         import requests
@@ -574,8 +592,14 @@ class MainWindowHandlers:
         # Clear routes from panel
         self.sidebar.route_panel.clear_routes()
         
-        # Clear routes from map
-        js = "window.mapAPI.clearKRoutes();"
+        # Clear ONLY gray/blue routes from map, keep green (assigned)
+        # DON'T call clearKRoutes() - it would reset assigned route
+        # Instead, just clear the features (displayRoutes with empty list)
+        js = """
+        if (window.app && window.app.displayRoutes) {
+            window.app.displayRoutes({type: 'FeatureCollection', features: []});
+        }
+        """
         self.map_widget.page().runJavaScript(js)
     
     def _display_routes_on_map(self, routes: list) -> None:
@@ -633,14 +657,15 @@ class MainWindowHandlers:
         """
         route_id = route["id"]
         
+        # Use new setSelectedRoute API (blue route)
         js = f"""
-        if (window.app && window.app.highlightRoute) {{
-            window.app.highlightRoute({route_id});
+        if (window.app && window.app.setSelectedRoute) {{
+            window.app.setSelectedRoute({route_id});
         }}
         """
         self.map_widget.page().runJavaScript(js)
         
-        log.debug("route_highlighted", route_id=route_id)
+        log.debug("route_selected", route_id=route_id)
     
     # ========================================================================
     # Simulation Handlers
@@ -662,32 +687,57 @@ class MainWindowHandlers:
             )
             return
         
-        # Use selected route (or first if none selected)
-        selected_id = self.sidebar.route_panel.selected_route_id
-        if selected_id is None or selected_id >= len(routes):
-            selected_id = 0
+        # Use selected route (route panel stores actual route_id, not index!)
+        selected_route_id = self.sidebar.route_panel.selected_route_id
         
-        route = routes[selected_id]
+        # Find route by ID
+        route = None
+        for r in routes:
+            if r['id'] == selected_route_id:
+                route = r
+                break
+        
+        # Fallback to first route if not found
+        if route is None:
+            route = routes[0]
+            log.warning("selected_route_not_found", falling_back_to_first=True)
+        
         route_id = route['id']
         
         # Get simulation speed from panel
         sim_speed = self.sidebar.simulation_panel.sim_speed_spinbox.value()
         
-        # Call API to start agent
+        # Call API to start agent or restart if agent exists
         import requests
         try:
-            response = requests.post(
-                f"{self.server_url}/sim/agent/start",
-                json={
-                    "route_id": route_id,
-                    "sim_speed": sim_speed
-                },
-                timeout=10
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            self.sim_agent_id = data['agent_id']
+            if self.sim_agent_id is not None:
+                # Agent exists - restart with selected route
+                response = requests.post(
+                    f"{self.server_url}/sim/agent/{self.sim_agent_id}/restart",
+                    json={
+                        "route_id": route_id,
+                        "sim_speed": sim_speed
+                    },
+                    timeout=10
+                )
+                response.raise_for_status()
+                data = response.json()
+                log.info("agent_restarted_with_route", route_id=route_id)
+            else:
+                # No agent - create new one
+                response = requests.post(
+                    f"{self.server_url}/sim/agent/start",
+                    json={
+                        "route_id": route_id,
+                        "sim_speed": sim_speed
+                    },
+                    timeout=10
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                self.sim_agent_id = data['agent_id']
+                log.info("agent_started", agent_id=self.sim_agent_id)
             
             # Update UI
             self.sidebar.simulation_panel.set_agent_active(True)
@@ -699,8 +749,6 @@ class MainWindowHandlers:
             
             # Start animation timer
             self._start_simulation_timer()
-            
-            log.info("agent_started", agent_id=self.sim_agent_id)
             
         except Exception as e:
             log.error("start_agent_failed", error=str(e))
@@ -739,16 +787,45 @@ class MainWindowHandlers:
             log.error("stop_agent_failed", error=str(e))
     
     def _on_restart_agent(self) -> None:
-        """Handle Restart Agent button click."""
+        """Handle Restart Agent button click - restart with currently selected route."""
         log.info("restart_agent_clicked")
         
         if self.sim_agent_id is None:
             return
         
+        # Get currently selected route (route panel stores actual route_id!)
+        routes = self.sidebar.route_panel.routes_data
+        if not routes:
+            log.warning("no_routes_available")
+            return
+        
+        selected_route_id = self.sidebar.route_panel.selected_route_id
+        
+        # Find route by ID
+        route = None
+        for r in routes:
+            if r['id'] == selected_route_id:
+                route = r
+                break
+        
+        # Fallback to first route
+        if route is None:
+            route = routes[0]
+            log.warning("selected_route_not_found_using_first")
+        
+        route_id = route['id']
+        
+        # Get current sim_speed
+        sim_speed = self.sidebar.simulation_panel.sim_speed_spinbox.value()
+        
         import requests
         try:
             response = requests.post(
                 f"{self.server_url}/sim/agent/{self.sim_agent_id}/restart",
+                json={
+                    "route_id": route_id,
+                    "sim_speed": sim_speed
+                },
                 timeout=5
             )
             response.raise_for_status()
@@ -764,13 +841,24 @@ class MainWindowHandlers:
                 state=data['state']
             )
             
-            log.info("agent_restarted", agent_id=self.sim_agent_id)
+            log.info("agent_restarted", agent_id=self.sim_agent_id, route_id=route_id)
             
         except Exception as e:
             log.error("restart_agent_failed", error=str(e))
     
     def _update_agent_route(self, route_id: int) -> None:
-        """Update agent's route when user selects different route."""
+        """
+        Handle route selection: try mid-route rerouting (no restart).
+        
+        Logic:
+        - User selects route (candidate) → shown as blue
+        - Call /reroute: check if agent on new route edge
+          - YES: agent switches reference, continues from position
+          - NO: agent continues on old route reference
+        - Green route = agent.assigned_route_id (not selected_id!)
+        
+        Start/Restart buttons will use selected_id for restart.
+        """
         if self.sim_agent_id is None:
             return
         
@@ -787,8 +875,9 @@ class MainWindowHandlers:
         
         import requests
         try:
+            # Try mid-route rerouting (no restart)
             response = requests.post(
-                f"{self.server_url}/sim/agent/{self.sim_agent_id}/update_route",
+                f"{self.server_url}/sim/agent/{self.sim_agent_id}/reroute",
                 json={
                     "route_id": route_api_id,
                     "sim_speed": sim_speed
@@ -798,17 +887,14 @@ class MainWindowHandlers:
             response.raise_for_status()
             data = response.json()
             
-            # Restart timer
-            self._start_simulation_timer()
-            
-            # Update UI
+            # Update UI (no timer restart - agent continues)
             self.sidebar.simulation_panel.update_agent_status(
                 speed_kmh=data['speed_kmh'],
                 eta_seconds=data['eta_seconds'],
                 state=data['state']
             )
             
-            log.info("agent_route_updated", new_route_id=route_api_id)
+            log.info("reroute_attempted", candidate_route_id=route_api_id)
             
         except Exception as e:
             log.error("update_agent_route_failed", error=str(e))
@@ -926,6 +1012,8 @@ class MainWindowHandlers:
             
             # Update map
             position = data['position']
+            assigned_route_id = data.get('assigned_route_id', None)
+            
             js = f"""
             if (window.app && window.app.updateAgent) {{
                 window.app.updateAgent({{
@@ -936,6 +1024,15 @@ class MainWindowHandlers:
             }}
             """
             self.map_widget.page().runJavaScript(js)
+            
+            # Update assigned route visualization (green)
+            if assigned_route_id is not None:
+                js_assigned = f"""
+                if (window.app && window.app.setAssignedRoute) {{
+                    window.app.setAssignedRoute({assigned_route_id});
+                }}
+                """
+                self.map_widget.page().runJavaScript(js_assigned)
             
             # Update status panel
             self.sidebar.simulation_panel.update_agent_status(

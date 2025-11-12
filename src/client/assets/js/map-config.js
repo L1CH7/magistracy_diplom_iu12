@@ -70,12 +70,17 @@ export const MAP_CONFIG = {
     // K-routes styling (multiple alternative routes)
     kRoutes: {
       inactive: {
-        color: '#94a3b8',      // Gray for inactive routes
+        color: '#94a3b8',      // Gray for all proposed routes
         width: 3,
         opacity: 0.6,
       },
-      active: {
-        color: '#22c55e',      // Green for selected route
+      selected: {
+        color: '#3b82f6',      // Blue for user-selected route
+        width: 5,
+        opacity: 1.0,
+      },
+      assigned: {
+        color: '#22c55e',      // Green for agent's assigned route
         width: 5,
         opacity: 1.0,
       },

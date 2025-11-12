@@ -12,8 +12,8 @@ class SimulationConfig:
     """Configuration for agent simulation."""
     
     # Simulation speed (1.0 = real-time, 100.0 = 100x faster)
-    default_sim_speed: float = 1.0
-    min_sim_speed: float = 1.0
+    default_sim_speed: float = 30.0
+    min_sim_speed: float = 0.25
     max_sim_speed: float = 100.0
     sim_speed_step: float = 1.0
     

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import time
 from typing import List, Dict, Any
@@ -113,6 +114,7 @@ class SimAgentPositionResponse(BaseModel):
     eta_seconds: float
     state: str  # moving, stopped, waiting, etc
     is_finished: bool
+    assigned_route_id: int = None  # Agent's current route (for visualization)
 
 
 class OsmLoadRequest(BaseModel):
@@ -131,8 +133,68 @@ next_agent_id = 1
 # Simulation agents storage
 sim_agents: Dict[int, 'SimulationAgent'] = {}  # agent_id -> SimulationAgent
 sim_routes: Dict[int, Dict] = {}  # agent_id -> route_data (edges, coords, distance)
+sim_selected_routes: Dict[int, int] = {}  # agent_id -> selected_route_id (from client)
 next_sim_agent_id = 1
+next_route_id = 0  # Global unique route ID counter
 _tile_hosts = cycle(["a", "b", "c"])  # for upstream OSM subdomains
+
+
+def calculate_eta_seconds(
+    agent: 'SimulationAgent',
+    route_data: dict,
+    graph,
+    current_edge_id: int = None,
+    edge_progress: float = None
+) -> float:
+    """
+    Calculate ETA (remaining time) from current position to route end.
+    
+    If current_edge_id and edge_progress provided: calculates from that position.
+    Otherwise: uses agent's current position from agent.current_edge_index/progress.
+    
+    Algorithm:
+    1. If at start (progress=0): return total_time_sec from route_data
+    2. Calculate remaining distance based on current progress
+    3. Apply congestion factor to each remaining edge
+    4. Return time in SIMULATION seconds (not real-time)
+    
+    Args:
+        agent: SimulationAgent with current position
+        route_data: Route dict with 'edges', 'total_time_sec', 'total_distance_m'
+        graph: Graph instance for edge speed limits
+        current_edge_id: Optional explicit edge ID (for prediction)
+        edge_progress: Optional explicit progress on edge [0.0-1.0]
+        
+    Returns:
+        ETA in simulation seconds
+    """
+    # Use explicit position if provided, otherwise agent's current
+    total_time_sec = route_data.get('total_time_sec', 0.0)
+    
+    # If at start (progress=0), return full route time
+    overall_progress = agent.current_progress
+    
+    print(f"ETA_CALC: agent={agent.agent_id}, progress={overall_progress:.3f}, total_time={total_time_sec}, sim_speed={agent.sim_speed}", flush=True)
+    
+    if overall_progress <= 0.01:  # Within 1% of start
+        eta = total_time_sec  # Return REAL-TIME eta (not sim-time)
+        print(f"ETA_AT_START: eta={eta:.2f} sec", flush=True)
+        return eta
+    
+    # If finished
+    if overall_progress >= 0.99:
+        print("ETA_FINISHED: returning 0", flush=True)
+        return 0.0
+    
+    # Calculate remaining time based on progress
+    # Simple approach: remaining_time = total_time * (1 - progress)
+    # TODO: Add congestion factor per edge
+    remaining_fraction = 1.0 - overall_progress
+    eta_real_time = total_time_sec * remaining_fraction
+    
+    print(f"ETA_RESULT: remaining={remaining_fraction:.3f}, eta={eta_real_time:.2f} sec", flush=True)
+    
+    return eta_real_time
 
 
 def _load_graph() -> nx.MultiDiGraph:
@@ -192,8 +254,14 @@ def _load_graph() -> nx.MultiDiGraph:
 
 @app.on_event("startup")
 def startup_event() -> None:
-    global G, engine, cached_graph
+    global G, engine, cached_graph, sim_agents, sim_routes
     try:
+        # Clear simulation state on restart
+        sim_agents.clear()
+        sim_routes.clear()
+        sim_selected_routes.clear()
+        log.info("Simulation state cleared on startup")
+        
         G = _load_graph()
         log.info("Graph loaded for routing", nodes=G.number_of_nodes())
         engine = SimpleRouteEngine(G)
@@ -296,9 +364,14 @@ def post_routes(req: RouteRequest) -> RouteResponse:
                    "Try selecting points closer together or on connected roads."
         )
 
-    # Convert to response format
+    # Convert to response format with GLOBAL unique route IDs
+    global next_route_id
     routes_data = []
     for route in routes:
+        # Assign globally unique route_id
+        route.id = next_route_id
+        next_route_id += 1
+        
         routes_data.append({
             "id": route.id,
             "edges": route.edge_ids,
@@ -445,12 +518,17 @@ def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
         raise HTTPException(status_code=500, detail="Graph not loaded")
     
     # Find route in cache (simple lookup by route_id)
-    # TODO: Better route storage/retrieval
     route_data = None
     for cached_response in route_cache.values():
         for route in cached_response.routes:
             if route['id'] == req.route_id:
                 route_data = route
+                log.info(
+                    "route_found_in_cache",
+                    route_id=req.route_id,
+                    route_edges=route['edges'][:3],  # First 3 edges
+                    total_edges=len(route['edges'])
+                )
                 break
         if route_data:
             break
@@ -465,20 +543,10 @@ def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
     agent_id = next_sim_agent_id
     next_sim_agent_id += 1
     
-    # Extract speed limits for each edge from graph
-    edge_speed_limits = []
-    for edge_id in route_data['edges']:
-        edge = cached_graph.get_edge(edge_id)
-        if edge:
-            edge_speed_limits.append(edge.speed_limit_kmh)
-        else:
-            edge_speed_limits.append(50.0)  # fallback
-    
+    # Create agent with route reference (not snapshot)
     agent = SimulationAgent(
         agent_id=agent_id,
-        route_edges=route_data['edges'],
-        route_coords=route_data['geometry'],
-        edge_speed_limits=edge_speed_limits,
+        assigned_route_id=req.route_id,
         sim_speed=req.sim_speed
     )
     
@@ -486,9 +554,10 @@ def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
     sim_routes[agent_id] = route_data
     
     # Get initial position
-    lon, lat, bearing, current_speed = agent.get_current_position(
-        route_distance_m=route_data['total_distance_m'],
-        elapsed_time_sec=0.0
+    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+        route_data=route_data,
+        elapsed_time_sec=0.0,
+        graph=cached_graph
     )
     
     # Convert m/s to km/h
@@ -508,7 +577,8 @@ def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
         speed_kmh=speed_kmh,
         eta_seconds=route_data['total_time_sec'] / req.sim_speed,
         state="Moving",
-        is_finished=False
+        is_finished=False,
+        assigned_route_id=agent.assigned_route_id
     )
 
 
@@ -523,29 +593,105 @@ def sim_agent_position(agent_id: int) -> SimAgentPositionResponse:
     if not route_data:
         raise HTTPException(status_code=500, detail="Route data lost")
     
+    # CRITICAL: Verify route consistency
+    stored_route_id = route_data.get('id')
+    if stored_route_id != agent.assigned_route_id:
+        log.error(
+            "route_mismatch_detected",
+            agent_id=agent_id,
+            assigned_route_id=agent.assigned_route_id,
+            stored_route_id=stored_route_id
+        )
+        # Try to find correct route in cache
+        correct_route = None
+        for cached_response in route_cache.values():
+            for route in cached_response.routes:
+                if route['id'] == agent.assigned_route_id:
+                    correct_route = route
+                    sim_routes[agent_id] = route
+                    log.info(
+                        "route_corrected",
+                        agent_id=agent_id,
+                        route_id=agent.assigned_route_id
+                    )
+                    route_data = route
+                    break
+            if correct_route:
+                break
+        
+        if not correct_route:
+            log.error("cannot_find_assigned_route", agent_id=agent_id)
+    
+    # Only log every 30th request to avoid spam
+    if agent_id % 30 == 0 or agent.current_progress > 0.95:
+        log.info(
+            "position_request",
+            agent_id=agent_id,
+            assigned_route_id=agent.assigned_route_id,
+            stored_route_id=route_data.get('id', 'MISSING'),
+            progress=f"{agent.current_progress:.2f}"
+        )
+    
     # Calculate elapsed time
     elapsed_time = time.time() - agent.start_time
     
-    # Get position
-    lon, lat, bearing, current_speed = agent.get_current_position(
-        route_distance_m=route_data['total_distance_m'],
-        elapsed_time_sec=elapsed_time
+    # AUTO-SWITCH LOGIC: Check if agent can switch to selected route
+    selected_route_id = sim_selected_routes.get(agent_id)
+    if (selected_route_id is not None and
+            selected_route_id != agent.assigned_route_id):
+        # Find selected route in cache
+        selected_route_data = None
+        for cached_response in route_cache.values():
+            for route in cached_response.routes:
+                if route['id'] == selected_route_id:
+                    selected_route_data = route
+                    break
+            if selected_route_data:
+                break
+        
+        if selected_route_data:
+            # Check if agent can switch
+            can_switch, new_edge_idx = agent.can_switch_to_route(
+                current_route_data=route_data,
+                new_route_data=selected_route_data,
+                elapsed_time_sec=elapsed_time,
+                graph=cached_graph,
+                lookahead_seconds=5.0
+            )
+            
+            if can_switch:
+                log.info(
+                    "auto_switch_route",
+                    agent_id=agent_id,
+                    old_route_id=agent.assigned_route_id,
+                    new_route_id=selected_route_id,
+                    new_edge_index=new_edge_idx
+                )
+                # Switch to new route
+                agent.assigned_route_id = selected_route_id
+                sim_routes[agent_id] = selected_route_data
+                route_data = selected_route_data
+                
+                # Update position on new route
+                if new_edge_idx is not None:
+                    agent.current_edge_index = new_edge_idx
+                    agent.current_edge_progress = 0.0
+                
+                # Clear selected route (already assigned)
+                del sim_selected_routes[agent_id]
+    
+    # Get position with dynamic route data
+    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+        route_data=route_data,
+        elapsed_time_sec=elapsed_time,
+        graph=cached_graph
     )
     
     # Convert m/s to km/h
     speed_kmh = current_speed * 3.6
     
-    # Calculate ETA in SIMULATION time (not real time)
-    # Remaining distance
-    remaining_distance = route_data['total_distance_m'] * (
-        1.0 - agent.current_progress
-    )
-    # Average speed for remaining distance (assume max_speed)
-    avg_speed = agent.params.max_speed  # m/s
-    # Simulation time remaining
-    sim_time_remaining = (
-        remaining_distance / avg_speed if avg_speed > 0 else 0
-    )
+    # Calculate DYNAMIC ETA by analyzing remaining edges
+    sim_time_remaining = calculate_eta_seconds(agent, route_data, cached_graph)
     
     return SimAgentPositionResponse(
         agent_id=agent_id,
@@ -553,7 +699,8 @@ def sim_agent_position(agent_id: int) -> SimAgentPositionResponse:
         speed_kmh=speed_kmh,
         eta_seconds=sim_time_remaining,
         state="Moving" if agent.is_running else "Stopped",
-        is_finished=agent.current_progress >= 1.0
+        is_finished=agent.current_progress >= 1.0,
+        assigned_route_id=agent.assigned_route_id
     )
 
 
@@ -570,9 +717,18 @@ def sim_agent_stop(agent_id: int) -> dict:
     return {"status": "stopped"}
 
 
+class SimAgentRestartRequest(BaseModel):
+    """Request to restart agent with optional route change."""
+    route_id: int = None  # Optional: switch to new route before restart
+    sim_speed: float = None  # Optional: change simulation speed
+
+
 @app.post("/sim/agent/{agent_id}/restart")
-def sim_agent_restart(agent_id: int) -> SimAgentPositionResponse:
-    """Restart simulation agent from beginning."""
+def sim_agent_restart(
+    agent_id: int,
+    req: SimAgentRestartRequest = None
+) -> SimAgentPositionResponse:
+    """Restart simulation agent from beginning, optionally with new route."""
     agent = sim_agents.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -581,16 +737,69 @@ def sim_agent_restart(agent_id: int) -> SimAgentPositionResponse:
     if not route_data:
         raise HTTPException(status_code=500, detail="Route data lost")
     
+    # If route_id provided, switch to new route
+    if req and req.route_id is not None:
+        # Find new route in cache
+        new_route_data = None
+        for cached_response in route_cache.values():
+            for route in cached_response.routes:
+                if route['id'] == req.route_id:
+                    new_route_data = route
+                    break
+            if new_route_data:
+                break
+        
+        if not new_route_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Route {req.route_id} not found in cache"
+            )
+        
+        # Update agent's route reference AND stored route
+        agent.assigned_route_id = req.route_id
+        sim_routes[agent_id] = new_route_data
+        route_data = new_route_data  # Update local var for use below
+        
+        log.info(
+            "agent_route_changed_on_restart",
+            agent_id=agent_id,
+            new_route_id=req.route_id,
+            new_edges_count=len(new_route_data['edges'])
+        )
+    
+    # Update sim_speed if provided
+    if req and req.sim_speed is not None:
+        agent.sim_speed = req.sim_speed
+    
+    log.info(
+        "before_agent_restart",
+        agent_id=agent_id,
+        current_edge_index=agent.current_edge_index,
+        current_progress=agent.current_progress
+    )
+    
+    # CRITICAL: Reset agent to beginning of (possibly new) route
     agent.restart()
     
-    # Get initial position
-    lon, lat, bearing, current_speed = agent.get_current_position(
-        route_distance_m=route_data['total_distance_m'],
-        elapsed_time_sec=0.0
+    log.info(
+        "after_agent_restart",
+        agent_id=agent_id,
+        current_edge_index=agent.current_edge_index,
+        current_progress=agent.current_progress
+    )
+    
+    # Get initial position with (possibly updated) route data
+    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+        route_data=route_data,
+        elapsed_time_sec=0.0,
+        graph=cached_graph
     )
     
     # Convert m/s to km/h
     speed_kmh = current_speed * 3.6
+    
+    # Calculate dynamic ETA
+    sim_time_remaining = calculate_eta_seconds(agent, route_data, cached_graph)
     
     log.info("Agent restarted", agent_id=agent_id)
     
@@ -598,85 +807,175 @@ def sim_agent_restart(agent_id: int) -> SimAgentPositionResponse:
         agent_id=agent_id,
         position={"lon": lon, "lat": lat, "bearing_degrees": bearing},
         speed_kmh=speed_kmh,
-        eta_seconds=route_data['total_time_sec'] / agent.sim_speed,
+        eta_seconds=sim_time_remaining,
         state="Moving",
-        is_finished=False
+        is_finished=False,
+        assigned_route_id=agent.assigned_route_id
     )
 
 
-@app.post("/sim/agent/{agent_id}/update_route")
-def sim_agent_update_route(
+@app.post("/sim/agent/{agent_id}/consider_route")
+def sim_agent_consider_route(agent_id: int, route_id: int) -> dict:
+    """
+    Set selected route for agent (blue route on map).
+    Agent will auto-switch if it can reach the route.
+    
+    Args:
+        agent_id: Agent ID
+        route_id: Route ID to consider
+        
+    Returns:
+        Status dict
+    """
+    agent = sim_agents.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Store selected route
+    sim_selected_routes[agent_id] = route_id
+    log.info(
+        "agent_considering_route",
+        agent_id=agent_id,
+        route_id=route_id,
+        assigned_route_id=agent.assigned_route_id
+    )
+    
+    return {"status": "ok", "selected_route_id": route_id}
+
+
+@app.post("/sim/agent/{agent_id}/reroute")
+def sim_agent_reroute(
     agent_id: int,
     req: SimAgentStartRequest
 ) -> SimAgentPositionResponse:
-    """Update agent's route (swap to different route)."""
+    """
+    Mid-route rerouting: Change agent's route without restarting.
+    
+    Agent checks if current position is on ANY edge of new route:
+    - If YES: continues on new route from current position
+    - If NO: continues on old route (ignores reroute request)
+    """
     global cached_graph
     
     agent = sim_agents.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     
+    old_route_data = sim_routes.get(agent_id)
+    if not old_route_data:
+        raise HTTPException(status_code=500, detail="Route data lost")
+    
     if cached_graph is None:
         raise HTTPException(status_code=500, detail="Graph not loaded")
     
     # Find new route in cache
-    route_data = None
+    new_route_data = None
     for cached_response in route_cache.values():
         for route in cached_response.routes:
             if route['id'] == req.route_id:
-                route_data = route
+                new_route_data = route
                 break
-        if route_data:
+        if new_route_data:
             break
     
-    if not route_data:
+    if not new_route_data:
         raise HTTPException(
             status_code=404,
             detail=f"Route {req.route_id} not found in cache"
         )
     
-    # Extract speed limits for new route
-    edge_speed_limits = []
-    for edge_id in route_data['edges']:
-        edge = cached_graph.get_edge(edge_id)
-        if edge:
-            edge_speed_limits.append(edge.speed_limit_kmh)
-        else:
-            edge_speed_limits.append(50.0)
-    
-    # Update agent's route data
-    agent.route_edges = route_data['edges']
-    agent.route_coords = route_data['geometry']
-    agent.edge_speed_limits = edge_speed_limits
-    agent.sim_speed = req.sim_speed
-    
-    # Restart from beginning
-    agent.restart()
-    
-    # Update stored route data
-    sim_routes[agent_id] = route_data
-    
-    # Get initial position
-    lon, lat, bearing, current_speed = agent.get_current_position(
-        route_distance_m=route_data['total_distance_m'],
-        elapsed_time_sec=0.0
+    # Get current position on old route
+    elapsed_time = time.time() - agent.start_time
+    lon, lat, bearing, current_speed, old_edge_id = agent.get_current_position(
+        route_data=old_route_data,
+        elapsed_time_sec=elapsed_time,
+        graph=cached_graph
     )
     
-    speed_kmh = current_speed * 3.6
+    # Check if agent can switch to new route (predictive with time margin)
+    new_edges = new_route_data['edges']
+    old_route_id = agent.assigned_route_id  # Save before updating
+    
+    # Find if current edge is on new route
+    edge_in_new_route = old_edge_id in new_edges
     
     log.info(
-        "Agent route updated",
+        "reroute_attempt",
         agent_id=agent_id,
-        new_route_id=req.route_id
+        old_route_id=old_route_id,
+        new_route_id=req.route_id,
+        current_edge=old_edge_id,
+        edge_in_new_route=edge_in_new_route
+    )
+    
+    # Predictive rerouting: check if agent has time to react
+    # TODO: Add time prediction (need 1km @ 100km/h is ok, 100m is not)
+    can_reroute = edge_in_new_route
+    
+    if can_reroute:
+        # Agent is on new route! Switch to it
+        new_edge_index = new_edges.index(old_edge_id)
+        
+        # Update agent's route reference
+        agent.assigned_route_id = req.route_id
+        agent.sim_speed = req.sim_speed
+        
+        # Calculate new start_time to maintain current position
+        # Distance covered on new route up to current edge
+        new_coords = new_route_data['geometry']
+        segments_covered = new_edge_index
+        # Distance from start of new route to current edge
+        distance_to_current_edge = agent.current_progress * old_route_data['total_distance_m']
+        # Adjust start_time so elapsed_time produces this distance
+        adjusted_sim_time = distance_to_current_edge / agent.params.max_speed
+        agent.start_time = time.time() - (adjusted_sim_time / agent.sim_speed)
+        
+        # Update stored route data
+        sim_routes[agent_id] = new_route_data
+        
+        log.info(
+            "agent_rerouted_success",
+            agent_id=agent_id,
+            old_route_id=old_route_id,
+            new_route_id=req.route_id,
+            current_edge=old_edge_id,
+            new_edge_index=new_edge_index,
+            old_edges_count=len(old_route_data['edges']),
+            new_edges_count=len(new_route_data['edges'])
+        )
+    else:
+        # Agent NOT on new route - continue on old route (ignore reroute)
+        log.info(
+            "reroute_ignored",
+            agent_id=agent_id,
+            current_edge=old_edge_id,
+            new_route_id=req.route_id,
+            reason="agent_not_on_new_route"
+        )
+    
+    # Get current position (now with potentially updated route)
+    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+        route_data=sim_routes[agent_id],
+        elapsed_time_sec=time.time() - agent.start_time,
+        graph=cached_graph
+    )
+    
+    # Convert m/s to km/h
+    speed_kmh = current_speed * 3.6
+    
+    # Calculate dynamic ETA
+    sim_time_remaining = calculate_eta_seconds(
+        agent, sim_routes[agent_id], cached_graph
     )
     
     return SimAgentPositionResponse(
         agent_id=agent_id,
         position={"lon": lon, "lat": lat, "bearing_degrees": bearing},
         speed_kmh=speed_kmh,
-        eta_seconds=route_data['total_time_sec'] / agent.sim_speed,
-        state="Moving",
-        is_finished=False
+        eta_seconds=sim_time_remaining,
+        state="Moving" if agent.is_running else "Stopped",
+        is_finished=agent.current_progress >= 1.0,
+        assigned_route_id=agent.assigned_route_id
     )
 
 

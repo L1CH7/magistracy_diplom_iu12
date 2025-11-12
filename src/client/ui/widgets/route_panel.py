@@ -149,14 +149,14 @@ class RoutePanel(QWidget):
             self.route_selected.emit(route_id)
     
     def _highlight_selected_route(self, route_id: int):
-        """Highlight selected route in list with green background."""
+        """Highlight selected route in list with blue background."""
         for i in range(self.routes_list.count()):
             item = self.routes_list.item(i)
             item_route_id = item.data(Qt.UserRole)
             
             if item_route_id == route_id:
-                # Selected route: green background
-                item.setBackground(QColor("#10b981"))
+                # Selected route: blue background
+                item.setBackground(QColor("#3b82f6"))
                 item.setForeground(Qt.white)
             else:
                 # Other routes: default transparent background
@@ -219,11 +219,15 @@ class RoutePanel(QWidget):
             self.routes_list.addItem(item)
 
         # Highlight first route (best) by default
-        self.selected_route_id = 0  # Select first route
-        self._highlight_selected_route(0)
+        first_route_id = routes[0]['id']
+        self.selected_route_id = first_route_id  # Store actual route ID
+        self._highlight_selected_route(first_route_id)
         self.routes_list.setCurrentRow(0)
+        
+        # Emit selection to sync with map (blue highlight)
+        self.route_selected.emit(first_route_id)
 
-        log.info("Routes displayed", num_routes=len(routes))
+        log.info("Routes displayed", num_routes=len(routes), auto_selected=first_route_id)
 
     def clear_routes(self):
         """Clear routes list."""

@@ -24,27 +24,33 @@ class SimulationAgent:
     """
     Simulation agent that moves along a route.
     
+    NEW ARCHITECTURE: Agent holds route_id reference (not snapshot).
+    Route data is queried dynamically from route_cache.
+    
     Attributes:
         agent_id: Unique agent identifier
-        route_edges: List of edge IDs (route path)
-        route_coords: List of (lon, lat) coordinates for the full route
-        edge_speed_limits: List of speed limits (km/h) for each edge
+        assigned_route_id: Reference to route in route_cache (DYNAMIC!)
+        current_edge_index: Current position in route.edge_ids list
+        current_edge_progress: Progress along current edge [0.0 to 1.0]
         sim_speed: Simulation speed multiplier (1.0 = real-time, 10.0 = 10x faster)
         start_time: Simulation start timestamp (seconds since epoch)
-        current_progress: Progress along route [0.0 to 1.0]
+        total_distance_traveled_m: Total distance traveled (meters)
         is_running: Whether simulation is active
         driver_type: 'normal' (50-55 km/h) or 'hurry' (57-59 km/h)
         params: Agent physical parameters
     """
     agent_id: int
-    route_edges: List[int]
-    route_coords: List[Tuple[float, float]]  # [(lon, lat), ...]
-    edge_speed_limits: List[float] = field(default_factory=list)  # km/h per edge
+    assigned_route_id: int  # Reference to route (not snapshot!)
+    current_edge_index: int = 0  # Position in route.edge_ids
+    current_edge_progress: float = 0.0  # Progress on current edge [0.0-1.0]
+    current_progress: float = 0.0  # Overall progress [0.0-1.0]
     sim_speed: float = 1.0  # 1x speed by default
     start_time: float = field(default_factory=time.time)
-    current_progress: float = 0.0  # 0.0 to 1.0
+    total_distance_traveled_m: float = 0.0  # Total distance since start
     is_running: bool = True
     driver_type: str = 'normal'  # 'normal' or 'hurry'
+    # Final position (saved when route completes)
+    final_position: Tuple[float, float, float, int] = (0.0, 0.0, 0.0, 0)
     params: AgentParams = field(default_factory=lambda: AgentParams(
         max_speed=13.89,  # 50 km/h default
         power=1.0,
@@ -54,70 +60,150 @@ class SimulationAgent:
     
     def get_current_position(
         self,
-        route_distance_m: float,
-        elapsed_time_sec: float
-    ) -> Tuple[float, float, float, float]:
+        route_data: dict,
+        elapsed_time_sec: float,
+        graph
+    ) -> Tuple[float, float, float, float, int]:
         """
-        Calculate current position based on elapsed time.
+        Calculate current position based on elapsed time and route reference.
+        
+        NEW: Route data is passed dynamically (not stored in agent).
         
         Args:
-            route_distance_m: Total route distance in meters
+            route_data: Route dict with 'edges', 'geometry', 'total_distance_m'
             elapsed_time_sec: Real time elapsed since start (seconds)
+            graph: Graph instance for edge speed limits
             
         Returns:
-            Tuple of (lon, lat, bearing_degrees, current_speed_mps)
+            Tuple of (lon, lat, bearing_degrees, current_speed_mps, current_edge_id)
             bearing_degrees: Direction of movement in degrees (0-360, 0=North)
-            current_speed_mps: Current speed in m/s (considering acceleration/deceleration)
+            current_speed_mps: Current speed in m/s
+            current_edge_id: Current edge agent is on
         """
-        if not self.is_running or not self.route_coords:
-            # Return first coordinate if not running
-            if self.route_coords:
-                return (*self.route_coords[0], 0.0, 0.0)
-            return (0.0, 0.0, 0.0, 0.0)
+        if not self.is_running:
+            # Return saved final position if agent finished
+            if self.final_position != (0.0, 0.0, 0.0, 0):
+                lon, lat, bearing, edge_id = self.final_position
+                return (lon, lat, bearing, 0.0, edge_id)
+            # Otherwise return first coordinate (initial state)
+            route_coords = route_data.get('geometry', [])
+            if route_coords:
+                first_edge = route_data['edges'][0] if route_data['edges'] else 0
+                return (*route_coords[0], 0.0, 0.0, first_edge)
+            return (0.0, 0.0, 0.0, 0.0, 0)
+        
+        route_edges = route_data['edges']
+        route_coords = route_data['geometry']
+        route_distance_m = route_data['total_distance_m']
+        
+        # Debug: log route being used (every 100 calls)
+        if int(elapsed_time_sec * 10) % 100 == 0:
+            import logging
+            log = logging.getLogger(__name__)
+            log.info(
+                f"agent_using_route: id={self.agent_id}, "
+                f"assigned_route={self.assigned_route_id}, "
+                f"edges={route_edges[:3] if route_edges else []}"
+            )
+        
+        if not route_edges or not route_coords:
+            return (0.0, 0.0, 0.0, 0.0, 0)
         
         # Calculate distance traveled (sim_speed affects time)
         sim_time = elapsed_time_sec * self.sim_speed
         distance_traveled = sim_time * self.params.max_speed  # meters
         
+        # Update total distance
+        self.total_distance_traveled_m = distance_traveled
+        
         # Calculate progress [0.0 to 1.0]
         if route_distance_m > 0:
-            self.current_progress = min(distance_traveled / route_distance_m, 1.0)
+            overall_progress = min(distance_traveled / route_distance_m, 1.0)
         else:
-            self.current_progress = 1.0
+            overall_progress = 1.0
         
-        # Calculate current speed with acceleration/deceleration
-        current_speed = self._calculate_current_speed(
-            self.current_progress, route_distance_m
-        )
-        
-        # If reached end, stop
-        if self.current_progress >= 1.0:
+        # If reached end, stop and save final position
+        if overall_progress >= 1.0:
             self.is_running = False
-            # Return last coordinate
-            lon, lat = self.route_coords[-1]
+            self.current_progress = 1.0
+            lon, lat = route_coords[-1]
+            last_edge = route_edges[-1]
             # Calculate bearing from second-to-last to last point
-            if len(self.route_coords) >= 2:
+            if len(route_coords) >= 2:
                 bearing = self._calculate_bearing(
-                    self.route_coords[-2], self.route_coords[-1]
+                    route_coords[-2], route_coords[-1]
                 )
             else:
                 bearing = 0.0
-            return (lon, lat, bearing, 0.0)
+            # Save final position to prevent teleportation
+            self.final_position = (lon, lat, bearing, last_edge)
+            return (lon, lat, bearing, 0.0, last_edge)
+        
+        # Find current edge based on progress
+        self.current_edge_index, self.current_edge_progress = \
+            self._find_edge_at_progress(overall_progress, len(route_coords))
+        
+        # Update overall progress for external use (e.g., ETA calculation)
+        self.current_progress = overall_progress
+        
+        current_edge_id = route_edges[min(
+            self.current_edge_index,
+            len(route_edges) - 1
+        )]
+        
+        # Calculate current speed
+        current_speed = self._calculate_current_speed_dynamic(
+            overall_progress, route_distance_m, route_edges, route_coords, graph
+        )
         
         # Interpolate position along route
-        lon, lat = self._interpolate_position(self.current_progress)
-        bearing = self._calculate_bearing_at_progress(self.current_progress)
+        lon, lat = self._interpolate_position(overall_progress, route_coords)
+        bearing = self._calculate_bearing_at_progress(overall_progress, route_coords)
         
-        return (lon, lat, bearing, current_speed)
+        return (lon, lat, bearing, current_speed, current_edge_id)
     
-    def _calculate_current_speed(
+    def _find_edge_at_progress(
+        self,
+        overall_progress: float,
+        total_segments: int
+    ) -> Tuple[int, float]:
+        """
+        Find which edge (segment) agent is on based on overall progress.
+        
+        Args:
+            overall_progress: Overall route progress [0.0-1.0]
+            total_segments: Total number of segments (len(coords) - 1)
+            
+        Returns:
+            (edge_index, progress_on_edge)
+        """
+        if overall_progress <= 0.0:
+            return (0, 0.0)
+        if overall_progress >= 1.0:
+            return (total_segments - 1, 1.0)
+        
+        segment_progress = overall_progress * total_segments
+        edge_index = int(segment_progress)
+        progress_on_edge = segment_progress - edge_index
+        
+        # Clamp
+        if edge_index >= total_segments:
+            return (total_segments - 1, 1.0)
+        
+        return (edge_index, progress_on_edge)
+    
+    def _calculate_current_speed_dynamic(
         self,
         progress: float,
-        route_distance_m: float
+        route_distance_m: float,
+        route_edges: List[int],
+        route_coords: List[Tuple[float, float]],
+        graph
     ) -> float:
         """
-        Calculate current speed with acceleration/deceleration.
+        Calculate current speed dynamically from graph edge data.
         
+        NEW: Speed queried from graph (not stored in agent).
         Speed based on edge speed limit + RF non-penalty margin (+19 km/h).
         Driver types: 'normal' (50-55 km/h) or 'hurry' (57-59 km/h).
         Speed fluctuates randomly.
@@ -125,20 +211,23 @@ class SimulationAgent:
         Args:
             progress: Route completion [0.0 to 1.0]
             route_distance_m: Total route distance in meters
+            route_edges: List of edge IDs
+            route_coords: Route coordinates
+            graph: Graph instance
             
         Returns:
             Current speed in m/s
         """
         import random
         
-        # Get speed limit for current segment
-        if self.edge_speed_limits and len(self.route_coords) > 1:
-            total_segments = len(self.route_coords) - 1
-            segment_idx = min(
-                int(progress * total_segments),
-                len(self.edge_speed_limits) - 1
-            )
-            speed_limit_kmh = self.edge_speed_limits[segment_idx]
+        # Get speed limit for current edge from graph
+        if route_edges and self.current_edge_index < len(route_edges):
+            edge_id = route_edges[self.current_edge_index]
+            edge = graph.get_edge(edge_id)
+            if edge:
+                speed_limit_kmh = edge.speed_limit_kmh
+            else:
+                speed_limit_kmh = 50.0  # fallback
         else:
             speed_limit_kmh = 50.0  # fallback
         
@@ -174,22 +263,22 @@ class SimulationAgent:
             return max_speed * (remaining / decel_zone)
         
         # Check for turns (change in bearing between segments)
-        if len(self.route_coords) >= 3:
-            total_segments = len(self.route_coords) - 1
+        if len(route_coords) >= 3:
+            total_segments = len(route_coords) - 1
             segment_idx = int(progress * total_segments)
             
             # Check if near a turn point
-            for i in range(max(1, segment_idx - 1), 
-                          min(total_segments - 1, segment_idx + 2)):
-                if i <= 0 or i >= len(self.route_coords) - 1:
+            for i in range(max(1, segment_idx - 1),
+                           min(total_segments - 1, segment_idx + 2)):
+                if i <= 0 or i >= len(route_coords) - 1:
                     continue
                 
                 # Calculate bearing change at this point
                 bearing_in = self._calculate_bearing(
-                    self.route_coords[i-1], self.route_coords[i]
+                    route_coords[i-1], route_coords[i]
                 )
                 bearing_out = self._calculate_bearing(
-                    self.route_coords[i], self.route_coords[i+1]
+                    route_coords[i], route_coords[i+1]
                 )
                 bearing_change = abs(bearing_out - bearing_in)
                 # Normalize to 0-180
@@ -209,66 +298,76 @@ class SimulationAgent:
         # Cruising speed
         return max_speed
     
-    def _interpolate_position(self, progress: float) -> Tuple[float, float]:
+    def _interpolate_position(
+        self,
+        progress: float,
+        route_coords: List[Tuple[float, float]]
+    ) -> Tuple[float, float]:
         """
         Interpolate position along route based on progress.
         
         Args:
             progress: Route completion [0.0 to 1.0]
+            route_coords: Route coordinates
             
         Returns:
             (lon, lat) tuple
         """
-        if not self.route_coords:
+        if not route_coords:
             return (0.0, 0.0)
         
         if progress <= 0.0:
-            return self.route_coords[0]
+            return route_coords[0]
         if progress >= 1.0:
-            return self.route_coords[-1]
+            return route_coords[-1]
         
         # Find which segment we're on
-        total_segments = len(self.route_coords) - 1
+        total_segments = len(route_coords) - 1
         segment_progress = progress * total_segments
         segment_idx = int(segment_progress)
         
         # Clamp to valid range
         if segment_idx >= total_segments:
-            return self.route_coords[-1]
+            return route_coords[-1]
         
         # Linear interpolation within segment
         local_progress = segment_progress - segment_idx
-        p1 = self.route_coords[segment_idx]
-        p2 = self.route_coords[segment_idx + 1]
+        p1 = route_coords[segment_idx]
+        p2 = route_coords[segment_idx + 1]
         
         lon = p1[0] + (p2[0] - p1[0]) * local_progress
         lat = p1[1] + (p2[1] - p1[1]) * local_progress
         
         return (lon, lat)
     
-    def _calculate_bearing_at_progress(self, progress: float) -> float:
+    def _calculate_bearing_at_progress(
+        self,
+        progress: float,
+        route_coords: List[Tuple[float, float]]
+    ) -> float:
         """
         Calculate bearing (direction) at given progress.
         
         Args:
             progress: Route completion [0.0 to 1.0]
+            route_coords: Route coordinates
             
         Returns:
             Bearing in degrees (0-360, 0=North, 90=East)
         """
-        if not self.route_coords or len(self.route_coords) < 2:
+        if not route_coords or len(route_coords) < 2:
             return 0.0
         
         # Find segment
-        total_segments = len(self.route_coords) - 1
+        total_segments = len(route_coords) - 1
         segment_idx = int(progress * total_segments)
         
         # Clamp
         if segment_idx >= total_segments:
             segment_idx = total_segments - 1
         
-        p1 = self.route_coords[segment_idx]
-        p2 = self.route_coords[segment_idx + 1]
+        p1 = route_coords[segment_idx]
+        p2 = route_coords[segment_idx + 1]
         
         return self._calculate_bearing(p1, p2)
     
@@ -312,7 +411,10 @@ class SimulationAgent:
         """Restart simulation from beginning."""
         self.start_time = time.time()
         self.current_progress = 0.0
+        self.current_edge_index = 0
+        self.current_edge_progress = 0.0
         self.is_running = True
+        self.final_position = (0.0, 0.0, 0.0, 0)  # Clear final position
     
     def stop(self):
         """Stop simulation."""
@@ -321,6 +423,87 @@ class SimulationAgent:
     def resume(self):
         """Resume simulation."""
         self.is_running = True
+    
+    def can_switch_to_route(
+        self,
+        current_route_data: dict,
+        new_route_data: dict,
+        elapsed_time_sec: float,
+        graph,
+        lookahead_seconds: float = 5.0
+    ) -> Tuple[bool, Optional[int]]:
+        """
+        Check if agent can switch to new route from current position.
+        
+        Logic:
+        1. Check if current edge is in new route → instant switch
+        2. Predict future position after lookahead_seconds
+        3. Check if future edge is in new route → can switch
+        
+        Args:
+            current_route_data: Current route dict with edges
+            new_route_data: New route dict with edges
+            elapsed_time_sec: Time elapsed since start
+            graph: Graph instance for speed calculation
+            lookahead_seconds: How far ahead to predict (default 5 sec)
+            
+        Returns:
+            Tuple of (can_switch: bool, new_edge_index: Optional[int])
+            If can_switch=True, new_edge_index is the position in new route
+        """
+        current_edges = current_route_data.get('edges', [])
+        new_edges = new_route_data.get('edges', [])
+        
+        if not current_edges or not new_edges:
+            return False, None
+        
+        # Get current edge
+        if self.current_edge_index >= len(current_edges):
+            return False, None
+        
+        current_edge_id = current_edges[self.current_edge_index]
+        
+        # Check 1: Is current edge in new route?
+        if current_edge_id in new_edges:
+            new_idx = new_edges.index(current_edge_id)
+            return True, new_idx
+        
+        # Check 2: Predict future position
+        # Calculate how much distance will be covered in lookahead_seconds
+        sim_time = elapsed_time_sec * self.sim_speed
+        future_sim_time = sim_time + (lookahead_seconds * self.sim_speed)
+        
+        # Get total route distance
+        total_distance = current_route_data.get('total_distance_m', 0)
+        if total_distance <= 0:
+            return False, None
+        
+        # Calculate future progress
+        future_distance = self.params.max_speed * future_sim_time
+        future_progress = min(future_distance / total_distance, 1.0)
+        
+        # Find future edge index
+        edge_distances = []
+        cumulative_dist = 0.0
+        for edge_id in current_edges:
+            edge = graph.get_edge(edge_id)
+            if edge:
+                edge_distances.append((edge_id, cumulative_dist))
+                cumulative_dist += edge.length_m
+        
+        future_edge_id = None
+        for i, (edge_id, dist) in enumerate(edge_distances):
+            if future_progress * total_distance >= dist:
+                future_edge_id = edge_id
+            else:
+                break
+        
+        # Check if future edge in new route
+        if future_edge_id and future_edge_id in new_edges:
+            new_idx = new_edges.index(future_edge_id)
+            return True, new_idx
+        
+        return False, None
 
 
 @dataclass

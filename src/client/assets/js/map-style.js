@@ -143,7 +143,8 @@ export function createMapStyle(tileUrl) {
           'line-width': MAP_CONFIG.layers.routes.width,
         },
       },
-      // K routes with black borders (casing layers first, then main layers)
+      // K routes with black borders: Gray (all) < Blue (selected) < Green (assigned)
+      // Casing layers first (black borders)
       {
         id: 'k-routes-inactive-casing',
         type: 'line',
@@ -156,16 +157,28 @@ export function createMapStyle(tileUrl) {
         },
       },
       {
-        id: 'k-routes-active-casing',
+        id: 'k-routes-selected-casing',
         type: 'line',
         source: 'k-routes',
         filter: ['==', ['get', 'route_id'], -1],
         paint: {
           'line-color': '#000000',
-          'line-width': MAP_CONFIG.layers.kRoutes.active.width + 2,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.active.opacity,
+          'line-width': MAP_CONFIG.layers.kRoutes.selected.width + 2,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.selected.opacity,
         },
       },
+      {
+        id: 'k-routes-assigned-casing',
+        type: 'line',
+        source: 'k-routes',
+        filter: ['==', ['get', 'route_id'], -1],
+        paint: {
+          'line-color': '#000000',
+          'line-width': MAP_CONFIG.layers.kRoutes.assigned.width + 2,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.assigned.opacity,
+        },
+      },
+      // Main color layers
       {
         id: 'k-routes-inactive',
         type: 'line',
@@ -178,14 +191,25 @@ export function createMapStyle(tileUrl) {
         },
       },
       {
-        id: 'k-routes-active',
+        id: 'k-routes-selected',
         type: 'line',
         source: 'k-routes',
         filter: ['==', ['get', 'route_id'], -1],  // Will be updated dynamically
         paint: {
-          'line-color': MAP_CONFIG.layers.kRoutes.active.color,
-          'line-width': MAP_CONFIG.layers.kRoutes.active.width,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.active.opacity,
+          'line-color': MAP_CONFIG.layers.kRoutes.selected.color,
+          'line-width': MAP_CONFIG.layers.kRoutes.selected.width,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.selected.opacity,
+        },
+      },
+      {
+        id: 'k-routes-assigned',
+        type: 'line',
+        source: 'k-routes',
+        filter: ['==', ['get', 'route_id'], -1],  // Will be updated dynamically
+        paint: {
+          'line-color': MAP_CONFIG.layers.kRoutes.assigned.color,
+          'line-width': MAP_CONFIG.layers.kRoutes.assigned.width,
+          'line-opacity': MAP_CONFIG.layers.kRoutes.assigned.opacity,
         },
       },
     ],
