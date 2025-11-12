@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import math
 import os
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from itertools import cycle
 
 import networkx as nx
@@ -132,8 +131,10 @@ next_agent_id = 1
 
 # Simulation agents storage
 sim_agents: Dict[int, 'SimulationAgent'] = {}  # agent_id -> SimulationAgent
-sim_routes: Dict[int, Dict] = {}  # agent_id -> route_data (edges, coords, distance)
-sim_selected_routes: Dict[int, int] = {}  # agent_id -> selected_route_id (from client)
+# agent_id -> route_data (edges, coords, distance)
+sim_routes: Dict[int, Dict] = {}
+# agent_id -> selected_route_id (from client)
+sim_selected_routes: Dict[int, int] = {}
 next_sim_agent_id = 1
 next_route_id = 0  # Global unique route ID counter
 _tile_hosts = cycle(["a", "b", "c"])  # for upstream OSM subdomains
@@ -195,6 +196,47 @@ def calculate_eta_seconds(
     print(f"ETA_RESULT: remaining={remaining_fraction:.3f}, eta={eta_real_time:.2f} sec", flush=True)
     
     return eta_real_time
+
+
+def _project_point_on_segment(
+    point: Tuple[float, float],
+    seg_start: Tuple[float, float],
+    seg_end: Tuple[float, float]
+) -> float:
+    """
+    Project point onto line segment and return fraction [0, 1].
+    
+    Args:
+        point: (lon, lat) to project
+        seg_start: (lon, lat) segment start
+        seg_end: (lon, lat) segment end
+        
+    Returns:
+        Fraction along segment [0, 1] where projection falls
+    """
+    px, py = point
+    ax, ay = seg_start
+    bx, by = seg_end
+    
+    # Vector from A to B
+    dx = bx - ax
+    dy = by - ay
+    
+    # Vector from A to P
+    apx = px - ax
+    apy = py - ay
+    
+    # Squared length of segment
+    len_sq = dx * dx + dy * dy
+    
+    if len_sq < 1e-10:
+        return 0.0
+    
+    # Dot product / length squared = projection fraction
+    t = (apx * dx + apy * dy) / len_sq
+    
+    # Clamp to [0, 1]
+    return max(0.0, min(1.0, t))
 
 
 def _load_graph() -> nx.MultiDiGraph:
@@ -550,6 +592,10 @@ def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
         sim_speed=req.sim_speed
     )
     
+    # CRITICAL: Set start_time to NOW (not at object creation!)
+    # This ensures agent starts from beginning when client first polls
+    agent.start_time = time.time()
+    
     sim_agents[agent_id] = agent
     sim_routes[agent_id] = route_data
     
@@ -639,6 +685,15 @@ def sim_agent_position(agent_id: int) -> SimAgentPositionResponse:
     selected_route_id = sim_selected_routes.get(agent_id)
     if (selected_route_id is not None and
             selected_route_id != agent.assigned_route_id):
+        log.info(
+            "route_switch_requested",
+            agent_id=agent_id,
+            current_route_id=agent.assigned_route_id,
+            selected_route_id=selected_route_id,
+            agent_edge_idx=agent.current_edge_index,
+            agent_progress=round(agent.current_progress, 3)
+        )
+        
         # Find selected route in cache
         selected_route_data = None
         for cached_response in route_cache.values():
@@ -650,37 +705,293 @@ def sim_agent_position(agent_id: int) -> SimAgentPositionResponse:
                 break
         
         if selected_route_data:
-            # Check if agent can switch
-            can_switch, new_edge_idx = agent.can_switch_to_route(
-                current_route_data=route_data,
-                new_route_data=selected_route_data,
-                elapsed_time_sec=elapsed_time,
-                graph=cached_graph,
-                lookahead_seconds=5.0
-            )
+            # Check if agent can switch using PostGIS
+            current_edges = route_data.get('edges', [])
+            new_edges = selected_route_data.get('edges', [])
             
-            if can_switch:
-                log.info(
-                    "auto_switch_route",
+            # Get remaining edges from current position
+            remaining_edges = current_edges[agent.current_edge_index:]
+            
+            if not new_edges:
+                log.warning(
+                    "cannot_switch_no_new_edges",
                     agent_id=agent_id,
-                    old_route_id=agent.assigned_route_id,
-                    new_route_id=selected_route_id,
-                    new_edge_index=new_edge_idx
+                    new_edges=len(new_edges)
                 )
-                # Switch to new route
+            elif not remaining_edges:
+                # Agent finished current route - start new route
+                log.info(
+                    "switch_to_new_route_from_end",
+                    agent_id=agent_id,
+                    old_route_finished=True,
+                    new_route_id=selected_route_id
+                )
+                
+                # Start new route from beginning
                 agent.assigned_route_id = selected_route_id
                 sim_routes[agent_id] = selected_route_data
                 route_data = selected_route_data
                 
-                # Update position on new route
-                if new_edge_idx is not None:
-                    agent.current_edge_index = new_edge_idx
-                    agent.current_edge_progress = 0.0
+                # Reset agent to start of new route
+                old_start_time = agent.start_time
+                agent.start_time = time.time()
+                agent.current_edge_index = 0
+                agent.current_edge_progress = 0.0
+                agent.current_progress = 0.0
+                agent.is_running = True
+                agent.final_position = (0.0, 0.0, 0.0, 0)
                 
-                # Clear selected route (already assigned)
+                log.warning(
+                    "agent_RESTARTED_on_new_route",
+                    agent_id=agent_id,
+                    old_route=agent.assigned_route_id,
+                    new_route=selected_route_id,
+                    old_start_time=round(old_start_time, 2),
+                    new_start_time=round(agent.start_time, 2),
+                    time_diff=round(agent.start_time - old_start_time, 2),
+                    reason="remaining_edges_empty"
+                )
+                
+                # Clear selected route
                 del sim_selected_routes[agent_id]
-    
-    # Get position with dynamic route data
+            else:
+                # Calculate agent's position in 5 seconds (lookahead)
+                max_speed = agent.params.max_speed
+                sim_speed = agent.sim_speed
+                lookahead_distance = 5.0 * max_speed * sim_speed  # meters
+                
+                # Find edges agent will be on in 5 seconds
+                distance_covered = 0.0
+                lookahead_edge_idx = agent.current_edge_index
+                
+                for i in range(agent.current_edge_index, len(current_edges)):
+                    edge_id = current_edges[i]
+                    edge = cached_graph.get_edge(edge_id)
+                    if not edge:
+                        break
+                    
+                    if i == agent.current_edge_index:
+                        # Start from current progress
+                        remaining_in_edge = (
+                            (1.0 - agent.current_edge_progress) *
+                            edge.length_m
+                        )
+                    else:
+                        remaining_in_edge = edge.length_m
+                    
+                    if (distance_covered + remaining_in_edge >=
+                            lookahead_distance):
+                        lookahead_edge_idx = i
+                        break
+                    
+                    distance_covered += remaining_in_edge
+                
+                # Check intersection from lookahead position
+                remaining_from_lookahead = current_edges[lookahead_edge_idx:]
+                
+                log.info(
+                    "lookahead_check",
+                    agent_id=agent_id,
+                    current_idx=agent.current_edge_index,
+                    lookahead_idx=lookahead_edge_idx,
+                    lookahead_distance_m=lookahead_distance,
+                    remaining_edges=len(remaining_from_lookahead)
+                )
+                
+                # Find all common edges (intersecting set)
+                intersecting_edges = [
+                    edge_id for edge_id in remaining_from_lookahead
+                    if edge_id in new_edges
+                ]
+                
+                if not intersecting_edges:
+                    log.warning(
+                        "cannot_switch_no_intersection",
+                        agent_id=agent_id,
+                        current_route=agent.assigned_route_id,
+                        selected_route=selected_route_id,
+                        remaining_edges=len(remaining_edges),
+                        new_edges=len(new_edges)
+                    )
+                else:
+                    # Found intersection! Build merged route
+                    first_intersect = intersecting_edges[0]
+                    last_intersect = intersecting_edges[-1]
+                    
+                    # pre_intersecting: from current pos to intersection
+                    pre_idx = agent.current_edge_index
+                    intersect_idx = current_edges.index(first_intersect)
+                    pre_intersecting = current_edges[pre_idx:intersect_idx]
+                    
+                    # post_intersecting: after intersection on new route
+                    new_intersect_idx = new_edges.index(last_intersect)
+                    post_intersecting = new_edges[new_intersect_idx + 1:]
+                    
+                    # Merged route
+                    merged_edges = (
+                        pre_intersecting +
+                        intersecting_edges +
+                        post_intersecting
+                    )
+                    
+                    log.info(
+                        "route_merge",
+                        agent_id=agent_id,
+                        pre=len(pre_intersecting),
+                        intersecting=len(intersecting_edges),
+                        post=len(post_intersecting),
+                        total=len(merged_edges)
+                    )
+                    
+                    # Build merged route geometry
+                    # Get coordinates for each edge from graph
+                    merged_coords = []
+                    merged_distance = 0.0
+                    
+                    for edge_id in merged_edges:
+                        edge = cached_graph.get_edge(edge_id)
+                        if edge and edge.geometry:
+                            # Add edge coords (skip first if overlaps prev)
+                            if (merged_coords and
+                                    edge.geometry[0] == merged_coords[-1]):
+                                merged_coords.extend(edge.geometry[1:])
+                            else:
+                                merged_coords.extend(edge.geometry)
+                            merged_distance += edge.length_m
+                    
+                    # Create merged route data
+                    merged_route_data = {
+                        'id': selected_route_id,  # Keep new route ID
+                        'edges': merged_edges,
+                        'geometry': merged_coords,
+                        'total_distance_m': merged_distance,
+                        'total_time_sec': selected_route_data.get(
+                            'total_time_sec', merged_distance / 13.89
+                        )
+                    }
+                    
+                    log.info(
+                        "auto_switch_merged_route",
+                        agent_id=agent_id,
+                        old_route_id=agent.assigned_route_id,
+                        new_route_id=selected_route_id,
+                        merged_edges=len(merged_edges),
+                        merged_distance_m=merged_distance
+                    )
+                    
+                    # Calculate absolute distance traveled on OLD route
+                    elapsed_old = time.time() - agent.start_time
+                    distance_traveled_old = (
+                        elapsed_old * agent.sim_speed * agent.params.max_speed
+                    )
+                    
+                    log.info(
+                        "merge_distance_check",
+                        agent_id=agent_id,
+                        elapsed_old=elapsed_old,
+                        distance_traveled_old=distance_traveled_old,
+                        old_total_distance=route_data['total_distance_m'],
+                        old_edge_idx=agent.current_edge_index
+                    )
+                    
+                    # Calculate distance to current edge in MERGED route
+                    # We need to find where in merged route the agent is
+                    curr_edge_id = current_edges[agent.current_edge_index]
+                    
+                    if curr_edge_id in merged_edges:
+                        # Find same edge in merged route
+                        new_edge_idx = merged_edges.index(curr_edge_id)
+                        
+                        # Calculate distance FROM START of merged route
+                        # TO START of current edge
+                        distance_to_edge_start = 0.0
+                        for i in range(new_edge_idx):
+                            edge = cached_graph.get_edge(merged_edges[i])
+                            if edge:
+                                distance_to_edge_start += edge.length_m
+                        
+                        # Add progress WITHIN current edge
+                        curr_edge = cached_graph.get_edge(curr_edge_id)
+                        if curr_edge:
+                            distance_within_edge = (
+                                agent.current_edge_progress *
+                                curr_edge.length_m
+                            )
+                            distance_to_agent = (
+                                distance_to_edge_start + distance_within_edge
+                            )
+                        else:
+                            distance_to_agent = distance_to_edge_start
+                        
+                        # Recalculate start_time so agent stays at
+                        # SAME distance
+                        # distance_traveled_new = distance_to_agent
+                        # elapsed_new * sim_speed * max_speed =
+                        # distance_to_agent
+                        # elapsed_new = distance_to_agent /
+                        # (sim_speed * max_speed)
+                        # start_time_new = now - elapsed_new
+                        
+                        if agent.sim_speed > 0 and agent.params.max_speed > 0:
+                            elapsed_new = distance_to_agent / (
+                                agent.sim_speed * agent.params.max_speed
+                            )
+                            agent.start_time = time.time() - elapsed_new
+                        
+                        # Update edge index to merged route
+                        old_edge_idx = agent.current_edge_index
+                        agent.current_edge_index = new_edge_idx
+                        
+                        log.info(
+                            "merge_updated_position",
+                            agent_id=agent_id,
+                            old_idx=old_edge_idx,
+                            new_idx=new_edge_idx,
+                            edge_id=curr_edge_id,
+                            distance_to_agent=distance_to_agent,
+                            elapsed_new=elapsed_new,
+                            start_time_adjusted=True
+                        )
+                    else:
+                        # Current edge not in merged route
+                        # This shouldn't happen if merge is correct
+                        log.error(
+                            "merge_error_edge_not_found",
+                            agent_id=agent_id,
+                            current_edge=curr_edge_id,
+                            merged_edges=merged_edges[:5]
+                        )
+                        # FATAL: Cannot merge, restart instead
+                        log.error(
+                            "FATAL_merge_failed_restarting_agent",
+                            agent_id=agent_id,
+                            current_route=agent.assigned_route_id,
+                            selected_route=selected_route_id
+                        )
+                        # Force restart
+                        agent.start_time = time.time()
+                        agent.current_edge_index = 0
+                        agent.current_edge_progress = 0.0
+                        agent.current_progress = 0.0
+                    
+                    # Switch to merged route
+                    old_route_id = agent.assigned_route_id
+                    agent.assigned_route_id = selected_route_id
+                    sim_routes[agent_id] = merged_route_data
+                    route_data = merged_route_data
+                    
+                    log.info(
+                        "route_switched_to_merged",
+                        agent_id=agent_id,
+                        old_route=old_route_id,
+                        new_route=selected_route_id,
+                        merged_edges=len(merged_edges)
+                    )
+                    
+                    # Clear selected route (already assigned)
+                    del sim_selected_routes[agent_id]
+    # Agent movement is ASYNC - based purely on elapsed_time
+    # Route changes don't affect current position/speed
     lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
         route_data=route_data,
         elapsed_time_sec=elapsed_time,

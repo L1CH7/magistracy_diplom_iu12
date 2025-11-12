@@ -27,6 +27,11 @@ class SimulationConfig:
     agent_length_m: float = 4.5  # meters
     agent_width_m: float = 1.8   # meters
     
+    # Teleportation detection
+    debug_teleportations: bool = True  # Set False to skip checks
+    agent_max_speed_theoretical_kmh: float = 200.0  # Max possible speed
+    teleport_threshold_multiplier: float = 1.1  # 10% margin over dS_critical
+    
     # Agent states
     agent_states = {
         'moving': 'Moving',

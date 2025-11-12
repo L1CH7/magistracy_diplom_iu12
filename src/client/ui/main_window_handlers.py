@@ -52,6 +52,10 @@ class MainWindowHandlers:
         "#f97316", "#eab308", "#84cc16", "#22d3ee"
     ]
     
+    # Teleportation detection state
+    _prev_position = None  # Previous agent position (lon, lat)
+    _route_selection_cache = []  # Cache of selected routes for tests
+    
     def _handle_zoom_from_js(self, zoom_value: int) -> None:
         """Handle zoom change from JS via QWebChannel (signals/slots ONLY!).
         
@@ -553,6 +557,15 @@ class MainWindowHandlers:
         # Highlight selected route on map (blue)
         self._highlight_route_on_map(selected_route)
         
+        # Cache route selection for tests
+        import time
+        self._route_selection_cache.append({
+            "timestamp": time.time(),
+            "route_id": route_id,
+            "route_data": selected_route,
+            "agent_id": self.sim_agent_id
+        })
+        
         # Notify server if agent is running (for auto-switch logic)
         if self.sim_agent_id is not None:
             import requests
@@ -841,7 +854,30 @@ class MainWindowHandlers:
                 state=data['state']
             )
             
-            log.info("agent_restarted", agent_id=self.sim_agent_id, route_id=route_id)
+            # Restore route visualization
+            self._display_routes_on_map(routes)
+            
+            # Set selected route (blue)
+            js_selected = f"""
+            if (window.app && window.app.setSelectedRoute) {{
+                window.app.setSelectedRoute({route_id});
+            }}
+            """
+            self.map_widget.page().runJavaScript(js_selected)
+            
+            # Set assigned route (green from start - agent at beginning)
+            js_assigned = f"""
+            if (window.app && window.app.setAssignedRoute) {{
+                window.app.setAssignedRoute({route_id}, null);
+            }}
+            """
+            self.map_widget.page().runJavaScript(js_assigned)
+            
+            log.info(
+                "agent_restarted",
+                agent_id=self.sim_agent_id,
+                route_id=route_id
+            )
             
         except Exception as e:
             log.error("restart_agent_failed", error=str(e))
@@ -996,6 +1032,90 @@ class MainWindowHandlers:
         
         log.info("simulation_timer_started", fps=self.sim_fps, interval_ms=interval_ms)
     
+    def save_route_cache_for_tests(
+        self, filepath: str = "route_cache.json"
+    ) -> None:
+        """
+        Save route selection cache to file for unit tests.
+        
+        Args:
+            filepath: Path to save cache JSON
+        """
+        import json
+        with open(filepath, 'w') as f:
+            json.dump(self._route_selection_cache, f, indent=2)
+        log.info(
+            "route_cache_saved",
+            filepath=filepath,
+            selections=len(self._route_selection_cache)
+        )
+    
+    def _check_teleportation(self, position: dict, agent_data: dict) -> None:
+        """
+        Check if agent teleported between frames.
+        
+        Formula:
+        dS_critical = v_max * dt
+        dt = sim_speed / fps
+        v_max = 200 km/h = 200/3.6 m/s
+        
+        If distance > dS_critical * threshold -> TELEPORTATION
+        """
+        from src.client.config.simulation_config import simulation_config
+        import math
+        
+        current_pos = (position['lon'], position['lat'])
+        
+        if self._prev_position is not None:
+            # Calculate distance between prev and current position
+            lon1, lat1 = self._prev_position
+            lon2, lat2 = current_pos
+            
+            # Haversine distance (rough approximation)
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            # 1 degree ≈ 111 km
+            dlat_m = dlat * 111000
+            dlon_m = dlon * 111000 * math.cos(math.radians(lat1))
+            distance_m = math.sqrt(dlat_m ** 2 + dlon_m ** 2)
+            
+            # Calculate critical distance
+            sim_speed = (
+                self.sidebar.simulation_panel.sim_speed_spinbox.value()
+            )
+            fps = self.sim_fps
+            v_max_mps = (
+                simulation_config.agent_max_speed_theoretical_kmh / 3.6
+            )
+            dt = sim_speed / fps
+            dS_critical = v_max_mps * dt
+            threshold = (
+                dS_critical *
+                simulation_config.teleport_threshold_multiplier
+            )
+            
+            if distance_m > threshold:
+                # TELEPORTATION DETECTED!
+                log.error(
+                    "TELEPORTATION_DETECTED",
+                    agent_id=self.sim_agent_id,
+                    distance_m=round(distance_m, 2),
+                    threshold_m=round(threshold, 2),
+                    dS_critical_m=round(dS_critical, 2),
+                    sim_speed=sim_speed,
+                    fps=fps,
+                    prev_pos=self._prev_position,
+                    current_pos=current_pos,
+                    agent_state_before={
+                        "speed_kmh": agent_data.get('speed_kmh'),
+                        "route_id": agent_data.get('assigned_route_id'),
+                        "state": agent_data.get('state')
+                    }
+                )
+        
+        # Update prev position
+        self._prev_position = current_pos
+    
     def _update_agent_position(self) -> None:
         """Timer callback: fetch agent position and update map."""
         if self.sim_agent_id is None:
@@ -1014,6 +1134,11 @@ class MainWindowHandlers:
             position = data['position']
             assigned_route_id = data.get('assigned_route_id', None)
             
+            # Teleportation detection
+            from src.client.config.simulation_config import simulation_config
+            if simulation_config.debug_teleportations:
+                self._check_teleportation(position, data)
+            
             js = f"""
             if (window.app && window.app.updateAgent) {{
                 window.app.updateAgent({{
@@ -1025,11 +1150,14 @@ class MainWindowHandlers:
             """
             self.map_widget.page().runJavaScript(js)
             
-            # Update assigned route visualization (green)
+            # Update assigned route visualization (green from agent to end)
             if assigned_route_id is not None:
                 js_assigned = f"""
                 if (window.app && window.app.setAssignedRoute) {{
-                    window.app.setAssignedRoute({assigned_route_id});
+                    window.app.setAssignedRoute(
+                        {assigned_route_id},
+                        [{position['lon']}, {position['lat']}]
+                    );
                 }}
                 """
                 self.map_widget.page().runJavaScript(js_assigned)

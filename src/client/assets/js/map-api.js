@@ -257,13 +257,15 @@ export class MapAPI {
     this._updateKRouteFilters();
   }
 
-  setAssignedRoute(routeId) {
+  setAssignedRoute(routeId, agentPosition = null) {
     /**
-     * Set agent's assigned route (green).
-     * When route changes, old route loses its reference and should be removed.
+     * Set agent's assigned route (green from agent to end).
+     * 
+     * @param {number} routeId - Route ID
+     * @param {Array} agentPosition - [lon, lat] of agent (clips geometry)
      */
     const oldRouteId = this._assignedRouteId;
-    console.log(`[K-ROUTES] setAssignedRoute: ${routeId} (previous: ${oldRouteId})`);
+    console.log(`[K-ROUTES] setAssignedRoute: ${routeId} at ${agentPosition}`);
     
     // If route changed, need to update source to remove old route
     if (routeId !== oldRouteId && oldRouteId !== null) {
@@ -292,7 +294,7 @@ export class MapAPI {
     
     this._assignedRouteId = routeId;
     
-    // Save new assigned route feature
+    // Save new assigned route feature (with clipping if agent position provided)
     if (routeId !== null) {
       const src = this.map.getSource('k-routes');
       if (src) {
@@ -300,8 +302,76 @@ export class MapAPI {
         if (data && data.features) {
           const feature = data.features.find(f => f.properties.route_id === routeId);
           if (feature) {
-            this._assignedRouteFeature = JSON.parse(JSON.stringify(feature));
-            console.log(`[K-ROUTES] Saved new assigned route feature ${routeId}`);
+            let savedFeature = JSON.parse(JSON.stringify(feature));
+            
+            // Clip geometry from EXACT agent position to end
+            if (agentPosition && feature.geometry.type === 'LineString') {
+              const coords = feature.geometry.coordinates;
+              
+              // Find closest segment and project agent onto it
+              let closestIdx = 0;
+              let minDist = Infinity;
+              let bestT = 0;  // Projection parameter [0, 1]
+              
+              for (let i = 0; i < coords.length - 1; i++) {
+                const a = coords[i];
+                const b = coords[i + 1];
+                
+                // Project agent onto segment
+                const dx = b[0] - a[0];
+                const dy = b[1] - a[1];
+                const lenSq = dx * dx + dy * dy;
+                
+                let t = 0;
+                if (lenSq > 1e-10) {
+                  const apx = agentPosition[0] - a[0];
+                  const apy = agentPosition[1] - a[1];
+                  t = Math.max(0, Math.min(1, (apx * dx + apy * dy) / lenSq));
+                }
+                
+                // Closest point on segment
+                const projX = a[0] + t * dx;
+                const projY = a[1] + t * dy;
+                
+                // Distance to projected point
+                const distX = agentPosition[0] - projX;
+                const distY = agentPosition[1] - projY;
+                const dist = Math.sqrt(distX * distX + distY * distY);
+                
+                if (dist < minDist) {
+                  minDist = dist;
+                  closestIdx = i;
+                  bestT = t;
+                }
+              }
+              
+              // Build clipped geometry: start with projected agent position
+              const a = coords[closestIdx];
+              const b = coords[closestIdx + 1];
+              const projectedPoint = [
+                a[0] + bestT * (b[0] - a[0]),
+                a[1] + bestT * (b[1] - a[1])
+              ];
+              
+              // Clipped coords: projected point + remaining segments
+              const clippedCoords = [projectedPoint, ...coords.slice(closestIdx + 1)];
+              savedFeature.geometry.coordinates = clippedCoords;
+              
+              console.log(`[K-ROUTES] Clipped route from agent at segment ${closestIdx} (t=${bestT.toFixed(3)})`);
+              
+              // UPDATE SOURCE with clipped feature
+              const otherFeatures = data.features.filter(
+                f => f.properties.route_id !== routeId
+              );
+              src.setData({
+                type: 'FeatureCollection',
+                features: [...otherFeatures, savedFeature]
+              });
+              console.log(`[K-ROUTES] Updated source with clipped feature`);
+            }
+            
+            this._assignedRouteFeature = savedFeature;
+            console.log(`[K-ROUTES] Saved assigned route feature ${routeId}`);
           } else {
             console.warn(`[K-ROUTES] Route ${routeId} not found in current features!`);
           }
@@ -387,6 +457,50 @@ export class MapAPI {
       this._assignedRouteId = null;
       console.log('Cleared K routes');
     }
+  }
+
+  _pointToSegmentDistance(point, segStart, segEnd) {
+    /**
+     * Calculate distance from point to line segment.
+     * 
+     * @param {Array} point - [lon, lat]
+     * @param {Array} segStart - [lon, lat]
+     * @param {Array} segEnd - [lon, lat]
+     * @returns {number} Distance in degrees (approximate)
+     */
+    const px = point[0], py = point[1];
+    const ax = segStart[0], ay = segStart[1];
+    const bx = segEnd[0], by = segEnd[1];
+    
+    // Vector AB
+    const dx = bx - ax;
+    const dy = by - ay;
+    
+    // Vector AP
+    const apx = px - ax;
+    const apy = py - ay;
+    
+    // Squared length of AB
+    const lenSq = dx * dx + dy * dy;
+    
+    if (lenSq < 1e-10) {
+      // Segment is a point
+      return Math.sqrt(apx * apx + apy * apy);
+    }
+    
+    // Projection of AP onto AB
+    let t = (apx * dx + apy * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));  // Clamp to [0, 1]
+    
+    // Closest point on segment
+    const closestX = ax + t * dx;
+    const closestY = ay + t * dy;
+    
+    // Distance to closest point
+    const distX = px - closestX;
+    const distY = py - closestY;
+    
+    return Math.sqrt(distX * distX + distY * distY);
   }
 
   // Deprecated/stub methods for compatibility

@@ -795,6 +795,80 @@ class PostGISManager:
             conn.close()
     
     # ========================================================================
+    # ROUTE INTERSECTION CHECKS
+    # ========================================================================
+    
+    def check_route_intersection(
+        self,
+        current_edge_ids: List[int],
+        new_edge_ids: List[int]
+    ) -> Optional[Tuple[int, int]]:
+        """
+        Check if two routes intersect using PostGIS.
+        
+        Uses ST_Intersects to find if any edge from current_route
+        overlaps with any edge from new_route.
+        
+        Args:
+            current_edge_ids: List of edge IDs from current position
+            new_edge_ids: List of edge IDs in new route
+            
+        Returns:
+            Tuple of (current_edge_id, new_edge_id) if intersection found
+            None if no intersection
+        """
+        if not current_edge_ids or not new_edge_ids:
+            return None
+        
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                # Find first intersection using PostGIS
+                cur.execute(
+                    """
+                    SELECT
+                        e1.id AS current_edge_id,
+                        e2.id AS new_edge_id,
+                        e1.start_node_id AS e1_start,
+                        e1.end_node_id AS e1_end,
+                        e2.start_node_id AS e2_start,
+                        e2.end_node_id AS e2_end
+                    FROM edges e1, edges e2
+                    WHERE e1.id = ANY(%s)
+                      AND e2.id = ANY(%s)
+                      AND e1.id = e2.id
+                    LIMIT 1
+                    """,
+                    (current_edge_ids, new_edge_ids)
+                )
+                result = cur.fetchone()
+                
+                if result:
+                    current_id, new_id, e1_s, e1_e, e2_s, e2_e = result
+                    
+                    # Check if same direction (start→end matches)
+                    if e1_s == e2_s and e1_e == e2_e:
+                        log.info(
+                            f"route_intersection_found: "
+                            f"edge={current_id}, same_direction=True"
+                        )
+                        return (current_id, new_id)
+                    else:
+                        log.warning(
+                            f"route_intersection_wrong_direction: "
+                            f"edge={current_id}, "
+                            f"e1: {e1_s}→{e1_e}, e2: {e2_s}→{e2_e}"
+                        )
+                        return None
+                
+                return None
+        except Exception as e:
+            log.error(f"check_route_intersection failed: {e}")
+            return None
+        finally:
+            conn.close()
+    
+    # ========================================================================
     # STATISTICS
     # ========================================================================
     

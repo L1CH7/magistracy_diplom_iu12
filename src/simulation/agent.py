@@ -158,7 +158,9 @@ class SimulationAgent:
         
         # Interpolate position along route
         lon, lat = self._interpolate_position(overall_progress, route_coords)
-        bearing = self._calculate_bearing_at_progress(overall_progress, route_coords)
+        bearing = self._calculate_bearing_at_progress(
+            overall_progress, route_coords
+        )
         
         return (lon, lat, bearing, current_speed, current_edge_id)
     
@@ -433,76 +435,121 @@ class SimulationAgent:
         lookahead_seconds: float = 5.0
     ) -> Tuple[bool, Optional[int]]:
         """
-        Check if agent can switch to new route from current position.
+        Check if remaining route overlaps with new route.
         
         Logic:
-        1. Check if current edge is in new route → instant switch
-        2. Predict future position after lookahead_seconds
-        3. Check if future edge is in new route → can switch
+        1. Get remaining edges from current position
+        2. Check each remaining edge against new route edges
+        3. Ensure same edge ID AND same direction (no U-turns)
+        4. Return first matching edge index in new route
         
         Args:
             current_route_data: Current route dict with edges
             new_route_data: New route dict with edges
             elapsed_time_sec: Time elapsed since start
-            graph: Graph instance for speed calculation
-            lookahead_seconds: How far ahead to predict (default 5 sec)
+            graph: Graph instance for edge direction checking
+            lookahead_seconds: Not used (kept for compatibility)
             
         Returns:
             Tuple of (can_switch: bool, new_edge_index: Optional[int])
-            If can_switch=True, new_edge_index is the position in new route
+            If can_switch=True, new_edge_index is where agent continues
         """
+        import logging
+        log = logging.getLogger(__name__)
+        
         current_edges = current_route_data.get('edges', [])
         new_edges = new_route_data.get('edges', [])
         
         if not current_edges or not new_edges:
+            log.debug(
+                f"can_switch: empty edges - "
+                f"current={len(current_edges)}, new={len(new_edges)}"
+            )
             return False, None
         
-        # Get current edge
+        # Get remaining edges from current position
         if self.current_edge_index >= len(current_edges):
+            log.debug(
+                f"can_switch: agent at end - "
+                f"edge_idx={self.current_edge_index}, "
+                f"total={len(current_edges)}"
+            )
             return False, None
         
-        current_edge_id = current_edges[self.current_edge_index]
+        remaining_edges = current_edges[self.current_edge_index:]
         
-        # Check 1: Is current edge in new route?
-        if current_edge_id in new_edges:
-            new_idx = new_edges.index(current_edge_id)
-            return True, new_idx
+        log.info(
+            f"can_switch_check: agent={self.agent_id}, "
+            f"current_idx={self.current_edge_index}, "
+            f"remaining={len(remaining_edges)}, "
+            f"new_edges={len(new_edges)}"
+        )
         
-        # Check 2: Predict future position
-        # Calculate how much distance will be covered in lookahead_seconds
-        sim_time = elapsed_time_sec * self.sim_speed
-        future_sim_time = sim_time + (lookahead_seconds * self.sim_speed)
+        # Check each remaining edge for overlap with new route
+        checked_edges = 0
+        for remaining_edge_id in remaining_edges:
+            checked_edges += 1
+            
+            if remaining_edge_id in new_edges:
+                # Found overlap!
+                new_idx = new_edges.index(remaining_edge_id)
+                
+                log.info(
+                    f"can_switch: found overlap edge={remaining_edge_id}, "
+                    f"new_idx={new_idx}"
+                )
+                
+                # Get edge from graph to check direction
+                edge = graph.get_edge(remaining_edge_id)
+                if not edge:
+                    log.warning(
+                        f"can_switch: edge {remaining_edge_id} "
+                        f"not found in graph"
+                    )
+                    continue
+                
+                # Edge exists in both routes - check if SAME direction
+                # Need to verify u→v direction matches in both routes
+                
+                # Find indices in both routes
+                curr_idx = current_edges.index(remaining_edge_id)
+                
+                # Get previous edge in current route to check direction
+                if curr_idx > 0:
+                    prev_edge_curr = graph.get_edge(
+                        current_edges[curr_idx - 1]
+                    )
+                    # Check if prev.v == edge.u (correct direction chain)
+                    if prev_edge_curr and prev_edge_curr.v != edge.u:
+                        log.warning(
+                            f"can_switch: wrong direction in current route - "
+                            f"prev.v={prev_edge_curr.v}, edge.u={edge.u}"
+                        )
+                        continue
+                
+                # Get previous edge in new route to check direction
+                if new_idx > 0:
+                    prev_edge_new = graph.get_edge(new_edges[new_idx - 1])
+                    # Check if prev.v == edge.u (correct direction chain)
+                    if prev_edge_new and prev_edge_new.v != edge.u:
+                        log.warning(
+                            f"can_switch: wrong direction in new route - "
+                            f"prev.v={prev_edge_new.v}, edge.u={edge.u}"
+                        )
+                        continue
+                
+                # Both routes use this edge in same direction!
+                log.info(
+                    f"can_switch: SUCCESS - edge={remaining_edge_id}, "
+                    f"new_idx={new_idx}"
+                )
+                return True, new_idx
         
-        # Get total route distance
-        total_distance = current_route_data.get('total_distance_m', 0)
-        if total_distance <= 0:
-            return False, None
-        
-        # Calculate future progress
-        future_distance = self.params.max_speed * future_sim_time
-        future_progress = min(future_distance / total_distance, 1.0)
-        
-        # Find future edge index
-        edge_distances = []
-        cumulative_dist = 0.0
-        for edge_id in current_edges:
-            edge = graph.get_edge(edge_id)
-            if edge:
-                edge_distances.append((edge_id, cumulative_dist))
-                cumulative_dist += edge.length_m
-        
-        future_edge_id = None
-        for i, (edge_id, dist) in enumerate(edge_distances):
-            if future_progress * total_distance >= dist:
-                future_edge_id = edge_id
-            else:
-                break
-        
-        # Check if future edge in new route
-        if future_edge_id and future_edge_id in new_edges:
-            new_idx = new_edges.index(future_edge_id)
-            return True, new_idx
-        
+        # No valid overlap found
+        log.warning(
+            f"can_switch: no overlap found after checking "
+            f"{checked_edges} remaining edges"
+        )
         return False, None
 
 
