@@ -49,6 +49,7 @@ class SimulationAgent:
     sim_speed: float = 1.0  # 1x speed by default
     start_time: float = field(default_factory=time.time)
     total_distance_traveled_m: float = 0.0  # Total distance since start
+    _prev_total_distance_m: float = 0.0  # For delta calculation
     is_running: bool = True
     driver_type: str = 'normal'  # 'normal' or 'hurry'
     # Final position (saved when route completes)
@@ -117,8 +118,15 @@ class SimulationAgent:
             return (0.0, 0.0, 0.0, 0.0, 0)
         
         # Calculate distance traveled (sim_speed affects time)
+        # Use average speed instead of max_speed to account for:
+        # - Acceleration zone (0-5%): 0 → max (avg = 0.5 * max)
+        # - Cruising zone (5-90%): max
+        # - Deceleration zone (90-100%): max → 0 (avg = 0.5 * max)
+        # Weighted average ≈ 0.9 * max_speed
+        
         sim_time = elapsed_time_sec * self.sim_speed
-        distance_traveled = sim_time * self.params.max_speed  # meters
+        avg_speed_factor = 0.9  # Account for accel/decel zones
+        distance_traveled = sim_time * self.params.max_speed * avg_speed_factor
         
         # Update total distance
         self.total_distance_traveled_m = distance_traveled
@@ -179,6 +187,10 @@ class SimulationAgent:
             overall_progress, route_coords
         )
         
+        # Calculate distance delta since last call
+        distance_delta_m = distance_traveled - self._prev_total_distance_m
+        self._prev_total_distance_m = distance_traveled
+        
         # TRACE: Log calculated position for teleportation tracking
         logger.trace(
             "agent_position_result",
@@ -189,10 +201,11 @@ class SimulationAgent:
             speed_mps=current_speed,
             edge_id=current_edge_id,
             progress=overall_progress,
-            distance_traveled_m=distance_traveled
+            distance_traveled_m=distance_traveled,
+            distance_delta_m=distance_delta_m
         )
         
-        return (lon, lat, bearing, current_speed, current_edge_id)
+        return (lon, lat, bearing, current_speed, current_edge_id, distance_delta_m)
     
     def _find_edge_at_progress(
         self,

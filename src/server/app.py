@@ -116,6 +116,7 @@ class SimAgentPositionResponse(BaseModel):
     state: str  # moving, stopped, waiting, etc
     is_finished: bool
     assigned_route_id: int = None  # Agent's current route (for visualization)
+    distance_delta_m: float = 0.0  # Distance traveled since last call
 
 
 class OsmLoadRequest(BaseModel):
@@ -602,7 +603,7 @@ def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
     sim_routes[agent_id] = route_data
     
     # Get initial position
-    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+    lon, lat, bearing, current_speed, edge_id, distance_delta_m = agent.get_current_position(
         route_data=route_data,
         elapsed_time_sec=0.0,
         graph=cached_graph
@@ -626,7 +627,8 @@ def sim_agent_start(req: SimAgentStartRequest) -> SimAgentPositionResponse:
         eta_seconds=route_data['total_time_sec'] / req.sim_speed,
         state="Moving",
         is_finished=False,
-        assigned_route_id=agent.assigned_route_id
+        assigned_route_id=agent.assigned_route_id,
+        distance_delta_m=distance_delta_m
     )
 
 
@@ -994,7 +996,7 @@ def sim_agent_position(agent_id: int) -> SimAgentPositionResponse:
                     del sim_selected_routes[agent_id]
     # Agent movement is ASYNC - based purely on elapsed_time
     # Route changes don't affect current position/speed
-    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+    lon, lat, bearing, current_speed, edge_id, distance_delta_m = agent.get_current_position(
         route_data=route_data,
         elapsed_time_sec=elapsed_time,
         graph=cached_graph
@@ -1013,7 +1015,8 @@ def sim_agent_position(agent_id: int) -> SimAgentPositionResponse:
         eta_seconds=sim_time_remaining,
         state="Moving" if agent.is_running else "Stopped",
         is_finished=agent.current_progress >= 1.0,
-        assigned_route_id=agent.assigned_route_id
+        assigned_route_id=agent.assigned_route_id,
+        distance_delta_m=distance_delta_m
     )
 
 
@@ -1102,7 +1105,7 @@ def sim_agent_restart(
     )
     
     # Get initial position with (possibly updated) route data
-    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+    lon, lat, bearing, current_speed, edge_id, distance_delta_m = agent.get_current_position(
         route_data=route_data,
         elapsed_time_sec=0.0,
         graph=cached_graph
@@ -1123,7 +1126,8 @@ def sim_agent_restart(
         eta_seconds=sim_time_remaining,
         state="Moving",
         is_finished=False,
-        assigned_route_id=agent.assigned_route_id
+        assigned_route_id=agent.assigned_route_id,
+        distance_delta_m=distance_delta_m
     )
 
 
@@ -1199,7 +1203,7 @@ def sim_agent_reroute(
     
     # Get current position on old route
     elapsed_time = time.time() - agent.start_time
-    lon, lat, bearing, current_speed, old_edge_id = agent.get_current_position(
+    lon, lat, bearing, current_speed, old_edge_id, distance_delta_m = agent.get_current_position(
         route_data=old_route_data,
         elapsed_time_sec=elapsed_time,
         graph=cached_graph
@@ -1267,7 +1271,7 @@ def sim_agent_reroute(
         )
     
     # Get current position (now with potentially updated route)
-    lon, lat, bearing, current_speed, edge_id = agent.get_current_position(
+    lon, lat, bearing, current_speed, edge_id, distance_delta_m = agent.get_current_position(
         route_data=sim_routes[agent_id],
         elapsed_time_sec=time.time() - agent.start_time,
         graph=cached_graph
@@ -1288,7 +1292,8 @@ def sim_agent_reroute(
         eta_seconds=sim_time_remaining,
         state="Moving" if agent.is_running else "Stopped",
         is_finished=agent.current_progress >= 1.0,
-        assigned_route_id=agent.assigned_route_id
+        assigned_route_id=agent.assigned_route_id,
+        distance_delta_m=distance_delta_m
     )
 
 

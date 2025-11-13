@@ -54,6 +54,8 @@ class MainWindowHandlers:
     
     # Teleportation detection state
     _prev_position = None  # Previous agent position (lon, lat)
+    _prev_route_id = None  # Previous route ID for change detection
+    _skip_teleport_frames = 0  # Skip N frames after route change/restart
     _route_selection_cache = []  # Cache of selected routes for tests
     
     def _handle_zoom_from_js(self, zoom_value: int) -> None:
@@ -1050,49 +1052,94 @@ class MainWindowHandlers:
             selections=len(self._route_selection_cache)
         )
     
-    def _check_teleportation(self, position: dict, agent_data: dict) -> None:
+    def _check_teleportation(
+        self,
+        position: dict,
+        agent_data: dict,
+        distance_delta_m: float
+    ) -> None:
         """
         Check if agent teleported between frames.
         
-        Formula:
-        dS_critical = v_max * dt
-        dt = sim_speed / fps
-        v_max = 200 km/h = 200/3.6 m/s
+        Uses ACTUAL distance traveled (from agent simulation) instead of
+        haversine approximation for accurate detection.
         
-        If distance > dS_critical * threshold -> TELEPORTATION
+        IMPORTANT: Ignores route changes and agent restarts
         """
         from src.client.config.simulation_config import simulation_config
         import math
         
         current_pos = (position['lon'], position['lat'])
+        current_route_id = agent_data.get('assigned_route_id')
+        agent_speed_kmh = agent_data.get('speed_kmh', 50.0)
+        
+        # Check if we should skip frames after route change
+        if self._skip_teleport_frames > 0:
+            self._skip_teleport_frames -= 1
+            log.trace(
+                "skipping_teleport_check_after_route_change",
+                frames_remaining=self._skip_teleport_frames
+            )
+            self._prev_position = current_pos
+            self._prev_route_id = current_route_id
+            return
+        
+        # Check if route changed - if yes, skip next 3 frames
+        # (large jumps expected when switching/merging routes)
+        if (self._prev_route_id is not None and
+                current_route_id != self._prev_route_id):
+            log.info(
+                "route_changed_skipping_teleport_check",
+                prev_route=self._prev_route_id,
+                new_route=current_route_id
+            )
+            self._skip_teleport_frames = 3  # Skip next 3 frames
+            self._prev_position = current_pos
+            self._prev_route_id = current_route_id
+            return
+        
+        # Skip check if agent just started (speed low)
+        # This handles restart on same route_id
+        # Agent accelerates from 0 to ~50 km/h in first 5% of route
+        if agent_speed_kmh < 10.0:  # Agent starting/accelerating
+            log.trace(
+                "agent_starting_skipping_teleport_check",
+                speed_kmh=agent_speed_kmh
+            )
+            self._skip_teleport_frames = 3  # Skip next 3 frames too
+            self._prev_position = current_pos
+            self._prev_route_id = current_route_id
+            return
         
         if self._prev_position is not None:
-            # Calculate distance between prev and current position
-            lon1, lat1 = self._prev_position
-            lon2, lat2 = current_pos
+            # Use ACTUAL distance from agent simulation
+            # (more accurate than haversine for curved routes)
+            distance_m = distance_delta_m
             
-            # Haversine distance (rough approximation)
-            dlat = lat2 - lat1
-            dlon = lon2 - lon1
-            # 1 degree ≈ 111 km
-            dlat_m = dlat * 111000
-            dlon_m = dlon * 111000 * math.cos(math.radians(lat1))
-            distance_m = math.sqrt(dlat_m ** 2 + dlon_m ** 2)
-            
-            # Calculate critical distance
+            # Calculate expected distance based on ACTUAL agent speed
             sim_speed = (
                 self.sidebar.simulation_panel.sim_speed_spinbox.value()
             )
             fps = self.sim_fps
-            v_max_mps = (
-                simulation_config.agent_max_speed_theoretical_kmh / 3.6
-            )
-            dt = sim_speed / fps
-            dS_critical = v_max_mps * dt
-            threshold = (
-                dS_critical *
-                simulation_config.teleport_threshold_multiplier
-            )
+            
+            # Use ACTUAL agent speed (already extracted above)
+            v_agent_mps = agent_speed_kmh / 3.6  # Convert to m/s
+            
+            # Calculate time between frames
+            dt_real = 1.0 / fps  # Real-world time between frames (seconds)
+            dt_sim = dt_real * sim_speed  # Simulation time between frames
+            
+            # Calculate maximum expected distance
+            # Agent moves at v_agent speed for dt_sim seconds
+            dS_expected = v_agent_mps * dt_sim
+            
+            # Apply margin for:
+            # - Speed fluctuations (acceleration/deceleration)
+            # - Route merges (smooth transitions but position jumps)
+            # - Numerical errors
+            # - Slight position mismatches
+            # Use 3x margin to cover merge transitions
+            threshold = dS_expected * 3.0 * simulation_config.teleport_threshold_multiplier
             
             if distance_m > threshold:
                 # TELEPORTATION DETECTED!
@@ -1101,7 +1148,9 @@ class MainWindowHandlers:
                     agent_id=self.sim_agent_id,
                     distance_m=round(distance_m, 2),
                     threshold_m=round(threshold, 2),
-                    dS_critical_m=round(dS_critical, 2),
+                    dS_expected_m=round(dS_expected, 2),
+                    dt_real_s=round(dt_real, 3),
+                    dt_sim_s=round(dt_sim, 3),
                     sim_speed=sim_speed,
                     fps=fps,
                     prev_pos=self._prev_position,
@@ -1135,8 +1184,9 @@ class MainWindowHandlers:
                     to_pos=current_pos
                 )
         
-        # Update prev position
+        # Update prev position and route ID
         self._prev_position = current_pos
+        self._prev_route_id = current_route_id
     
     def _update_agent_position(self) -> None:
         """Timer callback: fetch agent position and update map."""
@@ -1178,7 +1228,8 @@ class MainWindowHandlers:
             # Teleportation detection
             from src.client.config.simulation_config import simulation_config
             if simulation_config.debug_teleportations:
-                self._check_teleportation(position, data)
+                distance_delta_m = data.get('distance_delta_m', 0.0)
+                self._check_teleportation(position, data, distance_delta_m)
             
             js = f"""
             if (window.app && window.app.updateAgent) {{
