@@ -24,105 +24,141 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  # Application logs (all levels)
-  - job_name: app_logs
+  # Server logs (all levels)
+  - job_name: server_logs
     static_configs:
       - targets:
           - localhost
         labels:
-          job: app_logs
+          job: server_logs
           application: navigation_mas
+          container: server
           environment: development
-          __path__: /var/log/app/app.jsonl
+          __path__: /var/log/app/server/app.jsonl
     
     pipeline_stages:
-      # Parse JSON
+      # Parse loguru serialize=True format: {text, record}
       - json:
           expressions:
-            timestamp: timestamp
-            level: level
-            logger: logger
-            message: message
-            function: function
-            line: line
-            module: module
+            level: record.level.name
+            logger: record.name
+            message: record.message
+            function: record.function
+            line: record.line
+            module: record.module
+            timestamp: record.time.repr
+            thread_id: record.extra.thread_id
       
       # Extract labels for Loki indexing
       - labels:
           level:
           logger:
           function:
+          container:
       
       # Set timestamp from log entry
       - timestamp:
           source: timestamp
           format: RFC3339Nano
   
-  # Error logs (fast error detection)
-  - job_name: error_logs
+  # Client logs (all levels)
+  - job_name: client_logs
     static_configs:
       - targets:
           - localhost
         labels:
-          job: error_logs
+          job: client_logs
           application: navigation_mas
+          container: client
+          environment: development
+          __path__: /var/log/app/client/app.jsonl
+    
+    pipeline_stages:
+      # Parse loguru serialize=True format: {text, record}
+      - json:
+          expressions:
+            level: record.level.name
+            logger: record.name
+            message: record.message
+            function: record.function
+            line: record.line
+            module: record.module
+            timestamp: record.time.repr
+            agent_id: record.extra.agent_id
+            thread_id: record.extra.thread_id
+      
+      # Extract labels for Loki indexing
+      - labels:
+          level:
+          logger:
+          function:
+          container:
+          agent_id:
+      
+      # Set timestamp from log entry
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+  
+  # Server error logs (fast error detection)
+  - job_name: server_errors
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: server_errors
+          application: navigation_mas
+          container: server
           severity: error
           environment: development
-          __path__: /var/log/app/errors.jsonl
+          __path__: /var/log/app/server/errors.jsonl
     
     pipeline_stages:
       - json:
           expressions:
-            timestamp: timestamp
-            level: level
-            logger: logger
-            message: message
-            exception_type: exception.type
+            level: record.level.name
+            logger: record.name
+            message: record.message
+            timestamp: record.time.repr
+            exception_type: record.exception.type
       
       - labels:
           level:
           logger:
           exception_type:
+          container:
       
       - timestamp:
           source: timestamp
           format: RFC3339Nano
   
-  # Slow operations (performance monitoring)
-  - job_name: slow_operations
+  # Client error logs
+  - job_name: client_errors
     static_configs:
       - targets:
           - localhost
         labels:
-          job: slow_operations
+          job: client_errors
           application: navigation_mas
-          category: performance
+          container: client
+          severity: error
           environment: development
-          __path__: /var/log/app/slow_operations.jsonl
+          __path__: /var/log/app/client/errors.jsonl
     
     pipeline_stages:
       - json:
           expressions:
-            timestamp: timestamp
-            duration_ms: duration_ms
-            function: function
-            message: message
+            level: record.level.name
+            logger: record.name
+            message: record.message
+            timestamp: record.time.repr
+            exception_type: record.exception.type
       
       - labels:
-          function:
-      
-      # Alert if operation took >5 seconds
-      - match:
-          selector: '{job="slow_operations"}'
-          stages:
-            - json:
-                expressions:
-                  duration: duration_ms
-            - template:
-                source: alert_level
-                template: '{{ if gt .duration 5000.0 }}CRITICAL{{ else }}WARNING{{ end }}'
-            - labels:
-                alert_level:
+          level:
+          logger:
+          exception_type:
+          container:
       
       - timestamp:
           source: timestamp

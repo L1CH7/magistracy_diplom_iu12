@@ -42,6 +42,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./scripts:/app/scripts
+      - ./.agent_dir/logs/server:/app/.agent_dir/logs
     networks:
       - nav-net
     depends_on:
@@ -77,6 +78,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.Xauthority:/root/.Xauthority:rw
       - /dev/shm:/dev/shm
+      - ./.agent_dir/logs/client:/app/.agent_dir/logs
     devices:
       - /dev/dri:/dev/dri
     networks:
