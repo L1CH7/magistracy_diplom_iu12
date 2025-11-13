@@ -137,8 +137,8 @@ sum by(function) (count_over_time({level="ERROR"}[5m]))
 2. Check Promtail logs: `docker logs diplom-promtail`
 3. Verify log files exist:
    ```bash
-   ls -lh .agent_dir/logs/server/
-   ls -lh .agent_dir/logs/client/
+   ls -lh logs/server/
+   ls -lh logs/client/
    ```
 
 ### Data source connection fails

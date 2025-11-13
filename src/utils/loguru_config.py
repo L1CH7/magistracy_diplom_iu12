@@ -111,7 +111,7 @@ def configure_loguru(
         return logger
     
     # Create logs directory
-    log_dir = Path('.agent_dir/logs')
+    log_dir = Path('logs')
     log_dir.mkdir(parents=True, exist_ok=True)
     
     if json_logs:
@@ -181,25 +181,25 @@ def configure_loguru(
 
 # === INITIALIZATION ===
 # Check for TRACE flag file (set by scripts/enable_trace.py)
-def _check_trace_flag() -> str:
-    """Check if TRACE enabled via flag file."""
-    import os
-    log_dir = Path('.agent_dir/logs')
+def _check_trace_flag() -> bool:
+    """Check if TRACE_ENABLED flag file exists for current process.
     
-    # Check for process-specific flag (client or server)
-    process_name = os.path.basename(sys.argv[0]).split('.')[0]
-    if process_name in ['main', 'app']:
-        # Determine if client or server from module path
-        if 'client' in sys.argv[0]:
-            process_name = 'client'
-        elif 'server' in sys.argv[0]:
-            process_name = 'server'
+    Flag files:
+        logs/TRACE_ENABLED_server
+        logs/TRACE_ENABLED_client
     
-    flag_file = log_dir / f'TRACE_ENABLED_{process_name}'
+    Returns:
+        True if TRACE should be enabled
+    """
+    process_name = sys.argv[0]
+    if 'server' in process_name or 'app.py' in process_name:
+        flag_file = Path('logs/TRACE_ENABLED_server')
+    elif 'client' in process_name or 'main.py' in process_name:
+        flag_file = Path('logs/TRACE_ENABLED_client')
+    else:
+        return False
     
-    if flag_file.exists():
-        return "TRACE"
-    return "INFO"
+    return flag_file.exists()
 
 
 # Configure on module import (can be reconfigured later)
@@ -213,24 +213,14 @@ if _initial_level == "TRACE":
 
 
 def enable_trace_logging():
-    """Enable TRACE level logging for detailed debugging.
-    
-    Usage:
-        from src.utils.loguru_config import enable_trace_logging
-        enable_trace_logging()
-    """
-    logger.remove()
-    configure_loguru(log_level="TRACE", log_to_file=True, json_logs=True)
-    logger.info("TRACE logging enabled (detailed movement tracking)")
+    """Enable TRACE logging dynamically (for programmatic use)."""
+    global _TRACE_ENABLED
+    _TRACE_ENABLED = True
+    logger.success("TRACE logging enabled")
 
 
 def disable_trace_logging():
-    """Disable TRACE level logging (back to INFO).
-    
-    Usage:
-        from src.utils.loguru_config import disable_trace_logging
-        disable_trace_logging()
-    """
-    logger.remove()
-    configure_loguru(log_level="INFO", log_to_file=True, json_logs=True)
-    logger.info("TRACE logging disabled (INFO level)")
+    """Disable TRACE logging dynamically (for programmatic use)."""
+    global _TRACE_ENABLED
+    _TRACE_ENABLED = False
+    logger.info("TRACE logging disabled")

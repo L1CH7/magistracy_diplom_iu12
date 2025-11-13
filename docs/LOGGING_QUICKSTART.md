@@ -129,7 +129,7 @@ docker-compose restart client server
 ## 📁 Структура логов
 
 ```
-.agent_dir/logs/
+logs/
 ├── app.jsonl              # Все логи (TRACE, DEBUG, INFO, WARNING, ERROR)
 ├── errors.jsonl           # Только ERROR и CRITICAL
 ├── slow_operations.jsonl  # Операции > 1 секунды
@@ -214,7 +214,7 @@ docker-compose restart client server
 ### Логи не появляются
 ```bash
 # Проверить что директория существует
-ls -lah .agent_dir/logs/
+ls -lah logs/
 
 # Проверить что контейнеры запущены
 docker-compose ps
@@ -242,7 +242,7 @@ python scripts/enable_trace.py disable both
 docker-compose restart client server
 
 # Удалить старые логи
-rm .agent_dir/logs/app.jsonl
+rm logs/app.jsonl
 ```
 
 ## 💡 Tips для AI Agent

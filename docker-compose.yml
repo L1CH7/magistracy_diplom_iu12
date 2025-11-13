@@ -42,7 +42,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./scripts:/app/scripts
-      - ./.agent_dir/logs/server:/app/.agent_dir/logs
+      - ./logs/server:/app/logs
     networks:
       - nav-net
     depends_on:
@@ -78,7 +78,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ~/.Xauthority:/root/.Xauthority:rw
       - /dev/shm:/dev/shm
-      - ./.agent_dir/logs/client:/app/.agent_dir/logs
+      - ./logs/client:/app/logs
     devices:
       - /dev/dri:/dev/dri
     networks:
@@ -113,7 +113,7 @@ services:
     container_name: diplom-promtail
     volumes:
       # Mount application logs
-      - ./.agent_dir/logs:/var/log/app:ro
+      - ./logs:/var/log/app:ro
       # Mount Promtail config
       - ./configs/promtail-config.yaml:/etc/promtail/config.yml:ro
     command: -config.file=/etc/promtail/config.yml

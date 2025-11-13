@@ -14,7 +14,7 @@ Application → loguru → JSON files → Promtail → Loki → Grafana
 
 ### Файлы логов
 
-Все логи хранятся в `.agent_dir/logs/`:
+Все логи хранятся в `logs/`:
 
 - **`app.jsonl`** - все логи приложения (JSON Lines format)
 - **`errors.jsonl`** - только ERROR и выше (быстрый поиск ошибок)
@@ -263,7 +263,7 @@ for item in large_list:
 
 2. Проверить, что файлы логов существуют:
    ```bash
-   ls -lh .agent_dir/logs/
+   ls -lh logs/
    ```
 
 3. Проверить Promtail конфигурацию:

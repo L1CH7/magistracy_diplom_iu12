@@ -129,27 +129,35 @@ def filter_log_entry(entry: dict, args) -> bool:
 
 def view_logs(args):
     """View logs with filters."""
-    log_dir = Path('.agent_dir/logs')
+    log_dir = Path('logs')
     
     if not log_dir.exists():
         print(f"❌ Log directory not found: {log_dir}")
         print("Run the application first to generate logs.")
         return 1
     
+    # Determine container (server by default, client if specified)
+    container = 'client' if args.agent else 'server'
+    container_dir = log_dir / container
+    
+    if not container_dir.exists():
+        print(f"❌ Container log directory not found: {container_dir}")
+        return 1
+    
     # Determine which log file to read
     if args.errors:
-        log_file = log_dir / 'errors.jsonl'
+        log_file = container_dir / 'errors.jsonl'
     elif args.slow:
-        log_file = log_dir / 'slow_operations.jsonl'
+        log_file = container_dir / 'slow_operations.jsonl'
     else:
-        log_file = log_dir / 'app.jsonl'
+        log_file = container_dir / 'app.jsonl'
     
     if not log_file.exists():
         print(f"❌ Log file not found: {log_file}")
         return 1
     
     print(f"📄 Reading: {log_file}")
-    print(f"🔍 Filters: errors={args.errors}, teleportations={args.teleportations}, "
+    print(f"🔍 Filters: container={container}, errors={args.errors}, teleportations={args.teleportations}, "
           f"agent={args.agent}, trace={args.trace}")
     print("─" * 80)
     

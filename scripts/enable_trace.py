@@ -18,7 +18,7 @@ from pathlib import Path
 def enable_trace_for_container(container_name: str):
     """Enable TRACE logging for container."""
     # Create flag file in logs directory
-    log_dir = Path('.agent_dir/logs')
+    log_dir = Path('logs')
     log_dir.mkdir(parents=True, exist_ok=True)
     
     flag_file = log_dir / f'TRACE_ENABLED_{container_name}'
@@ -33,7 +33,7 @@ def enable_trace_for_container(container_name: str):
 
 def disable_trace_for_container(container_name: str):
     """Disable TRACE logging for container."""
-    log_dir = Path('.agent_dir/logs')
+    log_dir = Path('logs')
     flag_file = log_dir / f'TRACE_ENABLED_{container_name}'
     
     if flag_file.exists():
@@ -46,7 +46,7 @@ def disable_trace_for_container(container_name: str):
 
 def check_trace_status():
     """Check TRACE status for all containers."""
-    log_dir = Path('.agent_dir/logs')
+    log_dir = Path('logs')
     
     if not log_dir.exists():
         print("ℹ️  No logs directory yet")
