@@ -1591,12 +1591,18 @@ async def fetch_road_graph(req: RoadGraphRequest):
                 )
                 
                 # Send progress update
+                percent = int((i + 1) / len(missing_tiles) * 100)
                 progress_msg = {
                     "type": "progress",
                     "current": i + 1,
                     "total": len(missing_tiles),
+                    "percent": percent,
                     "elements_count": len(all_elements),
                     "tile": tile_key,
+                    "message": (
+                        f"Downloading tiles... "
+                        f"{i+1}/{len(missing_tiles)} ({percent}%)"
+                    )
                 }
                 yield json_module.dumps(progress_msg) + "\n"
                 
@@ -1832,6 +1838,215 @@ def list_regions():
         'configured': list(REGIONS.keys()),
         'cached': cached
     }
+
+
+@app.get("/tiles/roads/{z}/{x}/{y}.pbf")
+def get_road_vector_tile(z: int, x: int, y: int):
+    """Generate vector tile (MVT) for road graph.
+    
+    Uses PostGIS ST_AsMVT for efficient tile generation.
+    MapLibre GL will request only visible tiles.
+    
+    Args:
+        z: Zoom level
+        x: Tile X coordinate
+        y: Tile Y coordinate
+    
+    Returns:
+        Mapbox Vector Tile (PBF format)
+    """
+    from fastapi.responses import Response
+    import math
+    
+    try:
+        db = PostGISManager()
+        
+        # Create bbox in Web Mercator (3857) for MVT using ST_TileEnvelope
+        bbox_3857 = (
+            f"ST_TileEnvelope({z}, {x}, {y})"
+        )
+        
+        # Query PostGIS for MVT tile using pre-computed geom_3857
+        query = f"""
+        SELECT ST_AsMVT(tile, 'roads', 4096, 'geom') AS mvt
+        FROM (
+            SELECT
+                osm_id,
+                highway,
+                lanes,
+                tags->>'surface' AS surface,
+                maxspeed,
+                ST_AsMVTGeom(
+                    geom_3857,
+                    {bbox_3857},
+                    4096,
+                    256,
+                    true
+                ) AS geom
+            FROM osm.ways
+            WHERE geom_3857 && {bbox_3857}
+            AND geom_3857 IS NOT NULL
+            AND highway IN (
+                'motorway', 'motorway_link',
+                'trunk', 'trunk_link',
+                'primary', 'primary_link',
+                'secondary', 'secondary_link',
+                'tertiary', 'tertiary_link',
+                'residential', 'living_street',
+                'unclassified', 'service'
+            )
+        ) AS tile
+        """
+        
+        with db.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                row = cur.fetchone()
+                
+                if row and row[0]:
+                    mvt_data = bytes(row[0])
+                    
+                    log.debug(
+                        f"MVT tile generated: z={z} x={x} y={y}, "
+                        f"size={len(mvt_data)} bytes"
+                    )
+                    
+                    return Response(
+                        content=mvt_data,
+                        media_type="application/x-protobuf",
+                        headers={
+                            "Content-Type": "application/x-protobuf",
+                            "Access-Control-Allow-Origin": "*",
+                            "Cache-Control": "public, max-age=86400"
+                        }
+                    )
+                else:
+                    # Empty tile
+                    return Response(
+                        content=b"",
+                        media_type="application/x-protobuf",
+                        headers={
+                            "Access-Control-Allow-Origin": "*"
+                        }
+                    )
+    
+    except Exception as e:
+        log.error(
+            f"MVT tile generation failed: z={z} x={x} y={y}",
+            error=str(e)
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate MVT tile: {str(e)}"
+        )
+
+
+@app.get("/osm/fetch_tile/{tile_key}")
+def fetch_tile(tile_key: str):
+    """Fetch single road graph tile by tile_key.
+    
+    Args:
+        tile_key: Tile identifier "lat_lon" (e.g. "55.75_37.60")
+    
+    Returns:
+        GeoJSON FeatureCollection with roads in this tile.
+    """
+    try:
+        db = PostGISManager()
+        
+        # Check if tile is cached
+        cached_keys = db.get_cached_tile_keys([tile_key])
+        
+        if tile_key in cached_keys:
+            # Return cached tile
+            geojson = db.get_tiles_roads_geojson([tile_key])
+            
+            if geojson:
+                feature_count = len(geojson.get('features', []))
+                log.info(
+                    f"Tile {tile_key} served from cache: "
+                    f"{feature_count} roads"
+                )
+                return {
+                    "type": "success",
+                    "cached": True,
+                    "tile_key": tile_key,
+                    "geojson": geojson,
+                    "feature_count": feature_count
+                }
+        
+        # Tile not cached - parse tile_key and fetch from Overpass
+        try:
+            lat_str, lon_str = tile_key.split('_')
+            tile_min_lat = float(lat_str)
+            tile_min_lon = float(lon_str)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tile_key format: {tile_key}"
+            )
+        
+        tile_size_deg = 0.05
+        tile_max_lat = tile_min_lat + tile_size_deg
+        tile_max_lon = tile_min_lon + tile_size_deg
+        
+        tile_bbox = (
+            tile_min_lon, tile_min_lat, tile_max_lon, tile_max_lat
+        )
+        overpass_bbox = (
+            tile_min_lat, tile_min_lon, tile_max_lat, tile_max_lon
+        )
+        
+        log.info(f"Fetching tile {tile_key} from Overpass: {overpass_bbox}")
+        
+        from src.data.osm_overpass import fetch_overpass, build_highway_query
+        query = build_highway_query(overpass_bbox)
+        data = fetch_overpass(query)
+        
+        ways = data.get('elements', [])
+        way_count = len([w for w in ways if w['type'] == 'way'])
+        
+        log.info(f"Tile {tile_key} fetched: {way_count} ways")
+        
+        # Save to PostGIS
+        db.bulk_insert_ways(ways)
+        db.insert_tile(tile_key, tile_bbox, way_count)
+        
+        # Convert to GeoJSON
+        geojson = db.get_tiles_roads_geojson([tile_key])
+        
+        if geojson:
+            feature_count = len(geojson.get('features', []))
+            
+            # Filter for drivable roads
+            from src.server.road_styling import filter_geojson
+            filtered_geojson = filter_geojson(geojson, drivable_only=True)
+            filtered_count = len(filtered_geojson['features'])
+            
+            log.info(
+                f"Tile {tile_key} ready: "
+                f"{filtered_count} drivable roads"
+            )
+            
+            return {
+                "type": "success",
+                "cached": False,
+                "tile_key": tile_key,
+                "geojson": filtered_geojson,
+                "feature_count": filtered_count
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to convert tile {tile_key} to GeoJSON"
+            )
+    
+    except Exception as e:
+        log.error(f"Tile fetch failed: {tile_key}", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch tile {tile_key}: {str(e)}"
+        )
 
 
 @app.get("/tiles/osm/{z}/{x}/{y}.png")

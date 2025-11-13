@@ -103,6 +103,14 @@ export function createMapStyle(tileUrl) {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       },
+      'graph-vector': {
+        type: 'vector',
+        tiles: [
+          'http://server:8000/tiles/roads/{z}/{x}/{y}.pbf'
+        ],
+        minzoom: 0,
+        maxzoom: 14
+      },
       routes: {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -125,13 +133,16 @@ export function createMapStyle(tileUrl) {
         type: 'raster',
         source: 'osm',
       },
+      // Vector tile graph layer (simple - no LOD for testing)
       {
-        id: 'graph',
+        id: 'graph-vector',
         type: 'line',
-        source: 'graph',
+        source: 'graph-vector',
+        'source-layer': 'roads',
+        minzoom: 0,
         paint: {
-          'line-color': buildGraphColorExpression(),
-          'line-width': buildGraphWidthExpression(),
+          'line-color': '#ff0000',  // Red for visibility
+          'line-width': 2,
         },
       },
       {
