@@ -18,7 +18,7 @@ class DataConfig:
 
     # Default test bbox (used by "Get Graph Data" button)
     DEFAULT_TEST_BBOX = TEST_BBOX_MOSCOW
-    # DEFAULT_TEST_BBOX = TEST_BBOX_MOSCOW_SMALL
+    # DEFAULT_TEST_BBOX = TEST_BBOX_MOSCOW_CENTER
     
     # API timeouts (seconds)
     API_TIMEOUT_DEFAULT = 30

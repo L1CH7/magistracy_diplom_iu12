@@ -107,6 +107,21 @@ CREATE TABLE IF NOT EXISTS osm.regions (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Tile cache tracking (0.05 deg tiles for incremental downloads)
+CREATE TABLE IF NOT EXISTS osm.cached_tiles (
+    id BIGSERIAL PRIMARY KEY,
+    tile_key VARCHAR(50) NOT NULL UNIQUE,  -- Format: "lat_lon" e.g. "55.50_37.35"
+    min_lon DOUBLE PRECISION NOT NULL,
+    min_lat DOUBLE PRECISION NOT NULL,
+    max_lon DOUBLE PRECISION NOT NULL,
+    max_lat DOUBLE PRECISION NOT NULL,
+    bbox GEOMETRY(POLYGON, 4326) NOT NULL,
+    total_ways INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    access_count INTEGER DEFAULT 0
+);
+
 -- Spatial indexes (GIST for geometry queries)
 CREATE INDEX idx_osm_ways_geom ON osm.ways USING GIST(geom);
 CREATE INDEX idx_osm_ways_highway ON osm.ways(highway);
@@ -114,6 +129,9 @@ CREATE INDEX idx_osm_ways_region ON osm.ways(region);
 CREATE INDEX idx_osm_ways_tags ON osm.ways USING GIN(tags);
 CREATE INDEX idx_osm_nodes_geom ON osm.nodes USING GIST(geom);
 CREATE INDEX idx_osm_regions_bbox ON osm.regions USING GIST(bbox);
+CREATE INDEX idx_osm_cached_tiles_bbox ON osm.cached_tiles USING GIST(bbox);
+CREATE INDEX idx_osm_cached_tiles_key ON osm.cached_tiles(tile_key);
+CREATE INDEX idx_osm_cached_tiles_accessed ON osm.cached_tiles(accessed_at);
 
 -- Function to check if region is cached
 CREATE OR REPLACE FUNCTION osm.is_region_cached(_region_name VARCHAR)
@@ -122,6 +140,90 @@ BEGIN
     RETURN EXISTS (
         SELECT 1 FROM osm.regions
         WHERE name = _region_name AND is_complete = TRUE
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to check which tiles are cached
+CREATE OR REPLACE FUNCTION osm.get_cached_tile_keys(
+    _tile_keys VARCHAR[]
+)
+RETURNS VARCHAR[] AS $$
+BEGIN
+    RETURN ARRAY(
+        SELECT tile_key
+        FROM osm.cached_tiles
+        WHERE tile_key = ANY(_tile_keys)
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to mark tile as cached
+CREATE OR REPLACE FUNCTION osm.mark_tile_cached(
+    _tile_key VARCHAR,
+    _min_lon DOUBLE PRECISION,
+    _min_lat DOUBLE PRECISION,
+    _max_lon DOUBLE PRECISION,
+    _max_lat DOUBLE PRECISION,
+    _total_ways INTEGER DEFAULT 0
+)
+RETURNS VOID AS $$
+BEGIN
+    INSERT INTO osm.cached_tiles (
+        tile_key, min_lon, min_lat, max_lon, max_lat,
+        bbox, total_ways
+    )
+    VALUES (
+        _tile_key, _min_lon, _min_lat, _max_lon, _max_lat,
+        ST_MakeEnvelope(_min_lon, _min_lat, _max_lon, _max_lat, 4326),
+        _total_ways
+    )
+    ON CONFLICT (tile_key)
+    DO UPDATE SET
+        accessed_at = NOW(),
+        access_count = osm.cached_tiles.access_count + 1,
+        total_ways = EXCLUDED.total_ways;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to get roads from specific tiles (for merging)
+CREATE OR REPLACE FUNCTION osm.get_tiles_roads_geojson(
+    _tile_keys VARCHAR[]
+)
+RETURNS JSON AS $$
+DECLARE
+    _tile osm.cached_tiles%ROWTYPE;
+    _features JSON;
+BEGIN
+    -- Update access stats
+    UPDATE osm.cached_tiles
+    SET accessed_at = NOW(),
+        access_count = access_count + 1
+    WHERE tile_key = ANY(_tile_keys);
+    
+    -- Get roads from all tiles at once with deduplication by osm_id
+    RETURN json_build_object(
+        'type', 'FeatureCollection',
+        'features', COALESCE((
+            SELECT json_agg(feature)
+            FROM (
+                SELECT DISTINCT ON (w.osm_id)
+                    json_build_object(
+                        'type', 'Feature',
+                        'geometry', ST_AsGeoJSON(w.geom)::json,
+                        'properties', json_build_object(
+                            'way_id', w.osm_id,
+                            'highway', w.highway,
+                            'name', w.name,
+                            'lanes', w.lanes,
+                            'maxspeed', w.maxspeed
+                        )::jsonb || w.tags
+                    ) AS feature
+                FROM osm.cached_tiles t
+                JOIN osm.ways w ON ST_Intersects(w.geom, t.bbox)
+                WHERE t.tile_key = ANY(_tile_keys)
+            ) AS deduplicated
+        ), '[]'::json)
     );
 END;
 $$ LANGUAGE plpgsql;

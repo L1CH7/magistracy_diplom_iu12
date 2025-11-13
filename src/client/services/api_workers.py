@@ -1,8 +1,8 @@
-"""Asynchronous API worker for non-blocking network requests."""
-
-from PyQt5.QtCore import QThread, pyqtSignal
-import requests
+"""Async workers for API requests."""
 import json
+import requests
+from PyQt5.QtCore import QThread, pyqtSignal
+from loguru import logger as log
 
 
 class GraphFetchWorker(QThread):
@@ -66,13 +66,27 @@ class GraphFetchWorker(QThread):
                         geojson = data.get("geojson")
                         total_ways = data.get("total_ways", 0)
                         is_cached = data.get("cached", False)
+                        log.info(
+                            f"GraphWorker: complete received, "
+                            f"ways={total_ways}, geojson={geojson is not None}"
+                        )
+                        break  # Exit loop after receiving complete message
                     
                     elif msg_type == "error":
                         error_msg = data.get("error", "Unknown error")
                         self.error.emit(f"Server error: {error_msg}")
                         return
             
+            log.info(
+                f"GraphWorker: stream ended, "
+                f"geojson={geojson is not None}"
+            )
+            
             if geojson:
+                log.info(
+                    f"GraphWorker: emitting finished signal, "
+                    f"features={len(geojson.get('features', []))}"
+                )
                 self.finished.emit({
                     'geojson': geojson,
                     'total_ways': total_ways,
@@ -80,6 +94,7 @@ class GraphFetchWorker(QThread):
                     'bbox': self.bbox
                 })
             else:
+                log.warning("GraphWorker: no geojson, emitting error")
                 self.error.emit("No data received from server")
         
         except requests.exceptions.Timeout:

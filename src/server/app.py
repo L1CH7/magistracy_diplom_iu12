@@ -1438,88 +1438,132 @@ async def fetch_road_graph(req: RoadGraphRequest):
                 }) + '\n'
                 return
             
-            # LAYER 2: Try raw OSM cache (need to process)
-            geojson = db.get_roads_geojson(bbox_tuple)
+            # LAYER 2: Check tile-based cache for incremental download
+            # Calculate tiles first
+            tile_size_deg = 0.05
+            tiles = []
+            lat = min_lat
+            while lat < max_lat:
+                lon = min_lon
+                while lon < max_lon:
+                    tile_min_lat = lat
+                    tile_min_lon = lon
+                    tile_max_lat = min(lat + tile_size_deg, max_lat)
+                    tile_max_lon = min(lon + tile_size_deg, max_lon)
+                    tiles.append((
+                        tile_min_lon, tile_min_lat,
+                        tile_max_lon, tile_max_lat
+                    ))
+                    lon += tile_size_deg
+                lat += tile_size_deg
             
-            if geojson and geojson.get('features'):
-                # Raw cache HIT - need to filter + classify
-                feature_count = len(geojson['features'])
+            # Create tile keys: "lat_lon" format (2 decimal places)
+            tile_keys = [
+                f"{t[1]:.2f}_{t[0]:.2f}" for t in tiles
+            ]
+            total_tiles = len(tiles)
+            
+            log.info(
+                f"Tile-based cache check: bbox={bbox_tuple} "
+                f"tiles={total_tiles}"
+            )
+            
+            # Check which tiles are cached
+            cached_tile_keys = db.get_cached_tile_keys(tile_keys)
+            cached_count = len(cached_tile_keys)
+            missing_count = total_tiles - cached_count
+            
+            if cached_count > 0:
                 log.info(
-                    f"Raw OSM cache HIT: bbox={bbox_tuple} "
-                    f"features={feature_count}, will process"
+                    f"Tile cache PARTIAL HIT: cached={cached_count} "
+                    f"missing={missing_count}"
                 )
-                yield json_module.dumps({
-                    'type': 'info',
-                    'message': 'Processing cached OSM data...',
-                }) + '\n'
+            
+            # If ALL tiles cached, return merged result
+            if missing_count == 0:
+                geojson = db.get_tiles_roads_geojson(list(cached_tile_keys))
                 
-                # Filter GeoJSON server-side (только фильтрация)
-                filtered_geojson = filter_geojson(
-                    geojson,
-                    drivable_only=True
-                )
-                
-                # Save to processed cache for next time
-                db.save_processed_geojson(
-                    bbox_tuple,
-                    filtered_geojson,
-                    style_version='v1'
-                )
-                
-                filtered_count = len(filtered_geojson['features'])
-                log.info(
-                    f"OSM data filtered: "
-                    f"{feature_count} → {filtered_count} drivable roads"
-                )
-                
-                yield json_module.dumps({
-                    'type': 'complete',
-                    'cached': True,
-                    'processed': True,
-                    'geojson': filtered_geojson,
-                    'total_ways': filtered_count,
-                    'bbox': list(bbox_tuple),
-                }) + '\n'
-                return
-            else:
-                log.info(
-                    f"OSM Cache MISS: bbox={bbox_tuple}, "
-                    f"will fetch from Overpass"
-                )
+                if geojson is not None:
+                    feature_count = len(geojson.get('features', []))
+                    log.info(
+                        f"All tiles cached: features={feature_count}"
+                    )
+                    
+                    yield json_module.dumps({
+                        'type': 'info',
+                        'message': 'Processing cached tiles...',
+                    }) + '\n'
+                    
+                    # Filter GeoJSON server-side
+                    filtered_geojson = filter_geojson(
+                        geojson,
+                        drivable_only=True
+                    )
+                    
+                    # Save to processed cache
+                    db.save_processed_geojson(
+                        bbox_tuple,
+                        filtered_geojson,
+                        style_version='v1'
+                    )
+                    
+                    filtered_count = len(filtered_geojson['features'])
+                    log.info(
+                        f"Tiles filtered: "
+                        f"{feature_count} → {filtered_count} drivable"
+                    )
+                    
+                    yield json_module.dumps({
+                        'type': 'complete',
+                        'cached': True,
+                        'processed': True,
+                        'geojson': filtered_geojson,
+                        'total_ways': filtered_count,
+                        'bbox': list(bbox_tuple),
+                    }) + '\n'
+                    return
+            
+            # PARTIAL or FULL miss - fetch missing tiles from Overpass
+            log.info(
+                f"Fetching missing tiles from Overpass: "
+                f"count={missing_count}/{total_tiles}"
+            )
         except Exception as e:
             log.error(f"PostGIS cache check FAILED: {e}")
         
-        # LAYER 3: Cache miss - fetch from Overpass
-        log.info(f"Fetching from Overpass: bbox={bbox_tuple}")
+        # LAYER 3: Fetch ONLY missing tiles from Overpass
+        # (tiles[] and tile_keys[] already calculated in LAYER 2)
         
-        bbox = (min_lat, min_lon, max_lat, max_lon)
+        # Filter to missing tiles only
+        missing_tiles = [
+            tiles[i] for i, key in enumerate(tile_keys)
+            if key not in cached_tile_keys
+        ]
+        missing_tile_keys = [
+            tile_keys[i] for i, key in enumerate(tile_keys)
+            if key not in cached_tile_keys
+        ]
         
-        # Calculate tiles
-        tile_size_deg = 0.05
-        s, w, n, e = bbox
-        tiles = []
-        lat = s
-        while lat < n:
-            lon = w
-            while lon < e:
-                tile_s = lat
-                tile_w = lon
-                tile_n = min(lat + tile_size_deg, n)
-                tile_e = min(lon + tile_size_deg, e)
-                tiles.append((tile_s, tile_w, tile_n, tile_e))
-                lon += tile_size_deg
-            lat += tile_size_deg
+        log.info(
+            f"Fetching ONLY missing tiles: "
+            f"missing={len(missing_tiles)}/{total_tiles}"
+        )
         
-        total_tiles = len(tiles)
-        log.info(f"Calculated {total_tiles} tiles for Overpass fetch")
-        
-        # Collect all elements
+        # Collect all elements from MISSING tiles only
         all_elements = []
         seen_ids = set()
         
+        # Convert to Overpass bbox format (lat, lon, lat, lon)
+        missing_overpass_tiles = [
+            (t[1], t[0], t[3], t[2])  # (min_lat, min_lon, max_lat, max_lon)
+            for t in missing_tiles
+        ]
+        
         try:
-            for i, tile_bbox in enumerate(tiles):
-                log.debug(f"Fetching tile {i+1}/{total_tiles}")
+            for i, (tile_bbox, tile_key) in enumerate(
+                zip(missing_overpass_tiles, missing_tile_keys)
+            ):
+                log.debug(f"Fetching tile {i+1}/{len(missing_tiles)}")
                 query = build_highway_query(tile_bbox)
                 
                 # Fetch tile (blocking, run in executor)
@@ -1541,20 +1585,18 @@ async def fetch_road_graph(req: RoadGraphRequest):
                         new_count += 1
                 
                 log.debug(
-                    "Tile fetched",
-                    current=i+1,
-                    total=total_tiles,
-                    raw=len(elements),
-                    new=new_count,
-                    accumulated=len(all_elements)
+                    f"Tile {tile_key} fetched: "
+                    f"raw={len(elements)} new={new_count} "
+                    f"accumulated={len(all_elements)}"
                 )
                 
                 # Send progress update
                 progress_msg = {
                     "type": "progress",
                     "current": i + 1,
-                    "total": total_tiles,
-                    "elements_count": len(all_elements)
+                    "total": len(missing_tiles),
+                    "elements_count": len(all_elements),
+                    "tile": tile_key,
                 }
                 yield json_module.dumps(progress_msg) + "\n"
                 
@@ -1638,21 +1680,74 @@ async def fetch_road_graph(req: RoadGraphRequest):
                         f"Successfully cached {len(way_list)} ways "
                         f"in PostGIS"
                     )
+                    
+                    # Mark missing tiles as cached
+                    for tile_key, tile_bbox in zip(
+                        missing_tile_keys, missing_tiles
+                    ):
+                        db.mark_tile_cached(
+                            tile_key,
+                            tile_bbox,
+                            total_ways=len(way_list)
+                        )
+                    
+                    log.info(
+                        f"Marked {len(missing_tile_keys)} tiles as cached"
+                    )
             except Exception as e:
                 log.error(f"Failed to save ways to PostGIS: {e}")
+            
+            # Merge with cached tiles if we have any
+            final_geojson = geojson
+            if cached_count > 0:
+                log.info(
+                    f"Merging {cached_count} cached tiles with "
+                    f"{len(missing_tiles)} new tiles"
+                )
+                cached_geojson = db.get_tiles_roads_geojson(
+                    list(cached_tile_keys)
+                )
+                if cached_geojson and cached_geojson.get('features'):
+                    # Merge features, deduplicate by way_id
+                    seen_way_ids = set()
+                    merged_features = []
+                    
+                    for feature in cached_geojson['features']:
+                        way_id = feature.get('properties', {}).get('way_id')
+                        if way_id and way_id not in seen_way_ids:
+                            seen_way_ids.add(way_id)
+                            merged_features.append(feature)
+                    
+                    for feature in geojson['features']:
+                        way_id = feature.get('properties', {}).get('way_id')
+                        if way_id and way_id not in seen_way_ids:
+                            seen_way_ids.add(way_id)
+                            merged_features.append(feature)
+                    
+                    final_geojson = {
+                        'type': 'FeatureCollection',
+                        'features': merged_features
+                    }
+                    cached_fcount = len(cached_geojson['features'])
+                    new_fcount = len(geojson['features'])
+                    log.info(
+                        f"Merged result: cached={cached_fcount} "
+                        f"new={new_fcount} total={len(merged_features)}"
+                    )
             
             # Filter GeoJSON for client (remove non-drivable roads)
             from src.server.road_styling import filter_geojson
             
             filtered_geojson = filter_geojson(
-                geojson,
+                final_geojson,
                 drivable_only=True
             )
             filtered_count = len(filtered_geojson['features'])
+            original_count = len(final_geojson['features'])
             
             log.info(
-                f"Filtered Overpass data: "
-                f"{len(features)} → {filtered_count} drivable roads"
+                f"Filtered data: "
+                f"{original_count} → {filtered_count} drivable roads"
             )
             
             # Save filtered GeoJSON to cache
@@ -1662,9 +1757,7 @@ async def fetch_road_graph(req: RoadGraphRequest):
                     filtered_geojson,
                     style_version='v1'
                 )
-                log.info(
-                    f"Filtered GeoJSON cached for future requests"
-                )
+                log.info("Filtered GeoJSON cached for future requests")
             except Exception as e:
                 log.error(
                     f"Failed to cache filtered GeoJSON: {e}"

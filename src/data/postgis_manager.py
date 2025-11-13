@@ -7,7 +7,7 @@ Manages three separate schemas:
 """
 
 import os
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Set
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
 from loguru import logger as log
@@ -294,6 +294,115 @@ class PostGISManager:
                     """
                 )
                 return [dict(row) for row in cur.fetchall()]
+        finally:
+            conn.close()
+    
+    # ========================================================================
+    # Tile-based caching for incremental downloads
+    # ========================================================================
+    
+    def get_cached_tile_keys(self, tile_keys: List[str]) -> Set[str]:
+        """Check which tiles are already cached.
+        
+        Args:
+            tile_keys: List of tile keys (format: "lat_lon" e.g. "55.50_37.35")
+            
+        Returns:
+            Set of cached tile keys
+        """
+        if not tile_keys:
+            return set()
+            
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT osm.get_cached_tile_keys(%s)",
+                    (tile_keys,)
+                )
+                result = cur.fetchone()[0]
+                cached = set(result) if result else set()
+                missing_count = len(tile_keys) - len(cached)
+                log.debug(
+                    f"Tile cache check: requested={len(tile_keys)} "
+                    f"cached={len(cached)} missing={missing_count}"
+                )
+                return cached
+        except Exception as e:
+            log.error(f"Tile cache check FAILED: error={str(e)}")
+            return set()
+        finally:
+            conn.close()
+    
+    def mark_tile_cached(
+        self,
+        tile_key: str,
+        tile_bbox: Tuple[float, float, float, float],
+        total_ways: int = 0
+    ):
+        """Mark tile as cached in database.
+        
+        Args:
+            tile_key: Tile identifier (format: "lat_lon")
+            tile_bbox: (min_lon, min_lat, max_lon, max_lat)
+            total_ways: Number of ways in tile
+        """
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                min_lon, min_lat, max_lon, max_lat = tile_bbox
+                cur.execute(
+                    "SELECT osm.mark_tile_cached(%s, %s, %s, %s, %s, %s)",
+                    (tile_key, min_lon, min_lat, max_lon, max_lat, total_ways)
+                )
+            conn.commit()
+            log.debug(f"Tile marked CACHED: key={tile_key} ways={total_ways}")
+        except Exception as e:
+            conn.rollback()
+            log.error(f"Tile mark FAILED: key={tile_key} error={str(e)}")
+            raise
+        finally:
+            conn.close()
+    
+    def get_tiles_roads_geojson(
+        self,
+        tile_keys: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Get roads GeoJSON from multiple cached tiles.
+        
+        Args:
+            tile_keys: List of tile keys to fetch
+            
+        Returns:
+            GeoJSON FeatureCollection or None if tiles not cached
+        """
+        if not tile_keys:
+            return None
+            
+        conn = self.get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT osm.get_tiles_roads_geojson(%s)",
+                    (tile_keys,)
+                )
+                geojson = cur.fetchone()[0]
+                
+                if geojson and geojson.get('features'):
+                    log.info(
+                        f"Tiles GeoJSON FETCHED: tiles={len(tile_keys)} "
+                        f"features={len(geojson['features'])}"
+                    )
+                    return geojson
+                else:
+                    log.debug(f"Tiles GeoJSON EMPTY: tiles={tile_keys}")
+                    return None
+        except Exception as e:
+            log.error(
+                f"Tiles GeoJSON fetch FAILED: tiles={len(tile_keys)} "
+                f"error={str(e)}"
+            )
+            return None
         finally:
             conn.close()
     
