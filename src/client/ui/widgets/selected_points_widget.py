@@ -2,9 +2,9 @@ from PyQt5.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from src.utils.logging_config import get_logger
+from loguru import logger
 
-log = get_logger(__name__)
+log = logger
 
 
 class SelectedPointsWidget(QFrame):

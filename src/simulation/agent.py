@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 import math
 import time
+from loguru import logger
+from src.utils.instrumentation import log_function
 
 
 @dataclass
@@ -96,17 +98,22 @@ class SimulationAgent:
         route_coords = route_data['geometry']
         route_distance_m = route_data['total_distance_m']
         
-        # Debug: log route being used (every 100 calls)
-        if int(elapsed_time_sec * 10) % 100 == 0:
-            import logging
-            log = logging.getLogger(__name__)
-            log.info(
-                f"agent_using_route: id={self.agent_id}, "
-                f"assigned_route={self.assigned_route_id}, "
-                f"edges={route_edges[:3] if route_edges else []}"
-            )
+        # TRACE: Log every position calculation for teleportation debugging
+        logger.trace(
+            "agent_position_calc",
+            agent_id=self.agent_id,
+            route_id=self.assigned_route_id,
+            elapsed_time=elapsed_time_sec,
+            sim_speed=self.sim_speed,
+            is_running=self.is_running
+        )
         
         if not route_edges or not route_coords:
+            logger.warning(
+                "agent_empty_route",
+                agent_id=self.agent_id,
+                route_id=self.assigned_route_id
+            )
             return (0.0, 0.0, 0.0, 0.0, 0)
         
         # Calculate distance traveled (sim_speed affects time)
@@ -137,6 +144,16 @@ class SimulationAgent:
                 bearing = 0.0
             # Save final position to prevent teleportation
             self.final_position = (lon, lat, bearing, last_edge)
+            
+            logger.success(
+                "Agent reached destination",
+                agent_id=self.agent_id,
+                route_id=self.assigned_route_id,
+                total_distance_m=self.total_distance_traveled_m,
+                elapsed_time=elapsed_time_sec,
+                final_position=(lon, lat)
+            )
+            
             return (lon, lat, bearing, 0.0, last_edge)
         
         # Find current edge based on progress
@@ -160,6 +177,19 @@ class SimulationAgent:
         lon, lat = self._interpolate_position(overall_progress, route_coords)
         bearing = self._calculate_bearing_at_progress(
             overall_progress, route_coords
+        )
+        
+        # TRACE: Log calculated position for teleportation tracking
+        logger.trace(
+            "agent_position_result",
+            agent_id=self.agent_id,
+            lon=lon,
+            lat=lat,
+            bearing=bearing,
+            speed_mps=current_speed,
+            edge_id=current_edge_id,
+            progress=overall_progress,
+            distance_traveled_m=distance_traveled
         )
         
         return (lon, lat, bearing, current_speed, current_edge_id)
@@ -454,14 +484,11 @@ class SimulationAgent:
             Tuple of (can_switch: bool, new_edge_index: Optional[int])
             If can_switch=True, new_edge_index is where agent continues
         """
-        import logging
-        log = logging.getLogger(__name__)
-        
         current_edges = current_route_data.get('edges', [])
         new_edges = new_route_data.get('edges', [])
         
         if not current_edges or not new_edges:
-            log.debug(
+            logger.debug(
                 f"can_switch: empty edges - "
                 f"current={len(current_edges)}, new={len(new_edges)}"
             )
@@ -469,7 +496,7 @@ class SimulationAgent:
         
         # Get remaining edges from current position
         if self.current_edge_index >= len(current_edges):
-            log.debug(
+            logger.debug(
                 f"can_switch: agent at end - "
                 f"edge_idx={self.current_edge_index}, "
                 f"total={len(current_edges)}"
@@ -478,7 +505,7 @@ class SimulationAgent:
         
         remaining_edges = current_edges[self.current_edge_index:]
         
-        log.info(
+        logger.info(
             f"can_switch_check: agent={self.agent_id}, "
             f"current_idx={self.current_edge_index}, "
             f"remaining={len(remaining_edges)}, "
@@ -494,7 +521,7 @@ class SimulationAgent:
                 # Found overlap!
                 new_idx = new_edges.index(remaining_edge_id)
                 
-                log.info(
+                logger.info(
                     f"can_switch: found overlap edge={remaining_edge_id}, "
                     f"new_idx={new_idx}"
                 )
@@ -502,7 +529,7 @@ class SimulationAgent:
                 # Get edge from graph to check direction
                 edge = graph.get_edge(remaining_edge_id)
                 if not edge:
-                    log.warning(
+                    logger.warning(
                         f"can_switch: edge {remaining_edge_id} "
                         f"not found in graph"
                     )
@@ -521,7 +548,7 @@ class SimulationAgent:
                     )
                     # Check if prev.v == edge.u (correct direction chain)
                     if prev_edge_curr and prev_edge_curr.v != edge.u:
-                        log.warning(
+                        logger.warning(
                             f"can_switch: wrong direction in current route - "
                             f"prev.v={prev_edge_curr.v}, edge.u={edge.u}"
                         )
@@ -532,21 +559,21 @@ class SimulationAgent:
                     prev_edge_new = graph.get_edge(new_edges[new_idx - 1])
                     # Check if prev.v == edge.u (correct direction chain)
                     if prev_edge_new and prev_edge_new.v != edge.u:
-                        log.warning(
+                        logger.warning(
                             f"can_switch: wrong direction in new route - "
                             f"prev.v={prev_edge_new.v}, edge.u={edge.u}"
                         )
                         continue
                 
                 # Both routes use this edge in same direction!
-                log.info(
+                logger.info(
                     f"can_switch: SUCCESS - edge={remaining_edge_id}, "
                     f"new_idx={new_idx}"
                 )
                 return True, new_idx
         
         # No valid overlap found
-        log.warning(
+        logger.warning(
             f"can_switch: no overlap found after checking "
             f"{checked_edges} remaining edges"
         )

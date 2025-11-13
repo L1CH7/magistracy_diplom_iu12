@@ -1,0 +1,129 @@
+# Promtail configuration for scraping application logs and sending to Loki
+#
+# This config monitors JSON log files from .agent_dir/logs/ and ships them to Loki
+# for fast log search and visualization in Grafana.
+#
+# Log files monitored:
+# - app.jsonl: all application logs
+# - errors.jsonl: ERROR level and above
+# - slow_operations.jsonl: operations >1 second
+#
+# Usage:
+#   docker-compose up -d  (starts Loki, Promtail, and Grafana)
+#   Grafana: http://localhost:3000 (admin/admin)
+#   Loki queries: {job="app_logs"} | json | level="ERROR"
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Application logs (all levels)
+  - job_name: app_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: app_logs
+          application: navigation_mas
+          environment: development
+          __path__: /var/log/app/app.jsonl
+    
+    pipeline_stages:
+      # Parse JSON
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            logger: logger
+            message: message
+            function: function
+            line: line
+            module: module
+      
+      # Extract labels for Loki indexing
+      - labels:
+          level:
+          logger:
+          function:
+      
+      # Set timestamp from log entry
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+  
+  # Error logs (fast error detection)
+  - job_name: error_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: error_logs
+          application: navigation_mas
+          severity: error
+          environment: development
+          __path__: /var/log/app/errors.jsonl
+    
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            logger: logger
+            message: message
+            exception_type: exception.type
+      
+      - labels:
+          level:
+          logger:
+          exception_type:
+      
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+  
+  # Slow operations (performance monitoring)
+  - job_name: slow_operations
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: slow_operations
+          application: navigation_mas
+          category: performance
+          environment: development
+          __path__: /var/log/app/slow_operations.jsonl
+    
+    pipeline_stages:
+      - json:
+          expressions:
+            timestamp: timestamp
+            duration_ms: duration_ms
+            function: function
+            message: message
+      
+      - labels:
+          function:
+      
+      # Alert if operation took >5 seconds
+      - match:
+          selector: '{job="slow_operations"}'
+          stages:
+            - json:
+                expressions:
+                  duration: duration_ms
+            - template:
+                source: alert_level
+                template: '{{ if gt .duration 5000.0 }}CRITICAL{{ else }}WARNING{{ end }}'
+            - labels:
+                alert_level:
+      
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano

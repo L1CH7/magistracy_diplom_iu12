@@ -9,9 +9,8 @@ from configs.regions import (
     TILE_FETCH_DELAY_SEC
 )
 from src.data.postgis_manager import PostGISManager
-from src.utils.logger import setup_logger
+from loguru import logger as log
 
-log = setup_logger(__name__)
 
 
 async def load_region_to_cache(

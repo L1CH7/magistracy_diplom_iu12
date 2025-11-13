@@ -3,9 +3,9 @@ import random
 import time
 from functools import wraps
 
-from src.utils.logging_config import get_logger
+from loguru import logger
 
-log = get_logger(__name__)
+log = logger
 
 
 def track_metric(operation_name: str):
@@ -1097,7 +1097,7 @@ class MainWindowHandlers:
             if distance_m > threshold:
                 # TELEPORTATION DETECTED!
                 log.error(
-                    "TELEPORTATION_DETECTED",
+                    "🚨 TELEPORTATION_DETECTED 🚨",
                     agent_id=self.sim_agent_id,
                     distance_m=round(distance_m, 2),
                     threshold_m=round(threshold, 2),
@@ -1106,11 +1106,33 @@ class MainWindowHandlers:
                     fps=fps,
                     prev_pos=self._prev_position,
                     current_pos=current_pos,
-                    agent_state_before={
+                    agent_state={
                         "speed_kmh": agent_data.get('speed_kmh'),
                         "route_id": agent_data.get('assigned_route_id'),
-                        "state": agent_data.get('state')
-                    }
+                        "state": agent_data.get('state'),
+                        "is_finished": agent_data.get('is_finished'),
+                        "eta_seconds": agent_data.get('eta_seconds')
+                    },
+                    teleport_ratio=round(distance_m / threshold, 2),
+                    # Critical for debugging
+                    frame_time_ms=1000 / fps,
+                    expected_max_distance_m=threshold
+                )
+                
+                # Also log to console with clear marker
+                print(f"\n{'='*80}")
+                print(f"🚨 TELEPORTATION at {current_pos}")
+                print(f"Distance: {distance_m:.2f}m (threshold: {threshold:.2f}m)")
+                print(f"{'='*80}\n")
+            else:
+                # TRACE: Normal movement (no teleportation)
+                log.trace(
+                    "agent_movement_ok",
+                    agent_id=self.sim_agent_id,
+                    distance_m=round(distance_m, 2),
+                    threshold_m=round(threshold, 2),
+                    from_pos=self._prev_position,
+                    to_pos=current_pos
                 )
         
         # Update prev position

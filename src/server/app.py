@@ -18,9 +18,7 @@ from src.routing.graph import Graph
 from src.routing.route_builder import build_routes
 from src.data.postgis_manager import PostGISManager
 from src.simulation.agent import SimulationAgent
-from src.utils.logger import setup_logger
-
-log = setup_logger(__name__)
+from loguru import logger as log
 
 app = FastAPI(title="Coordinator Server")
 
@@ -1399,9 +1397,7 @@ async def fetch_road_graph(req: RoadGraphRequest):
     async def generate():
         # LAYER 1: Try processed GeoJSON cache (fastest)
         try:
-            from src.utils.logger import setup_logger
             from src.server.road_styling import filter_geojson
-            log = setup_logger(__name__)
             
             log.info(f"Fetching road graph for bbox={bbox_tuple}")
             

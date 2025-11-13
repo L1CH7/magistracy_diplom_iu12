@@ -10,9 +10,8 @@ import networkx as nx
 from src.data.postgis_manager import PostGISManager
 from src.data.osm_way_processor import OSMWayProcessor, ProcessedSegment
 from src.data.osrm_profile import get_car_profile
-from src.utils.logger import setup_logger
+from loguru import logger as log
 
-log = setup_logger(__name__)
 
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

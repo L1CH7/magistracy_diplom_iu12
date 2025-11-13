@@ -15,12 +15,10 @@ from src.client.handlers.points_bridge import PointsBridge
 from src.client.models.points_presenter import PointsPresenter
 from src.client.ui.main_window_handlers import MainWindowHandlers
 from src.client.ui.main_window_ui import MainWindowUI
-from src.utils.logging_config import setup_logging, get_logger
+from loguru import logger as log
 
-
-# Setup logging at module level
-setup_logging(log_file="logs/navigation_mas.log", level="DEBUG")
-log = get_logger(__name__)
+# Logging is configured in loguru_config.py on import
+# No need to call configure_loguru() here
 
 
 class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):

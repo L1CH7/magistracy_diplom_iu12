@@ -7,9 +7,8 @@ import heapq
 from typing import List, Optional, Set, Tuple, Callable
 from dataclasses import dataclass, field
 from src.routing.graph import Graph
-from src.utils.logger import setup_logger
+from loguru import logger as log
 
-log = setup_logger(__name__)
 
 
 @dataclass(order=True)

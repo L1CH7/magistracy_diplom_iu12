@@ -3,13 +3,12 @@
 import logging
 import sys
 import uvicorn
-from src.utils.logger import configure_structlog, setup_logger
+from loguru import logger as log
+
+# Logging is configured in loguru_config.py on import
+# JSON logs will be written to .agent_dir/logs/*.jsonl
 
 if __name__ == "__main__":
-    # Configure unified logging FIRST
-    configure_structlog(log_level="INFO")
-    
-    log = setup_logger(__name__)
     
     # Redirect stdlib logging to structlog
     logging.basicConfig(

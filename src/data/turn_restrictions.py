@@ -4,9 +4,7 @@ Processes OSM relations with type=restriction to enforce turn rules in routing.
 """
 from typing import Dict, List, Set, Optional, Tuple
 from dataclasses import dataclass
-import structlog
-
-log = structlog.get_logger(__name__)
+from loguru import logger as log
 
 
 @dataclass

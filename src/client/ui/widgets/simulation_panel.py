@@ -15,10 +15,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import pyqtSignal, Qt
 
-from src.utils.logger import setup_logger
+from loguru import logger as log
 from src.client.config.simulation_config import simulation_config
-
-log = setup_logger(__name__)
 
 
 class SimulationPanel(QWidget):

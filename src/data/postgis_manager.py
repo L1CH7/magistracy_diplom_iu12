@@ -10,9 +10,8 @@ import os
 from typing import Optional, Dict, Any, List, Tuple
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
-from src.utils.logger import setup_logger
+from loguru import logger as log
 
-log = setup_logger(__name__)
 
 
 class PostGISManager:

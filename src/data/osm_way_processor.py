@@ -10,10 +10,8 @@ Converts OSM ways into directed graph segments with:
 import math
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
-import structlog
+from loguru import logger as log
 from src.data.osrm_profile import CarProfile, get_car_profile
-
-log = structlog.get_logger(__name__)
 
 
 @dataclass

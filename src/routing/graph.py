@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 from src.data.postgis_manager import PostGISManager
-from src.utils.logger import setup_logger
+from loguru import logger as log
 
-log = setup_logger(__name__)
 
 
 def _parse_linestring_wkt(wkt: str) -> List[Tuple[float, float]]:

@@ -1,8 +1,8 @@
 """Points presenter: wraps raw points array with styling."""
 from typing import List, Dict, Any
-from src.utils.logging_config import get_logger
+from loguru import logger
 
-log = get_logger(__name__)
+log = logger
 
 
 class PointsPresenter:

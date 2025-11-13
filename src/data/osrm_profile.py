@@ -10,9 +10,8 @@ https://github.com/Project-OSRM/osrm-backend/blob/master/profiles/car.lua
 from typing import Optional, Dict
 import yaml
 from pathlib import Path
-from src.utils.logger import setup_logger
+from loguru import logger as log
 
-log = setup_logger(__name__)
 
 
 class CarProfile:

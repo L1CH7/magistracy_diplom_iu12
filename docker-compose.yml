@@ -91,10 +91,59 @@ services:
         - action: rebuild
           path: ./Dockerfile.client
 
+  # Loki for log aggregation (lightweight, Grafana-native)
+  loki:
+    image: grafana/loki:latest
+    container_name: diplom-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/tmp/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    environment:
+      - TZ=Europe/Moscow
+    networks:
+      - nav-net
+  
+  # Promtail for log shipping to Loki
+  promtail:
+    image: grafana/promtail:latest
+    container_name: diplom-promtail
+    volumes:
+      # Mount application logs
+      - ./.agent_dir/logs:/var/log/app:ro
+      # Mount Promtail config
+      - ./configs/promtail-config.yaml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - nav-net
+  
+  # Grafana for log visualization and dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: diplom-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+    networks:
+      - nav-net
+
 networks:
   nav-net:
     driver: bridge
 
 volumes:
   postgis_data:
+    driver: local
+  loki_data:
+    driver: local
+  grafana_data:
     driver: local

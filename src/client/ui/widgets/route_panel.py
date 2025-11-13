@@ -15,10 +15,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtGui import QColor
 
-from src.utils.logger import setup_logger
-
-
-log = setup_logger(__name__)
+from loguru import logger as log
 
 
 class RoutePanel(QWidget):

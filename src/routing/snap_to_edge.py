@@ -12,10 +12,9 @@ from dataclasses import dataclass
 import math
 
 from src.data.postgis_manager import PostGISManager
-from src.utils.logger import setup_logger
+from loguru import logger as log
 
 
-log = setup_logger(__name__)
 
 
 @dataclass
