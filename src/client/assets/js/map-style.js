@@ -90,9 +90,10 @@ function buildGraphWidthExpression() {
  * Create MapLibre GL style object.
  * @param {string} tileUrl - URL template for raster tiles
  */
-export function createMapStyle(tileUrl) {
+export function createMapStyle(tileUrl, vectorTileUrl) {
   return {
     version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {
       osm: {
         type: 'raster',
@@ -133,17 +134,211 @@ export function createMapStyle(tileUrl) {
         type: 'raster',
         source: 'osm',
       },
-      // Vector tile graph layer (simple - no LOD for testing)
+      // Vector tile graph layers with flexible LOD
+      // Layer 1: Highways (zoom 0-10)
       {
-        id: 'graph-vector',
+        id: 'graph-highways',
         type: 'line',
         source: 'graph-vector',
         'source-layer': 'roads',
         minzoom: 0,
+        maxzoom: 10,
+        filter: ['in', 'highway', 'motorway', 'motorway_link'],
         paint: {
-          'line-color': '#ff0000',  // Red for visibility
-          'line-width': 2,
+          'line-color': '#1e40af',
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            0, 0.5,
+            9, 1.5,
+            10, 2
+          ]
         },
+      },
+      // Layer 2: Major roads (zoom 10-12)
+      {
+        id: 'graph-major',
+        type: 'line',
+        source: 'graph-vector',
+        'source-layer': 'roads',
+        minzoom: 10,
+        maxzoom: 12,
+        filter: [
+          'in', 'highway',
+          'motorway', 'motorway_link',
+          'trunk', 'trunk_link',
+          'primary', 'primary_link'
+        ],
+        paint: {
+          'line-color': [
+            'match',
+            ['get', 'highway'],
+            'motorway', '#1e40af',
+            'motorway_link', '#1e40af',
+            'trunk', '#6200ffff',
+            'trunk_link', '#6200ffff',
+            'primary', '#9c00aaff',
+            'primary_link', '#9c00aaff',
+            '#353535ff'
+          ],
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            10, 1.5,
+            12, 3
+          ]
+        },
+      },
+      // Layer 3: Arterial roads (zoom 12-14)
+      {
+        id: 'graph-arterial',
+        type: 'line',
+        source: 'graph-vector',
+        'source-layer': 'roads',
+        minzoom: 12,
+        maxzoom: 14,
+        filter: [
+          'in', 'highway',
+          'motorway', 'motorway_link',
+          'trunk', 'trunk_link',
+          'primary', 'primary_link',
+          'secondary', 'secondary_link',
+          'tertiary', 'tertiary_link'
+        ],
+        paint: {
+          'line-color': [
+            'match',
+            ['get', 'highway'],
+            'motorway', '#1e40af',
+            'motorway_link', '#1e40af',
+            'trunk', '#6200ffff',
+            'trunk_link', '#6200ffff',
+            'primary', '#9c00aaff',
+            'primary_link', '#9c00aaff',
+            'secondary', '#ff5effff',
+            'secondary_link', '#ff5effff',
+            'tertiary', '#ff2e2eff',
+            'tertiary_link', '#ff2e2eff',
+            '#353535ff'
+          ],
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            12, 2,
+            14, 4
+          ]
+        },
+      },
+      // Layer 4: All roads (zoom 14+)
+      {
+        id: 'graph-all',
+        type: 'line',
+        source: 'graph-vector',
+        'source-layer': 'roads',
+        minzoom: 14,
+        paint: {
+          'line-color': [
+            'match',
+            ['get', 'highway'],
+            'motorway', '#1e40af',
+            'motorway_link', '#1e40af',
+            'trunk', '#6200ffff',
+            'trunk_link', '#6200ffff',
+            'primary', '#9c00aaff',
+            'primary_link', '#9c00aaff',
+            'secondary', '#ff5effff',
+            'secondary_link', '#ff5effff',
+            'tertiary', '#ff2e2eff',
+            'tertiary_link', '#ff2e2eff',
+            'residential', '#ff8635ff',
+            'living_street', '#ff8635ff',
+            'unclassified', '#5c5c5cff',
+            'service', '#008d0cff',
+            '#353535ff'
+          ],
+          'line-width': [
+            'interpolate', ['linear'], ['zoom'],
+            14, 1.5,
+            15, [
+              'match',
+              ['get', 'highway'],
+              'motorway', 8,
+              'motorway_link', 6,
+              'trunk', 7,
+              'trunk_link', 6,
+              'primary', 6,
+              'primary_link', 5,
+              'secondary', 5,
+              'secondary_link', 4,
+              'tertiary', 4,
+              'tertiary_link', 3,
+              'residential', 3,
+              'living_street', 2,
+              'unclassified', 2,
+              'service', 2,
+              2
+            ],
+            18, [
+              'match',
+              ['get', 'highway'],
+              'motorway', 12,
+              'motorway_link', 9,
+              'trunk', 10,
+              'trunk_link', 9,
+              'primary', 9,
+              'primary_link', 7,
+              'secondary', 7,
+              'secondary_link', 6,
+              'tertiary', 6,
+              'tertiary_link', 5,
+              'residential', 5,
+              'living_street', 3,
+              'unclassified', 3,
+              'service', 3,
+              3
+            ]
+          ]
+        },
+      },
+      // Text labels for arterial roads (zoom 12-14)
+      {
+        id: 'graph-labels-arterial',
+        type: 'symbol',
+        source: 'graph-vector',
+        'source-layer': 'roads',
+        minzoom: 12,
+        maxzoom: 14,
+        filter: [
+          'all',
+          ['has', 'name'],
+          ['in', 'highway', 'motorway', 'trunk', 'primary', 'secondary']
+        ],
+        layout: {
+          'text-field': ['coalesce', ['get', 'name_ru'], ['get', 'name']],
+          'text-size': 11,
+          'symbol-placement': 'line',
+        },
+        paint: {
+          'text-color': '#000000',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 2
+        }
+      },
+      // Text labels for all roads (zoom 14+)
+      {
+        id: 'graph-labels-all',
+        type: 'symbol',
+        source: 'graph-vector',
+        'source-layer': 'roads',
+        minzoom: 14,
+        filter: ['has', 'name'],
+        layout: {
+          'text-field': ['coalesce', ['get', 'name_ru'], ['get', 'name']],
+          'text-size': 12,
+          'symbol-placement': 'line',
+        },
+        paint: {
+          'text-color': '#000000',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 2
+        }
       },
       {
         id: 'routes',

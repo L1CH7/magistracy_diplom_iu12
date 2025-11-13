@@ -72,10 +72,7 @@ class MainWindowUI:
         self.toggle_btn.clicked.connect(self._toggle_sidebar)
         self.toggle_btn.hide()  # Hidden when sidebar is visible
         
-        # Connect sidebar buttons (lambda to ignore clicked signal arg)
-        self.sidebar.get_road_graph_btn.clicked.connect(
-            lambda: self._on_get_road_graph()
-        )
+        # Connect sidebar buttons
         self.sidebar.quit_btn.clicked.connect(self.close)
         
         # Connect route panel signals (K routes)

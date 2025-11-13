@@ -1874,8 +1874,12 @@ def get_road_vector_tile(z: int, x: int, y: int):
                 osm_id,
                 highway,
                 lanes,
-                tags->>'surface' AS surface,
                 maxspeed,
+                tags->>'name' AS name,
+                tags->>'name:ru' AS name_ru,
+                tags->>'ref' AS ref,
+                tags->>'surface' AS surface,
+                tags->>'oneway' AS oneway,
                 ST_AsMVTGeom(
                     geom_3857,
                     {bbox_3857},

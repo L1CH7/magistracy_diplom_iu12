@@ -3,6 +3,7 @@ import json
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 from loguru import logger as log
+from src.client.config.data_config import DataConfig
 
 
 class GraphFetchWorker(QThread):
@@ -23,6 +24,8 @@ class GraphFetchWorker(QThread):
         self.server_url = server_url
         self.bbox = bbox
         self._is_cancelled = False
+        # Use config timeout (600s for large bbox)
+        self._timeout = DataConfig.API_TIMEOUT_GRAPH_FETCH
     
     def cancel(self):
         """Request cancellation of the fetch operation."""
@@ -33,11 +36,16 @@ class GraphFetchWorker(QThread):
         try:
             url = f"{self.server_url}/osm/fetch_road_graph"
             
+            log.info(
+                f"GraphWorker: starting request to {url}, "
+                f"bbox={self.bbox}, timeout={self._timeout}s"
+            )
+            
             response = requests.post(
                 url,
                 json={"bbox": self.bbox},
                 stream=True,
-                timeout=180
+                timeout=self._timeout  # From config (600s for large bbox)
             )
             response.raise_for_status()
             
@@ -59,8 +67,15 @@ class GraphFetchWorker(QThread):
                         self.progress.emit(message)
                     
                     elif msg_type == "progress":
-                        processed = data.get("processed", 0)
-                        self.progress.emit(f"Processing: {processed} elements")
+                        message = data.get("message")
+                        if message:
+                            self.progress.emit(message)
+                        else:
+                            # Fallback for old format
+                            processed = data.get("processed", 0)
+                            self.progress.emit(
+                                f"Processing: {processed} elements"
+                            )
                     
                     elif msg_type == "complete":
                         geojson = data.get("geojson")

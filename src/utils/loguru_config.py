@@ -40,7 +40,11 @@ def log_performance_filter(record: dict) -> bool:
         True if operation is slow (should be logged)
     """
     if "duration_ms" in record["extra"]:
-        return record["extra"]["duration_ms"] > 1000
+        try:
+            duration = float(record["extra"]["duration_ms"])
+            return duration > 1000
+        except (ValueError, TypeError):
+            return False
     return False  # Skip if no duration_ms
 
 

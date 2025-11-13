@@ -258,120 +258,21 @@ class MainWindowHandlers:
         
         self.map_widget.page().runJavaScript(js, callback)
     
-    @track_metric("GRAPH_FETCH")
-    def _on_get_road_graph(self) -> None:
-        """Handle get road graph button click - async fetch from config bbox."""
-        from PyQt5.QtWidgets import QMessageBox
-        from src.client.services.api_workers import GraphFetchWorker
-        from src.client.config import DataConfig
-        
-        # Get test bbox from configuration
-        bbox = DataConfig.DEFAULT_TEST_BBOX
-        
-        log.info("=== GET_ROAD_GRAPH START (ASYNC) ===", bbox=bbox)
-        
-        # Disable button and show loading state
-        btn = self.sidebar.get_road_graph_btn
-        btn.setEnabled(False)
-        self._graph_original_text = btn.text()
-        btn.setText("Loading...")
-        
-        # Create and start background worker
-        self._graph_worker = GraphFetchWorker(self.server_url, bbox)
-        self._graph_worker.progress.connect(self._on_graph_progress)
-        self._graph_worker.finished.connect(self._on_graph_finished)
-        self._graph_worker.error.connect(self._on_graph_error)
-        self._graph_worker.start()
-        
-        log.info("graph_worker_started", bbox=bbox)
+    # REMOVED: Button "Get Road Graph" - no longer needed with vector tiles
+    # @track_metric("GRAPH_FETCH")
+    # def _on_get_road_graph(self) -> None:
+    #     """Handle get road graph button click - fetch from bbox."""
+    #     pass
     
-    def _on_graph_progress(self, message: str) -> None:
-        """Handle graph fetch progress updates."""
-        btn = self.sidebar.get_road_graph_btn
-        btn.setText(f"⏳ {message}")
-        log.debug("graph_progress", message=message)
-    
-    def _on_graph_error(self, error_msg: str) -> None:
-        """Handle graph fetch error."""
-        from PyQt5.QtWidgets import QMessageBox
-        
-        log.error("graph_fetch_error", error=error_msg)
-        
-        # Restore button
-        btn = self.sidebar.get_road_graph_btn
-        btn.setText(self._graph_original_text)
-        btn.setEnabled(True)
-        
-        # Show error to user
-        QMessageBox.critical(
-            self,
-            "Graph Fetch Error",
-            f"Failed to load road graph:\n{error_msg}"
-        )
-    
-    def _on_graph_finished(self, data: dict) -> None:
-        """Handle graph fetch completion and display on map."""
-        from PyQt5.QtWidgets import QMessageBox
-        from src.client.config import DataConfig
-        
-        geojson = data.get('geojson')
-        total_ways = data.get('total_ways', 0)
-        is_cached = data.get('cached', False)
-        bbox = data.get('bbox')
-        
-        log.info(
-            "graph_loaded",
-            total_ways=total_ways,
-            bbox=bbox,
-            cached=is_cached,
-            features_count=len(geojson.get("features", [])) if geojson else 0
-        )
-        
-        # Restore button
-        btn = self.sidebar.get_road_graph_btn
-        btn.setText(self._graph_original_text)
-        btn.setEnabled(True)
-        
-        # Display graph on map (already processed by server)
-        if geojson:
-            log.info(
-                "graph_display",
-                features=len(geojson.get("features", [])),
-                processed_by_server=True
-            )
-            
-            # Display on map (GeoJSON already processed by server)
-            import json
-            js_code = f"""
-            (function() {{
-                console.log('[GRAPH] Setting graph GeoJSON...');
-                if (window.app && window.app.setGraphGeoJSON) {{
-                    window.app.setGraphGeoJSON({json.dumps(geojson)});
-                    console.log('[GRAPH] GeoJSON set, fitting...');
-                    window.app.fitToGraph();
-                    console.log('[GRAPH] Done!');
-                }} else {{
-                    console.error('[GRAPH] window.app not found!');
-                }}
-            }})();
-            """
-            
-            self.map_widget.page().runJavaScript(js_code)
-            
-            # Show success message
-            cache_msg = " (from cache)" if is_cached else ""
-            QMessageBox.information(
-                self,
-                "Graph Loaded",
-                f"Loaded {total_ways} road ways{cache_msg}"
-            )
-        else:
-            log.warning("graph_no_data")
-            QMessageBox.warning(
-                self,
-                "No Data",
-                "No graph data received from server"
-            )
+    # REMOVED: These methods are no longer needed with vector tiles
+    # def _load_graph_in_batches(self, features: list) -> None:
+    #     pass
+    # def _on_graph_progress(self, message: str) -> None:
+    #     pass
+    # def _on_graph_error(self, error_msg: str) -> None:
+    #     pass
+    # def _on_graph_finished(self, data: dict) -> None:
+    #     pass
     
     def _update_selected_points(self) -> None:
         """Update selected points display in sidebar."""

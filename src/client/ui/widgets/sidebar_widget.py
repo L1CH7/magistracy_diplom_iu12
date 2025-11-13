@@ -19,16 +19,6 @@ class SidebarWidget(QFrame):
         sidebar_layout.setContentsMargins(12, 12, 12, 12)
         sidebar_layout.setSpacing(8)
 
-        # Get Road Graph Data button (no emoji)
-        self.get_road_graph_btn = QPushButton("Get Road Graph Data")
-        self.get_road_graph_btn.setStyleSheet(
-            "QPushButton { background-color: #8b5cf6; color: white; "
-            "border: none; border-radius: 6px; padding: 8px; "
-            "font-weight: bold; } "
-            "QPushButton:hover { background-color: #7c3aed; }"
-        )
-        sidebar_layout.addWidget(self.get_road_graph_btn)
-
         # Route panel for K routes display
         self.route_panel = RoutePanel()
         sidebar_layout.addWidget(self.route_panel)
@@ -44,5 +34,10 @@ class SidebarWidget(QFrame):
 
         sidebar_layout.addStretch()
         self.quit_btn = QPushButton("Quit (ESC)")
-        self.quit_btn.setStyleSheet("QPushButton { background-color: #ef4444; color: white; border: none; border-radius: 6px; padding: 8px; font-weight: bold; } QPushButton:hover { background-color: #dc2626; }")
+        self.quit_btn.setStyleSheet(
+            "QPushButton { background-color: #ef4444; color: white; "
+            "border: none; border-radius: 6px; padding: 8px; "
+            "font-weight: bold; } "
+            "QPushButton:hover { background-color: #dc2626; }"
+        )
         sidebar_layout.addWidget(self.quit_btn)
