@@ -19,6 +19,10 @@ from src.routing.route_builder import build_routes
 from src.data.postgis_manager import PostGISManager
 from src.simulation.agent import SimulationAgent
 from loguru import logger as log
+from src.utils.loguru_config import configure_loguru
+
+# Initialize logging (JSON files in .agent_dir/logs/)
+configure_loguru(log_level="INFO", log_to_file=True)
 
 app = FastAPI(title="Coordinator Server")
 

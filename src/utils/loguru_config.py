@@ -30,40 +30,6 @@ from pathlib import Path
 from loguru import logger
 
 
-def json_formatter(record: dict) -> str:
-    """Format log record as JSON for Loki ingestion.
-    
-    Args:
-        record: Loguru record dict
-    
-    Returns:
-        JSON string with newline
-    """
-    data = {
-        "timestamp": record["time"].isoformat(),
-        "level": record["level"].name,
-        "logger": record["name"],
-        "message": record["message"],
-        "function": record["function"],
-        "line": record["line"],
-        "module": record["module"],
-        "process_id": record["process"].id,
-        "thread_id": record["thread"].id,
-        # Add extra fields (context from logger.bind() or contextvars)
-        **record["extra"]
-    }
-    
-    # Add exception if present
-    if record["exception"]:
-        data["exception"] = {
-            "type": record["exception"].type.__name__,
-            "value": str(record["exception"].value),
-            "traceback": record["exception"].traceback if record["exception"].traceback else None
-        }
-    
-    return json.dumps(data, ensure_ascii=False, default=str) + "\n"
-
-
 def log_performance_filter(record: dict) -> bool:
     """Filter for slow operations (>1 second).
     
@@ -155,19 +121,20 @@ def configure_loguru(
         logger.add(
             log_dir / "app.jsonl",
             level="TRACE",  # Capture everything
-            format=json_formatter,
+            serialize=True,  # JSON output
             rotation="500 MB",
             retention="7 days",
             compression="zip",
             enqueue=True,  # Async file writes
-            catch=True
+            catch=True,
+            filter=trace_filter  # Zero-cost TRACE
         )
         
         # 2. Errors only (errors.jsonl) - for fast error detection
         logger.add(
             log_dir / "errors.jsonl",
             level="ERROR",
-            format=json_formatter,
+            serialize=True,
             rotation="100 MB",
             retention="7 days",
             compression="zip",
@@ -179,7 +146,7 @@ def configure_loguru(
         logger.add(
             log_dir / "slow_operations.jsonl",
             level="INFO",
-            format=json_formatter,
+            serialize=True,
             filter=log_performance_filter,
             rotation="100 MB",
             retention="7 days",

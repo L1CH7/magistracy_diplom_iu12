@@ -21,9 +21,24 @@ import time
 
 
 def parse_log_line(line: str) -> dict:
-    """Parse JSON log line."""
+    """Parse JSON log line (loguru serialize=True format)."""
     try:
-        return json.loads(line)
+        data = json.loads(line)
+        # Loguru serialize=True outputs: {"text": "...", "record": {...}}
+        if isinstance(data, dict) and "record" in data:
+            record = data["record"]
+            # Flatten structure for compatibility
+            return {
+                "timestamp": record.get("time", {}).get("repr", ""),
+                "level": record.get("level", {}).get("name", "INFO"),
+                "message": record.get("message", ""),
+                "function": record.get("function", ""),
+                "line": record.get("line", ""),
+                "module": record.get("module", ""),
+                "logger": record.get("name", ""),
+                **record.get("extra", {})
+            }
+        return data
     except json.JSONDecodeError:
         return None
 
