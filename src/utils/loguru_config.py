@@ -213,10 +213,36 @@ def configure_loguru(
 
 
 # === INITIALIZATION ===
+# Check for TRACE flag file (set by scripts/enable_trace.py)
+def _check_trace_flag() -> str:
+    """Check if TRACE enabled via flag file."""
+    import os
+    log_dir = Path('.agent_dir/logs')
+    
+    # Check for process-specific flag (client or server)
+    process_name = os.path.basename(sys.argv[0]).split('.')[0]
+    if process_name in ['main', 'app']:
+        # Determine if client or server from module path
+        if 'client' in sys.argv[0]:
+            process_name = 'client'
+        elif 'server' in sys.argv[0]:
+            process_name = 'server'
+    
+    flag_file = log_dir / f'TRACE_ENABLED_{process_name}'
+    
+    if flag_file.exists():
+        return "TRACE"
+    return "INFO"
+
+
 # Configure on module import (can be reconfigured later)
 # Default: INFO level (TRACE disabled for zero-cost)
-# To enable TRACE: configure_loguru(log_level="TRACE")
-configure_loguru(log_level="INFO", log_to_file=True, json_logs=True)
+# Check flag file for dynamic TRACE enabling
+_initial_level = _check_trace_flag()
+configure_loguru(log_level=_initial_level, log_to_file=True, json_logs=True)
+
+if _initial_level == "TRACE":
+    logger.info("🔍 TRACE logging enabled via flag file")
 
 
 def enable_trace_logging():

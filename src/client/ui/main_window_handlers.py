@@ -1144,6 +1144,11 @@ class MainWindowHandlers:
             return
         
         import requests
+        
+        # TRACE: Log API call timing
+        import time
+        api_start = time.time()
+        
         try:
             response = requests.get(
                 f"{self.server_url}/sim/agent/{self.sim_agent_id}/position",
@@ -1152,9 +1157,23 @@ class MainWindowHandlers:
             response.raise_for_status()
             data = response.json()
             
+            api_duration_ms = (time.time() - api_start) * 1000
+            
             # Update map
             position = data['position']
             assigned_route_id = data.get('assigned_route_id', None)
+            
+            # TRACE: Log received position
+            log.trace(
+                "agent_position_received",
+                agent_id=self.sim_agent_id,
+                lon=position['lon'],
+                lat=position['lat'],
+                bearing=position['bearing_degrees'],
+                speed_kmh=data.get('speed_kmh'),
+                route_id=assigned_route_id,
+                api_duration_ms=round(api_duration_ms, 2)
+            )
             
             # Teleportation detection
             from src.client.config.simulation_config import simulation_config
