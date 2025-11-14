@@ -1,0 +1,73 @@
+# Routing Configuration
+# Route engine, graph processing, tile generation
+
+routing:
+  # Route generation
+  k_routes: 3              # Number of alternative routes
+  snap_k: 3                # Nearest node search radius
+  
+  # Graph processing
+  edge_simplification: true
+  remove_isolated_nodes: true
+  
+  # Route quality scoring
+  prefer_highways: true
+  penalize_turns: true
+  turn_penalty_factor: 1.2
+
+# Overpass API settings
+overpass:
+  # API endpoints (load balanced)
+  endpoints:
+    - "https://overpass-api.de/api/interpreter"
+    - "https://overpass.kumi.systems/api/interpreter"
+  
+  # Request settings
+  timeout_per_tile: 60       # seconds
+  retry_attempts: 3
+  retry_delay: 5             # seconds
+  
+  # Rate limiting
+  delay_between_requests: 0.5  # seconds
+  max_concurrent_requests: 3
+
+# Vector tile generation (MVT)
+vector_tiles:
+  # MVT settings
+  layer_name: "roads"
+  extent: 4096              # MVT coordinate space
+  buffer: 64                # Tile buffer in pixels
+  
+  # Feature filtering
+  min_highway_zoom: 0
+  show_all_roads_zoom: 14
+  
+  # Cache settings
+  cache_tiles: true
+  tile_cache_ttl: 86400     # seconds (1 day)
+
+# Tile splitting for large regions
+tile_splitting:
+  enabled: true
+  tile_size_deg: 0.1        # ~11km at Moscow latitude
+  
+  # Fetch strategy
+  parallel_fetch: true
+  max_parallel_tiles: 5
+
+# Upstream tile proxy
+upstream_tiles:
+  # OSM raster tiles
+  osm_tile_hosts:
+    - "a.tile.openstreetmap.org"
+    - "b.tile.openstreetmap.org"
+    - "c.tile.openstreetmap.org"
+  
+  # Request headers
+  user_agent: "Diplom-MapClient/0.1 (+https://example.invalid)"
+  
+  # Timeouts
+  fetch_timeout: 10         # seconds
+  
+  # Cache control
+  cache_control: "public, max-age=86400"

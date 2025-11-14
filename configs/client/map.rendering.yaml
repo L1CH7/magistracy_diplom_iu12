@@ -1,0 +1,63 @@
+# Map Rendering Configuration
+# Colors, widths, highway groups, and rendering parameters
+
+# Color coding by highway type
+colors:
+  motorway: '#1e40af'        # Dark blue
+  motorway_link: '#1e40af'
+  trunk: '#6200ffff'         # Purple
+  trunk_link: '#6200ffff'
+  primary: '#9c00aaff'       # Magenta
+  primary_link: '#9c00aaff'
+  secondary: '#ff5effff'     # Pink
+  secondary_link: '#ff5effff'
+  tertiary: '#ff2e2eff'      # Red-orange
+  tertiary_link: '#ff2e2eff'
+  residential: '#ff8635ff'   # Orange
+  living_street: '#ff8635ff'
+  unclassified: '#5c5c5cff'  # Gray
+  service: '#008d0cff'       # Green
+  default: '#353535ff'       # Dark gray
+
+# Base width by highway type at zoom 15 (pixels)
+widths:
+  motorway: 8
+  trunk: 7
+  primary: 6
+  secondary: 5
+  tertiary: 4
+  residential: 3
+  living_street: 2
+  unclassified: 2
+  service: 2
+  default: 2
+
+# Highway type groups (for filtering)
+highway_groups:
+  motorway:
+    - motorway
+    - motorway_link
+  
+  major:
+    - trunk
+    - trunk_link
+    - primary
+    - primary_link
+    - secondary
+    - secondary_link
+  
+  minor:
+    - tertiary
+    - tertiary_link
+    - residential
+    - living_street
+    - unclassified
+    - service
+
+# MapLibre GL rendering parameters
+rendering:
+  # Font glyphs for text labels (required for symbol layers)
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
+  
+  # Tile URL for MVT vector tiles (if needed)
+  # tiles: 'http://localhost:9000/tiles/{z}/{x}/{y}.mvt'

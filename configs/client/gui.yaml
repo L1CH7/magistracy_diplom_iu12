@@ -1,0 +1,182 @@
+# GUI Configuration
+# Window sizes, colors, styles, defaults
+
+window:
+  title: "Navigation MAS — Fullscreen Map"
+  width: 1400
+  height: 900
+
+sidebar:
+  max_width: 350
+  min_width: 280
+  min_height: 600
+
+# Map marker colors
+markers:
+  from_color: '#2563eb'  # Blue
+  to_color: '#dc2626'    # Red
+  via_colors:            # Beautiful, non-acidic palette
+    - '#8b5cf6'
+    - '#06b6d4'
+    - '#14b8a6'
+    - '#f59e0b'
+    - '#ec4899'
+    - '#a855f7'
+    - '#0ea5e9'
+    - '#10b981'
+
+# Default coordinates (Moscow)
+defaults:
+  start_lat: 55.751244
+  start_lon: 37.618423
+  end_lat: 55.755826
+  end_lon: 37.617300
+
+# Zoom settings
+zoom:
+  min: 0
+  max: 19
+  initial: 12.0
+  button_size: 15
+
+# Assets server
+assets:
+  dir: '/app/src/client/assets'
+  port: 9999
+
+# UI limits
+limits:
+  points_max_visible: 5
+  point_tile_height: 36
+  map_graph_edges_limit: 5000
+
+# Qt Stylesheets
+styles:
+  sidebar: |
+    QFrame {
+      background-color: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+    }
+  
+  button_primary: |
+    QPushButton {
+      background-color: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px;
+      font-weight: bold;
+    }
+    QPushButton:hover {
+      background-color: #2563eb;
+    }
+  
+  button_success: |
+    QPushButton {
+      background-color: #10b981;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px;
+      font-weight: bold;
+    }
+    QPushButton:hover {
+      background-color: #059669;
+    }
+    QPushButton:disabled {
+      background-color: #d1d5db;
+    }
+  
+  button_warning: |
+    QPushButton {
+      background-color: #f59e0b;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px;
+      font-weight: bold;
+    }
+    QPushButton:hover {
+      background-color: #d97706;
+    }
+    QPushButton:disabled {
+      background-color: #d1d5db;
+    }
+  
+  button_danger: |
+    QPushButton {
+      background-color: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px;
+      font-weight: bold;
+    }
+    QPushButton:hover {
+      background-color: #dc2626;
+    }
+  
+  button_toggle: |
+    QPushButton {
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: bold;
+      font-size: 18px;
+    }
+    QPushButton:hover {
+      background-color: #1d4ed8;
+    }
+  
+  input: |
+    QLineEdit {
+      border-radius: 4px;
+      padding: 4px;
+      border: 1px solid #d1d5db;
+    }
+  
+  text_area: |
+    QTextEdit {
+      border-radius: 4px;
+      border: 1px solid #e5e7eb;
+      background-color: #f9fafb;
+      font-size: 10px;
+    }
+  
+  zoom_button: |
+    QPushButton {
+      background-color: rgba(255, 255, 255, 0.8);
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-weight: bold;
+      color: #374151;
+    }
+    QPushButton:hover {
+      background-color: rgba(255, 255, 255, 1);
+    }
+  
+  zoom_slider: |
+    QSlider {
+      background-color: transparent;
+      border: none;
+      margin: 0px;
+      padding: 0px;
+    }
+    QSlider::groove:vertical {
+      border: none;
+      background-color: rgba(255, 255, 255, 0.5);
+      border-radius: 4px;
+      width: 8px;
+    }
+    QSlider::handle:vertical {
+      background: rgba(37, 99, 235, 0.9);
+      border: none;
+      border-radius: 6px;
+      height: 16px;
+      margin: 0px -4px;
+    }
+    QSlider::handle:vertical:hover {
+      background: rgba(37, 99, 235, 1);
+    }

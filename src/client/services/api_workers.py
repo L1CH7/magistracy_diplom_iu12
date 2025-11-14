@@ -3,7 +3,7 @@ import json
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 from loguru import logger as log
-from src.client.config.data_config import DataConfig
+from src.utils.config_loader import config_loader
 
 
 class GraphFetchWorker(QThread):
@@ -25,7 +25,8 @@ class GraphFetchWorker(QThread):
         self.bbox = bbox
         self._is_cancelled = False
         # Use config timeout (600s for large bbox)
-        self._timeout = DataConfig.API_TIMEOUT_GRAPH_FETCH
+        config = config_loader.load('client/data.yaml')
+        self._timeout = config['api']['timeout_graph_fetch']
     
     def cancel(self):
         """Request cancellation of the fetch operation."""

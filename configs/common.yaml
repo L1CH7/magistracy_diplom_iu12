@@ -1,0 +1,55 @@
+# Common Configuration
+# Shared settings for all services (client + server)
+
+# API endpoints (used by client to connect to server)
+api:
+  # Server URL (set via environment in production)
+  base_url: ${API_BASE_URL:http://server:8000}
+  
+  # Standard endpoints
+  endpoints:
+    # Route operations
+    routes: "/routes"
+    nearest: "/nearest"
+    
+    # OSM data
+    osm_load: "/osm/load"
+    osm_fetch_graph: "/osm/fetch_road_graph"
+    osm_cache_region: "/osm/cache_region"
+    osm_regions: "/osm/regions"
+    osm_fetch_tile: "/osm/fetch_tile"
+    
+    # Tiles
+    tiles_roads_mvt: "/tiles/roads/{z}/{x}/{y}.pbf"
+    tiles_osm_raster: "/tiles/osm/{z}/{x}/{y}.png"
+    
+    # Simulation
+    simulation_step: "/simulation/step"
+    simulation_state: "/simulation/state"
+    simulation_create_agent: "/simulation/create_agent"
+    simulation_update_agent: "/simulation/update_agent"
+    simulation_delete_agent: "/simulation/delete_agent"
+
+# Default timeouts (seconds)
+timeouts:
+  default: 30
+  graph_fetch: 600      # Large bbox downloads
+  route_calculation: 60
+  tile_fetch: 10
+
+# Logging configuration
+logging:
+  # Format: json or text
+  format: "json"
+  
+  # Level: DEBUG, INFO, WARNING, ERROR
+  level: ${LOG_LEVEL:INFO}
+  
+  # Output
+  console: true
+  file: true
+  
+  # File settings
+  log_dir: "logs"
+  rotation: "100 MB"
+  retention: "7 days"

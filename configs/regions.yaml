@@ -1,0 +1,37 @@
+# Region Configuration for Bulk OSM Data Loading
+# Defines which regions to preload into PostGIS cache
+
+# Format: {region_name: [min_lon, min_lat, max_lon, max_lat]}
+# All coordinates in WGS84 (EPSG:4326)
+regions:
+  # Moscow Oblast (full region)
+  moscow_oblast:
+    bbox: [35.0, 54.5, 40.0, 56.5]
+    description: "Full Moscow Oblast"
+  
+  # Moscow city (smaller, for testing)
+  moscow_city:
+    bbox: [37.35, 55.55, 37.85, 55.92]
+    description: "Moscow city center"
+  
+  # Add more regions as needed:
+  # saint_petersburg:
+  #   bbox: [29.0, 59.0, 31.0, 60.5]
+  #   description: "Saint Petersburg region"
+  # 
+  # world:
+  #   bbox: [-180.0, -90.0, 180.0, 90.0]
+  #   description: "Full planet (don't try this!)"
+
+# Default region for startup preloading (set to null to skip)
+default_region: null  # Changed from 'moscow_oblast' for manual loading
+
+# Tile size for splitting large regions (degrees)
+# ~0.1 deg = ~11km at Moscow latitude
+tile_size_deg: 0.1
+
+# Overpass timeout per tile (seconds)
+overpass_timeout_sec: 60
+
+# Delay between tile fetches to avoid rate limiting (seconds)
+tile_fetch_delay_sec: 0.5

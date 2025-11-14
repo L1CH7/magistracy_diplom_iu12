@@ -43,6 +43,7 @@ services:
       - ./data:/app/data
       - ./scripts:/app/scripts
       - ./logs/server:/app/logs
+      - ./configs:/app/configs:ro
     networks:
       - nav-net
     depends_on:
@@ -79,6 +80,7 @@ services:
       - ~/.Xauthority:/root/.Xauthority:rw
       - /dev/shm:/dev/shm
       - ./logs/client:/app/logs
+      - ./configs/client:/app/configs:ro
     devices:
       - /dev/dri:/dev/dri
     networks:

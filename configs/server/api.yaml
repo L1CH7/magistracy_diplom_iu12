@@ -1,0 +1,45 @@
+# Server API Configuration
+# FastAPI server settings, middleware, logging
+
+server:
+  # Server bind settings
+  host: "0.0.0.0"
+  port: 8000
+  
+  # Server info
+  title: "Coordinator Server"
+  version: "1.0.0"
+  
+  # Logging
+  log_level: "INFO"
+  log_to_file: true
+
+# CORS middleware settings
+cors:
+  allow_origins:
+    - "*"  # In production, specify exact origins
+  allow_credentials: true
+  allow_methods:
+    - "*"
+  allow_headers:
+    - "*"
+
+# Request/response settings
+request:
+  # Request logging
+  log_requests: true
+  
+  # Timeouts (seconds)
+  timeout_default: 30
+  timeout_route: 60
+  timeout_graph_fetch: 600
+
+# Cache settings
+cache:
+  # Route cache
+  route_cache_enabled: true
+  route_cache_max_size: 1000
+  
+  # Graph cache
+  graph_cache_enabled: true
+  graph_reload_on_startup: true

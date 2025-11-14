@@ -1,0 +1,41 @@
+# Database Configuration
+# PostgreSQL with PostGIS connection settings
+# Secrets are loaded from environment variables (see docker-compose.yml)
+
+postgres:
+  # Connection settings (loaded from environment)
+  # POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB
+  # POSTGRES_USER, POSTGRES_PASSWORD
+  host: ${POSTGRES_HOST:postgis}
+  port: ${POSTGRES_PORT:5432}
+  database: ${POSTGRES_DB:road_graphs}
+  user: ${POSTGRES_USER:diplom}
+  password: ${POSTGRES_PASSWORD:diplom_pass}
+  
+  # Connection pool settings
+  min_connections: 1
+  max_connections: 10
+  
+  # Query timeouts (seconds)
+  query_timeout: 30
+  connection_timeout: 10
+
+# Schema organization
+schemas:
+  tiles: "tiles"      # Raster tile caching
+  osm: "osm"          # Raw OSM data cache
+  graphs: "graphs"    # Processed routing graphs
+
+# Tile cache settings
+tile_cache:
+  # Raster tiles
+  max_zoom: 20
+  min_zoom: 0
+  default_source: "osm"
+  
+  # Cache expiration (days)
+  tile_expiration_days: 30
+  
+  # Cleanup settings
+  cleanup_old_tiles: false
+  cleanup_interval_hours: 24

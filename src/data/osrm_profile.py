@@ -24,7 +24,7 @@ class CarProfile:
     - Service road penalties
     - Country-specific maxspeed rules
     
-    Configuration is loaded from configs/car_profile.yaml
+    Configuration is loaded from configs/routing/car_profile.yaml
     """
     
     def __init__(self, config_path: Optional[str] = None):
@@ -32,12 +32,12 @@ class CarProfile:
         
         Args:
             config_path: Path to YAML config file
-                        (default: configs/car_profile.yaml)
+                        (default: configs/routing/car_profile.yaml)
         """
         if config_path is None:
-            # Default to project root configs/car_profile.yaml
+            # Default to project root configs/routing/car_profile.yaml
             project_root = Path(__file__).parent.parent.parent
-            config_path = project_root / "configs" / "car_profile.yaml"
+            config_path = project_root / "configs" / "routing" / "car_profile.yaml"
         
         self._load_config(config_path)
         log.info(

@@ -1,6 +1,1 @@
-"""Client configuration modules."""
-
-from .gui_config import GUIConfig
-from .data_config import DataConfig
-
-__all__ = ['GUIConfig', 'DataConfig']
+from src.utils.config_loader import config_loader

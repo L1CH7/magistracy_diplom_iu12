@@ -84,17 +84,20 @@ function setupEventListeners() {
     }
   });
 
-  // Zoom tracking via QWebChannel
+  // Zoom tracking via QWebChannel (initialized once)
+  let zoomBridgeChannel = null;
+  if (window.qt && window.qt.webChannelTransport) {
+    new QWebChannel(window.qt.webChannelTransport, function(channel) {
+      zoomBridgeChannel = channel;
+    });
+  }
+
   map.on('zoom', () => {
     const zoom = Math.floor(map.getZoom());
     const fromUI = !mapAPI.shouldSkipZoomUpdate();
 
-    if (fromUI && window.qt && window.qt.webChannelTransport) {
-      new QWebChannel(window.qt.webChannelTransport, function(channel) {
-        if (channel.objects.zoom_bridge) {
-          channel.objects.zoom_bridge.notify_zoom(zoom);
-        }
-      });
+    if (fromUI && zoomBridgeChannel && zoomBridgeChannel.objects.zoom_bridge) {
+      zoomBridgeChannel.objects.zoom_bridge.notify_zoom(zoom);
     }
 
     if (window.onZoomChanged) {

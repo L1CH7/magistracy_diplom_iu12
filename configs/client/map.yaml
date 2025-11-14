@@ -1,0 +1,8 @@
+# Map Configuration
+# Main config file with includes for LOD and rendering
+
+# LOD (Level of Detail) layers - 4-layer progressive system
+lod: !include map.lod.yaml
+
+# Rendering configuration - colors, widths, highway groups
+rendering: !include map.rendering.yaml
