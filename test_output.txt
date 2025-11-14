@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/home/lich/dev/bmstu/diplom/test_road_graph_e2e.py", line 11, in <module>
-    import requests
-ModuleNotFoundError: No module named 'requests'
