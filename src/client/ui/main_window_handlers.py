@@ -967,8 +967,10 @@ class MainWindowHandlers:
         
         IMPORTANT: Ignores route changes and agent restarts
         """
-        from src.client.config.simulation_config import simulation_config
+        from src.utils.config_loader import config_loader
         import math
+        
+        config = config_loader.load('client/simulation.yaml')
         
         current_pos = (position['lon'], position['lat'])
         current_route_id = agent_data.get('assigned_route_id')
@@ -1040,7 +1042,8 @@ class MainWindowHandlers:
             # - Numerical errors
             # - Slight position mismatches
             # Use 3x margin to cover merge transitions
-            threshold = dS_expected * 3.0 * simulation_config.teleport_threshold_multiplier
+            multiplier = config['teleport_detection']['threshold_multiplier']
+            threshold = dS_expected * 3.0 * multiplier
             
             if distance_m > threshold:
                 # TELEPORTATION DETECTED!
@@ -1127,8 +1130,9 @@ class MainWindowHandlers:
             )
             
             # Teleportation detection
-            from src.client.config.simulation_config import simulation_config
-            if simulation_config.debug_teleportations:
+            from src.utils.config_loader import config_loader
+            sim_config = config_loader.load('client/simulation.yaml')
+            if sim_config['teleport_detection']['enabled']:
                 distance_delta_m = data.get('distance_delta_m', 0.0)
                 self._check_teleportation(position, data, distance_delta_m)
             

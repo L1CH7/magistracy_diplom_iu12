@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import pyqtSignal, Qt
 
 from loguru import logger as log
-from src.client.config.simulation_config import simulation_config
+from src.utils.config_loader import config_loader
 
 
 class SimulationPanel(QWidget):
@@ -51,6 +51,9 @@ class SimulationPanel(QWidget):
 
     def _init_ui(self):
         """Initialize UI components."""
+        # Load config
+        config = config_loader.load('client/simulation.yaml')
+        
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
@@ -65,14 +68,14 @@ class SimulationPanel(QWidget):
         
         self.sim_speed_spinbox = QDoubleSpinBox()
         self.sim_speed_spinbox.setRange(
-            simulation_config.min_sim_speed,
-            simulation_config.max_sim_speed
+            config['speed']['min'],
+            config['speed']['max']
         )
         self.sim_speed_spinbox.setSingleStep(
-            simulation_config.sim_speed_step
+            config['speed']['step']
         )
         self.sim_speed_spinbox.setValue(
-            simulation_config.default_sim_speed
+            config['speed']['default']
         )
         self.sim_speed_spinbox.setDecimals(1)
         self.sim_speed_spinbox.valueChanged.connect(
@@ -88,10 +91,10 @@ class SimulationPanel(QWidget):
         
         self.fps_spinbox = QSpinBox()
         self.fps_spinbox.setRange(
-            simulation_config.min_fps,
-            simulation_config.max_fps
+            config['fps']['min'],
+            config['fps']['max']
         )
-        self.fps_spinbox.setValue(simulation_config.default_fps)
+        self.fps_spinbox.setValue(config['fps']['default'])
         self.fps_spinbox.valueChanged.connect(self._on_fps_changed)
         fps_layout.addWidget(self.fps_spinbox)
         fps_layout.addStretch()

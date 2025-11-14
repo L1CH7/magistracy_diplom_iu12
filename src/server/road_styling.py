@@ -1,172 +1,29 @@
 """
-Road styling and classification for rendering.
-Defines colors, widths, and lane configurations for different road types.
+Road filtering and classification for server-side processing.
+
+NOTE: Road colors, widths, and visual styling are defined in
+configs/client/map.rendering.yaml and applied on the client side.
+This module only handles filtering logic.
 """
 
-# Road classification by highway type
-ROAD_CLASSES = {
-    # Motorways (Автомагистрали)
-    'motorway': {
-        'color': '#e892a2',  # Pink
-        'width': 8,
-        'priority': 1,
-        'drivable': True,
-        'default_lanes': 4,
-        'default_maxspeed': 110,
-    },
-    'motorway_link': {
-        'color': '#e892a2',
-        'width': 6,
-        'priority': 2,
-        'drivable': True,
-        'default_lanes': 2,
-        'default_maxspeed': 70,
-    },
-    
-    # Trunk roads (Скоростные дороги)
-    'trunk': {
-        'color': '#f9b29c',  # Light orange
-        'width': 7,
-        'priority': 3,
-        'drivable': True,
-        'default_lanes': 4,
-        'default_maxspeed': 90,
-    },
-    'trunk_link': {
-        'color': '#f9b29c',
-        'width': 5,
-        'priority': 4,
-        'drivable': True,
-        'default_lanes': 2,
-        'default_maxspeed': 60,
-    },
-    
-    # Primary roads (Главные дороги)
-    'primary': {
-        'color': '#fcd6a4',  # Pale orange
-        'width': 6,
-        'priority': 5,
-        'drivable': True,
-        'default_lanes': 3,
-        'default_maxspeed': 70,
-    },
-    'primary_link': {
-        'color': '#fcd6a4',
-        'width': 4,
-        'priority': 6,
-        'drivable': True,
-        'default_lanes': 2,
-        'default_maxspeed': 50,
-    },
-    
-    # Secondary roads (Второстепенные дороги)
-    'secondary': {
-        'color': '#f7fabf',  # Pale yellow
-        'width': 5,
-        'priority': 7,
-        'drivable': True,
-        'default_lanes': 2,
-        'default_maxspeed': 60,
-    },
-    'secondary_link': {
-        'color': '#f7fabf',
-        'width': 3,
-        'priority': 8,
-        'drivable': True,
-        'default_lanes': 1,
-        'default_maxspeed': 40,
-    },
-    
-    # Tertiary roads (Третьестепенные дороги)
-    'tertiary': {
-        'color': '#ffffff',  # White
-        'width': 4,
-        'priority': 9,
-        'drivable': True,
-        'default_lanes': 2,
-        'default_maxspeed': 50,
-    },
-    'tertiary_link': {
-        'color': '#ffffff',
-        'width': 3,
-        'priority': 10,
-        'drivable': True,
-        'default_lanes': 1,
-        'default_maxspeed': 30,
-    },
-    
-    # Residential/urban streets (Жилые улицы)
-    'residential': {
-        'color': '#ffffff',  # White
-        'width': 3,
-        'priority': 11,
-        'drivable': True,
-        'default_lanes': 1,
-        'default_maxspeed': 30,
-    },
-    'living_street': {
-        'color': '#ededed',  # Light grey
-        'width': 2,
-        'priority': 12,
-        'drivable': True,
-        'default_lanes': 1,
-        'default_maxspeed': 20,
-    },
-    'unclassified': {
-        'color': '#ffffff',
-        'width': 3,
-        'priority': 13,
-        'drivable': True,
-        'default_lanes': 1,
-        'default_maxspeed': 50,
-    },
-    
-    # Service roads (Служебные дороги)
-    'service': {
-        'color': '#cccccc',  # Grey
-        'width': 2,
-        'priority': 14,
-        'drivable': True,
-        'default_lanes': 1,
-        'default_maxspeed': 20,
-    },
-    
-    # Non-drivable (for reference)
-    'pedestrian': {
-        'color': '#dddde8',
-        'width': 2,
-        'priority': 20,
-        'drivable': False,
-    },
-    'footway': {
-        'color': '#fa8072',
-        'width': 1,
-        'priority': 21,
-        'drivable': False,
-    },
-    'cycleway': {
-        'color': '#0000ff',
-        'width': 1,
-        'priority': 22,
-        'drivable': False,
-    },
-    'path': {
-        'color': '#2f4f4f',
-        'width': 1,
-        'priority': 23,
-        'drivable': False,
-    },
-    'steps': {
-        'color': '#fe9292',
-        'width': 1,
-        'priority': 24,
-        'drivable': False,
-    },
-}
-
-# Get all drivable road types
+# Drivable highway types for filtering
+# This matches the routing configuration and ensures we only process
+# roads that can be used for navigation
 DRIVABLE_HIGHWAY_TYPES = {
-    k for k, v in ROAD_CLASSES.items() if v.get('drivable', False)
+    # Major roads
+    'motorway', 'motorway_link',
+    'trunk', 'trunk_link',
+    'primary', 'primary_link',
+    'secondary', 'secondary_link',
+    'tertiary', 'tertiary_link',
+    
+    # Urban/residential
+    'residential',
+    'living_street',
+    'unclassified',
+    
+    # Service roads
+    'service',
 }
 
 
