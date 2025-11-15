@@ -2,10 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY services/data-processor/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src/ ./src/
+COPY services/data-processor/src/ ./src/
+COPY configs ./configs/
+COPY data ./data/
 
 EXPOSE 8005
 

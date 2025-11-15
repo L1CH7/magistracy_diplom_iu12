@@ -2,16 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
-COPY requirements.txt .
+# Copy service requirements
+COPY services/simulation/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source
-COPY src/ ./src/
-
-# Copy shared code from project root
-COPY ../../src/shared ./src/shared
-COPY ../../configs ./configs
+# Copy source (from context root = project root)
+COPY services/simulation/src/ ./src/
+COPY src/shared ./src/shared/
+COPY configs ./configs/
 
 # Expose port
 EXPOSE 8001

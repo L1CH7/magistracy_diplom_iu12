@@ -2,10 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY services/traffic-manager/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src/ ./src/
+COPY services/traffic-manager/src/ ./src/
+COPY configs ./configs/
 
 EXPOSE 8004
 

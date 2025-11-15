@@ -3,13 +3,12 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements
-COPY requirements.txt .
-
-# Install dependencies
+COPY services/coordinator/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY src/ ./src/
+COPY services/coordinator/src/ ./src/
+COPY configs ./configs/
 
 # Expose port
 EXPOSE 8002
