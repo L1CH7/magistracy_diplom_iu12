@@ -16,7 +16,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from loguru import logger
 
-sys.path.append(str(Path(__file__).parents[3]))
 
 from .manager import TrafficManager  # noqa: E402
 from .models import (  # noqa: E402

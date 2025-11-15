@@ -16,7 +16,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks
 from loguru import logger
 
-sys.path.append(str(Path(__file__).parents[3]))
 
 from .manager import DataProcessorManager  # noqa: E402
 from .models import (  # noqa: E402

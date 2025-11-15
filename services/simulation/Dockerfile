@@ -10,6 +10,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Копируем исходники
 COPY services/simulation/src/ ./src/
 COPY src/shared ./src/shared/
+COPY src/utils ./src/utils/
 
 EXPOSE 8001
 
