@@ -80,25 +80,32 @@ services/simulation/
 ## TODOs
 
 1. **Graph Loading**:
-   - [ ] Implement `_load_graph_cache()` in manager.py
-   - [ ] Query PostgreSQL+PostGIS for edges
-   - [ ] Build GraphCache with dense arrays
+   - [x] Add SQL function `graphs.get_simulation_graph()`
+   - [x] Add `_load_graph_cache()` placeholder in manager.py
+   - [ ] Implement PostGISManager integration
+   - [ ] Build GraphCache with dense arrays (when DB ready)
 
-2. **Broadcasting**:
+2. **Batch Updates**:
+   - [x] Add SQL function `graphs.batch_update_edge_loads()`
+   - [x] Add SQL function `graphs.update_effective_speeds()` (BPR formula)
+   - [ ] Implement batch sync in `_tick()` (every 1-5 sec)
+
+3. **Broadcasting**:
    - [ ] Implement `broadcast_positions()` in manager.py
    - [ ] WebSocket client to Coordinator
    - [ ] HTTP POST fallback
 
-3. **Teleport Detection**:
+4. **Teleport Detection**:
    - [ ] Use `detect_teleports_batch()` in tick loop
    - [ ] Alert Coordinator on teleports
    - [ ] Log warnings
 
-4. **Metrics**:
+5. **Metrics**:
    - [ ] Add Prometheus metrics endpoint
    - [ ] Track: tick_duration, agent_count, fps
+   - [ ] Add congestion metrics (edges_over_capacity)
 
-5. **Testing**:
+6. **Testing**:
    - [ ] Run unit tests (pytest tests/test_manager.py)
    - [ ] Run integration tests (pytest tests/test_api.py)
    - [ ] Load testing (1000 agents)

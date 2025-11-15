@@ -61,11 +61,19 @@ class SimulationManager:
         
         logger.info("SimulationManager initialized")
     
-    async def initialize(self):
-        """Initialize simulation (load graph cache, etc)."""
-        # TODO: Load graph cache from database
-        # For now, create empty batch
+    async def initialize(self, load_graph: bool = True):
+        """
+        Initialize simulation (load graph cache, etc).
+        
+        Args:
+            load_graph: Whether to load graph from database (default True)
+        """
+        # Create empty batch
         self.batch = self._create_empty_batch()
+        
+        # Load graph cache from database
+        if load_graph:
+            await self._load_graph_cache()
         
         logger.info("Simulation initialized")
     
@@ -423,3 +431,55 @@ class SimulationManager:
             config_indices=np.array([], dtype=np.int32),
             total_distances_m=np.array([])
         )
+    
+    async def _load_graph_cache(self):
+        """
+        Load graph cache from database.
+        
+        Queries PostgreSQL for all edges and builds GraphCache
+        (dense numpy arrays indexed by edge_id).
+        """
+        # TODO: Import PostGISManager or use direct connection
+        # For now, placeholder (will implement when DB layer ready)
+        logger.warning(
+            "GraphCache loading not implemented yet "
+            "(waiting for database integration)"
+        )
+        
+        # Expected implementation:
+        # ```
+        # from src.data.postgis_manager import PostGISManager
+        # db = PostGISManager()
+        #
+        # # Query: SELECT * FROM graphs.get_simulation_graph()
+        # edges = db.query("SELECT * FROM graphs.get_simulation_graph()")
+        #
+        # # Find max edge_id
+        # max_edge_id = max(e['edge_id'] for e in edges)
+        #
+        # # Create dense arrays (size = max_edge_id + 1)
+        # speeds = np.zeros(max_edge_id + 1)
+        # start_lons = np.zeros(max_edge_id + 1)
+        # start_lats = np.zeros(max_edge_id + 1)
+        # end_lons = np.zeros(max_edge_id + 1)
+        # end_lats = np.zeros(max_edge_id + 1)
+        # lengths = np.zeros(max_edge_id + 1)
+        #
+        # for edge in edges:
+        #     idx = edge['edge_id']
+        #     speeds[idx] = edge['speed_limit_kmh']
+        #     start_lons[idx] = edge['start_lon']
+        #     start_lats[idx] = edge['start_lat']
+        #     end_lons[idx] = edge['end_lon']
+        #     end_lats[idx] = edge['end_lat']
+        #     lengths[idx] = edge['length_m']
+        #
+        # self.graph_cache = GraphCache(
+        #     speeds=speeds,
+        #     start_lons=start_lons,
+        #     start_lats=start_lats,
+        #     end_lons=end_lons,
+        #     end_lats=end_lats,
+        #     lengths=lengths
+        # )
+        # ```

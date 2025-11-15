@@ -34,3 +34,6 @@ logs/
 data/osm_data.json
 data/*.geojson
 data/tiles/
+
+/*.md
+!README.md
