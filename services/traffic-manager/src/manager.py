@@ -9,6 +9,8 @@ Manages:
 """
 
 import asyncpg
+import asyncio
+import os
 import redis.asyncio as aioredis
 from loguru import logger
 from typing import List, Dict, Tuple
@@ -32,15 +34,15 @@ class TrafficManager:
         # Redis cache
         self.redis_client: aioredis.Redis = None
         
-        # Config (TODO: load from YAML)
-        self.db_host = "localhost"
-        self.db_port = 5432
-        self.db_name = "osm"
-        self.db_user = "postgres"
-        self.db_password = "postgres"
+        # Config from environment
+        self.db_host = os.getenv("POSTGRES_HOST", "localhost")
+        self.db_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        self.db_name = os.getenv("POSTGRES_DB", "osm")
+        self.db_user = os.getenv("POSTGRES_USER", "postgres")
+        self.db_password = os.getenv("POSTGRES_PASSWORD", "postgres")
         
-        self.redis_host = "localhost"
-        self.redis_port = 6379
+        self.redis_host = os.getenv("REDIS_HOST", "localhost")
+        self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         self.redis_ttl_sec = 5
         
         self.congestion_threshold = 0.8
@@ -48,25 +50,52 @@ class TrafficManager:
         logger.info("TrafficManager initialized")
     
     async def initialize(self):
-        """Initialize manager (setup DB pool, Redis)."""
-        # PostgreSQL pool
-        self.db_pool = await asyncpg.create_pool(
-            host=self.db_host,
-            port=self.db_port,
-            database=self.db_name,
-            user=self.db_user,
-            password=self.db_password,
-            min_size=2,
-            max_size=10
-        )
+        """Initialize manager (setup DB pool, Redis with retries)."""
+        max_retries = 10
+        retry_delay = 2
         
-        # Redis client
-        self.redis_client = await aioredis.from_url(
-            f"redis://{self.redis_host}:{self.redis_port}",
-            decode_responses=False
-        )
+        # PostgreSQL pool with retries
+        for attempt in range(max_retries):
+            try:
+                self.db_pool = await asyncpg.create_pool(
+                    host=self.db_host,
+                    port=self.db_port,
+                    database=self.db_name,
+                    user=self.db_user,
+                    password=self.db_password,
+                    min_size=2,
+                    max_size=10,
+                    timeout=5
+                )
+                break
+            except Exception as e:
+                logger.warning(
+                    f"DB connection attempt {attempt + 1}/{max_retries}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise
         
-        logger.info("Traffic Manager initialized (DB + Redis ready)")
+        # Redis client with retries
+        for attempt in range(max_retries):
+            try:
+                self.redis_client = await aioredis.from_url(
+                    f"redis://{self.redis_host}:{self.redis_port}",
+                    decode_responses=False
+                )
+                await self.redis_client.ping()
+                break
+            except Exception as e:
+                logger.warning(
+                    f"Redis connection attempt {attempt + 1}/{max_retries}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise
+        
+        logger.success("Traffic Manager initialized (DB + Redis ready)")
     
     async def shutdown(self):
         """Shutdown manager."""

@@ -13,6 +13,8 @@ Steps:
 
 import uuid
 import asyncpg
+import asyncio
+import os
 from loguru import logger
 from typing import Dict, List
 
@@ -34,28 +36,43 @@ class DataProcessorManager:
         # Job registry
         self.jobs: Dict[str, Dict] = {}
         
-        # Config
-        self.db_host = "localhost"
-        self.db_port = 5432
-        self.db_name = "osm"
-        self.db_user = "postgres"
-        self.db_password = "postgres"
+        # Config from environment
+        self.db_host = os.getenv("POSTGRES_HOST", "localhost")
+        self.db_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        self.db_name = os.getenv("POSTGRES_DB", "osm")
+        self.db_user = os.getenv("POSTGRES_USER", "postgres")
+        self.db_password = os.getenv("POSTGRES_PASSWORD", "postgres")
         
         logger.info("DataProcessorManager initialized")
     
     async def initialize(self):
-        """Initialize manager."""
-        self.db_pool = await asyncpg.create_pool(
-            host=self.db_host,
-            port=self.db_port,
-            database=self.db_name,
-            user=self.db_user,
-            password=self.db_password,
-            min_size=2,
-            max_size=10
-        )
+        """Initialize manager with connection retries."""
+        max_retries = 10
+        retry_delay = 2
         
-        logger.info("Data Processor initialized")
+        for attempt in range(max_retries):
+            try:
+                self.db_pool = await asyncpg.create_pool(
+                    host=self.db_host,
+                    port=self.db_port,
+                    database=self.db_name,
+                    user=self.db_user,
+                    password=self.db_password,
+                    min_size=2,
+                    max_size=10,
+                    timeout=5
+                )
+                
+                logger.success("Data Processor initialized")
+                return
+            except Exception as e:
+                logger.warning(
+                    f"DB connection attempt {attempt + 1}/{max_retries}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    raise
     
     async def shutdown(self):
         """Shutdown manager."""

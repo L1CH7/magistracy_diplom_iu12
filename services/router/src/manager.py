@@ -5,6 +5,8 @@ Uses pgRouting (Yen's algorithm) + diversity penalties.
 """
 
 import asyncpg
+import asyncio
+import os
 from loguru import logger
 from typing import List, Dict
 
@@ -24,28 +26,42 @@ class RouterManager:
         # Database connection
         self.db_pool: asyncpg.Pool = None
         
-        # Config (TODO: load from YAML)
-        self.db_host = "localhost"
-        self.db_port = 5432
-        self.db_name = "osm"
-        self.db_user = "postgres"
-        self.db_password = "postgres"
+        # Config from environment
+        self.db_host = os.getenv("POSTGRES_HOST", "localhost")
+        self.db_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        self.db_name = os.getenv("POSTGRES_DB", "osm")
+        self.db_user = os.getenv("POSTGRES_USER", "postgres")
+        self.db_password = os.getenv("POSTGRES_PASSWORD", "postgres")
         
         logger.info("RouterManager initialized")
     
     async def initialize(self):
-        """Initialize router (setup DB pool)."""
-        self.db_pool = await asyncpg.create_pool(
-            host=self.db_host,
-            port=self.db_port,
-            database=self.db_name,
-            user=self.db_user,
-            password=self.db_password,
-            min_size=2,
-            max_size=10
-        )
+        """Initialize router (setup DB pool with retries)."""
+        max_retries = 10
+        retry_delay = 2
         
-        logger.info("Router initialized (DB pool ready)")
+        for attempt in range(max_retries):
+            try:
+                self.db_pool = await asyncpg.create_pool(
+                    host=self.db_host,
+                    port=self.db_port,
+                    database=self.db_name,
+                    user=self.db_user,
+                    password=self.db_password,
+                    min_size=2,
+                    max_size=10,
+                    timeout=5
+                )
+                
+                logger.success("Router initialized (DB pool ready)")
+                return
+            except Exception as e:
+                logger.warning(f"DB connection attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                else:
+                    logger.error("Failed to connect to database after all retries")
+                    raise
     
     async def shutdown(self):
         """Shutdown router."""
