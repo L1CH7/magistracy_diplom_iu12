@@ -1,11 +1,12 @@
 # Makefile для управления проектом
 
-.PHONY: help build build-% up up-% down restart logs logs-% ps health migrate gui clean
+.PHONY: help build build-% build-gui up up-% down restart logs logs-% ps health migrate gui clean
 
 help:
 	@echo "Доступные команды:"
 	@echo "  make build        - Сборка всех контейнеров"
 	@echo "  make build-%      - Сборка конкретного контейнера (make build-simulation)"
+	@echo "  make build-gui    - Создать .venv.gui для GUI (Python 3.13 compatible)"
 	@echo "  make up           - Запуск всех сервисов"
 	@echo "  make up-%         - Запуск конкретного сервиса"
 	@echo "  make down         - Остановка всех сервисов"
@@ -15,7 +16,7 @@ help:
 	@echo "  make ps           - Статус контейнеров"
 	@echo "  make health       - Проверка health всех сервисов"
 	@echo "  make migrate      - Применить миграции БД"
-	@echo "  make gui          - Запуск GUI локально"
+	@echo "  make gui          - Запуск GUI локально (использует .venv.gui)"
 	@echo "  make clean        - Удалить все контейнеры и volumes"
 
 # Сборка с кэшем и параллелизацией
@@ -67,10 +68,17 @@ migrate:
 	docker compose exec postgis psql -U diplom -d osm -f /docker-entrypoint-initdb.d/011_router_functions.sql
 	@echo "Миграции применены"
 
-# GUI локально (не в контейнере)
+# GUI - сборка venv и запуск
+build-gui:
+	@echo "Создание .venv.gui..."
+	python3 -m venv .venv.gui
+	.venv.gui/bin/pip install --upgrade pip
+	.venv.gui/bin/pip install -r gui-requirements.txt
+	@echo "✓ GUI venv готов (.venv.gui)"
+
 gui:
-	@echo "Запуск GUI локально..."
-	cd src/client && python3 main.py
+	@echo "Запуск GUI с .venv.gui..."
+	.venv.gui/bin/python src/client/main.py
 
 # Очистка
 clean:

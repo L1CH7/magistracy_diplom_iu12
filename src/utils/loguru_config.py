@@ -51,7 +51,8 @@ def log_performance_filter(record: dict) -> bool:
 def configure_loguru(
     log_level: str = "INFO",
     log_to_file: bool = True,
-    json_logs: bool = True
+    json_logs: bool = True,
+    stdout: bool = True
 ):
     """Configure loguru for entire application.
     
@@ -99,17 +100,18 @@ def configure_loguru(
             return log_level.upper() == "TRACE"
         return True
     
-    logger.add(
-        sys.stdout,
-        level="TRACE",  # Accept all levels, filter in trace_filter
-        format=console_format,
-        colorize=True,
-        backtrace=True,
-        diagnose=True,
-        enqueue=False,  # Synchronous (faster for console)
-        catch=True,
-        filter=trace_filter  # Zero-cost TRACE when not enabled
-    )
+    if stdout:
+        logger.add(
+            sys.stdout,
+            level="TRACE",  # Accept all levels, filter in trace_filter
+            format=console_format,
+            colorize=True,
+            backtrace=True,
+            diagnose=True,
+            enqueue=False,  # Synchronous (faster for console)
+            catch=True,
+            filter=trace_filter  # Zero-cost TRACE when not enabled
+        )
     
     if not log_to_file:
         return logger

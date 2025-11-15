@@ -12,13 +12,36 @@ from src.client.ui.main_window import MainWindow
 
 def main():
     """Main entry point - minimal configuration."""
-    # Initialize logging (JSON files in .agent_dir/logs/)
-    configure_loguru(log_level="INFO", log_to_file=True)
+    # Initialize logging (JSON files in .agent_dir/logs/, no stdout)
+    configure_loguru(log_level="INFO", log_to_file=True, stdout=False)
+    
+    # Изоляция от системной темы (не зависит от KDE/GNOME)
+    os.environ["QT_QPA_PLATFORMTHEME"] = ""  # Disable platform theme
+    os.environ["QT_STYLE_OVERRIDE"] = "Fusion"  # Use Qt's Fusion style
     
     app = QApplication(sys.argv)
     
-    # Server URL from environment or default
-    server_url = "http://server:8000"
+    # Явно устанавливаем Fusion style и светлую палитру
+    app.setStyle("Fusion")
+    
+    from PyQt5.QtGui import QPalette, QColor
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(240, 240, 240))
+    palette.setColor(QPalette.WindowText, QColor(0, 0, 0))
+    palette.setColor(QPalette.Base, QColor(255, 255, 255))
+    palette.setColor(QPalette.AlternateBase, QColor(245, 245, 245))
+    palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 220))
+    palette.setColor(QPalette.ToolTipText, QColor(0, 0, 0))
+    palette.setColor(QPalette.Text, QColor(0, 0, 0))
+    palette.setColor(QPalette.Button, QColor(240, 240, 240))
+    palette.setColor(QPalette.ButtonText, QColor(0, 0, 0))
+    palette.setColor(QPalette.Link, QColor(0, 0, 255))
+    palette.setColor(QPalette.Highlight, QColor(76, 163, 224))
+    palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+    app.setPalette(palette)
+    
+    # Server URL from environment or default (localhost для локального запуска)
+    server_url = os.getenv("SERVER_URL", "http://localhost:8000")
     
     # Create and show main window
     window = MainWindow(server_url)
