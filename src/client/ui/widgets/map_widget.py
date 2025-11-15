@@ -12,9 +12,6 @@ class WebConsolePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level: int, message: str,
                                  line_number: int, source_id: str):
         """Handle JavaScript console messages."""
-        # DEBUG: direct print to verify callback fires
-        print(f"[JSCONSOLE] level={level} msg={message}")
-        
         # Map JS console levels to loguru
         if level == 0:  # LOG
             log.debug("js_console", source=source_id,
@@ -37,23 +34,10 @@ class MapWidget(QWebEngineView):
 
     def __init__(self, parent: QWidget = None):
         """Initialize map widget."""
-        print('MapWidget.__init__ from', __file__)
         super().__init__(parent)
         
         # Setup custom page with console logging
-        page = WebConsolePage()
-        print('WebConsolePage created:', type(page), page)
-        self.setPage(page)
-        
-        # Enable settings for proper operation
-        from PyQt5.QtWebEngineWidgets import QWebEngineSettings
-        settings = page.settings()
-        settings.setAttribute(
-            QWebEngineSettings.JavascriptEnabled, True
-        )
-        settings.setAttribute(
-            QWebEngineSettings.LocalContentCanAccessRemoteUrls, True
-        )
+        self.setPage(WebConsolePage())
         
         self.setContextMenuPolicy(Qt.NoContextMenu)
 
@@ -75,5 +59,8 @@ class MapWidget(QWebEngineView):
     def fit_bounds(self, min_lon: float, min_lat: float,
                    max_lon: float, max_lat: float) -> None:
         """Fit map to bounds."""
-        js_code = f"if (map) map.fitBounds([[{min_lon}, {min_lat}], [{max_lon}, {max_lat}]]);"
+        js_code = (
+            f"if (map) map.fitBounds("
+            f"[[{min_lon}, {min_lat}], [{max_lon}, {max_lat}]]);"
+        )
         self.execute_js(js_code)

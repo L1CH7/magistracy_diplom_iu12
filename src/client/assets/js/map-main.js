@@ -24,8 +24,6 @@ export function initializeMap() {
   mapInitialized = true;
 
   const tileUrl = window.TILE_URL || MAP_CONFIG.tiles.defaultUrl;
-  
-  console.log('Initializing map with tile URL:', tileUrl);
 
   // Create map with both raster and vector tiles
   map = new maplibregl.Map({
@@ -62,24 +60,9 @@ export function initializeMap() {
   }
   requestAnimationFrame(animate);
 
-  // Optional: setup map load callback for tile loading
+  // Map load event for additional initialization
   map.on('load', () => {
     console.log('Map tiles loaded successfully');
-    
-    // Debug: check vector source config
-    const vectorSource = map.getSource('graph-vector');
-    if (vectorSource) {
-      console.log('Vector source found:', vectorSource);
-    } else {
-      console.error('Vector source NOT FOUND!');
-    }
-    
-    // Debug: check layers
-    const layers = map.getStyle().layers;
-    const vectorLayers = layers.filter(l => 
-      l.id.startsWith('graph-') && l.type === 'line'
-    );
-    console.log('Vector layers:', vectorLayers.map(l => l.id));
   });
 }
 
@@ -144,16 +127,11 @@ function setupEventListeners() {
 }
 
 // Auto-initialize when TILE_URL is available
-console.log('Script started, checking for TILE_URL...');
 if (window.TILE_URL) {
-  console.log('TILE_URL found immediately:', window.TILE_URL);
   initializeMap();
 } else {
-  console.log('TILE_URL not found, waiting 500ms...');
   setTimeout(() => {
     if (window.TILE_URL) {
-      console.log('TILE_URL found after delay:', window.TILE_URL);
-      console.log('VECTOR_TILE_URL:', window.VECTOR_TILE_URL);
       initializeMap();
     } else {
       console.error('TILE_URL NOT SET! Using OSM fallback.');
