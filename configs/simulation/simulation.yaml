@@ -1,0 +1,178 @@
+# Simulation Configuration
+# Complete configuration for simulation service
+# Based on final.instruction.md specification
+
+simulation:
+  # FPS and timestep
+  fps: 20                    # ticks per second
+  timestep_sec: 0.05         # 1 / fps
+  
+  # Capacity formula
+  capacity:
+    vehicle_length_m: 5.0
+    mode: simple             # simple | realistic
+    simple:
+      safe_distance_sec: 3.0
+      min_speed_kmh: 5.0
+    realistic:
+      safe_distance_function:
+        - {speed_kmh: 0, safe_sec: 1.0}
+        - {speed_kmh: 40, safe_sec: 1.0}
+        - {speed_kmh: 80, safe_sec: 2.0}
+        - {speed_kmh: 120, safe_sec: 3.0}
+      binary_search_iterations: 20
+      min_speed_kmh: 5.0
+  
+  # Effective_speed formula (BPR function from Highway Capacity Manual)
+  effective_speed:
+    formula: bpr             # bpr | linear
+    bpr:
+      alpha: 0.7             # Urban roads coefficient
+      beta: 1.5              # Urban roads exponent
+    linear:
+      congestion_threshold: 1.0
+    min_speed_kmh: 5.0       # Minimum speed in congestion
+  
+  # Agent physics (detailed)
+  agent:
+    acceleration_zone: 0.05  # 5% beginning of edge
+    deceleration_zone: 0.10  # 10% end of edge
+    
+    # Turn speed limits (by angle range)
+    turn_speed_limits:
+      straight: 100          # < 30° - full speed
+      slight: 60             # 30-60° - 60% of maxspeed
+      turn: 40               # 60-120° - 40% of maxspeed
+      sharp: 20              # 120-150° - 20% of maxspeed
+      uturn: 10              # 150-180° - 10% of maxspeed (U-turn)
+    
+    # Angle thresholds (degrees)
+    angle_thresholds:
+      slight: 30
+      turn: 60
+      sharp: 120
+      uturn: 150
+  
+  # Sync intervals (memory → DB)
+  sync:
+    agents_to_db_sec: 5      # Snapshot agents to DB
+    edges_load_update_sec: 1 # Batch UPDATE current_load
+    wal_buffer_size: 1000    # WAL buffer (agents)
+  
+  # Rerouting strategy
+  rerouting:
+    strategy: hybrid         # fixed | event_driven | hybrid
+    fixed:
+      interval_sec: 30
+    event_driven:
+      congestion_threshold: 0.8
+      lookahead_edges: 3
+    hybrid:
+      check_interval_sec: 5
+      congestion_threshold: 0.8
+      lookahead_edges: 3
+  
+  # Telemetry
+  telemetry:
+    enable_teleport_detection: true  # false in production
+    teleport_threshold: 1.5          # 150% of expected distance
+    log_anomalies: true
+    anomaly_log_level: warning
+
+# Coordinator configuration
+coordinator:
+  # Route calculation
+  routing:
+    k_routes: 3              # Number of alternative routes
+    diversity_penalty: 1.5   # Penalty factor for used edges
+    diversity_threshold: 0.7 # 70% unique edges required
+    
+  # Priority levels
+  priority:
+    normal: 0-9              # Regular vehicles
+    public: 10-19            # Buses, public transport
+    emergency: 20-29         # Ambulance, fire, police
+    
+  # Priority routing
+  priority_routing:
+    # Emergency vehicles ignore congestion
+    emergency_ignore_congestion: true
+    emergency_use_shortest_path: true
+
+# Capacity and congestion
+capacity:
+  # Congestion thresholds for visualization
+  thresholds:
+    low: 0.5      # Green (< 50%)
+    moderate: 0.8 # Yellow (50-80%)
+    high: 1.0     # Red (> 80%)
+  
+  # Update frequency
+  update_interval_sec: 1
+
+# Performance settings
+performance:
+  # Batch operations
+  batch_size: 1000
+  
+  # Parallelization
+  use_multiprocessing: false  # true for CPU-intensive ops
+  worker_processes: 8
+  
+  # GPU acceleration (optional)
+  use_gpu: false              # Requires CuPy
+  gpu_device: 0
+
+# Database settings
+database:
+  # Connection pool
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  
+  # Query timeouts
+  query_timeout_sec: 30
+  
+  # Batch operations
+  batch_insert_size: 1000
+
+# Logging
+logging:
+  level: INFO                # DEBUG | INFO | WARNING | ERROR
+  format: json               # json | text
+  
+  # Log rotation
+  rotation: 100 MB
+  retention: 7 days
+  
+  # Specific loggers
+  loggers:
+    simulation: INFO
+    routing: INFO
+    telemetry: WARNING
+    database: WARNING
+
+# Metrics (Prometheus)
+metrics:
+  enabled: true
+  port: 9090
+  
+  # Histogram buckets (milliseconds)
+  histograms:
+    simulation_step_ms: [1, 5, 10, 20, 50, 100, 200]
+    routing_duration_ms: [10, 50, 100, 500, 1000, 5000]
+    db_query_ms: [1, 10, 50, 100, 500, 1000]
+  
+  # Custom metrics
+  custom:
+    - name: agents_count
+      type: gauge
+      description: "Current number of agents"
+    
+    - name: edges_congested
+      type: gauge
+      description: "Number of edges with congestion > 80%"
+    
+    - name: priority_agents
+      type: gauge
+      description: "Number of priority agents (>= 20)"

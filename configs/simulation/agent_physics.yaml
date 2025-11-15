@@ -1,0 +1,118 @@
+# Agent Configuration
+# Defines agent types, their physics, and behavior
+
+# Speed penalty regions (non-ticketing speed limits)
+# Formula: max_allowed = speed_limit + margin
+speed_penalty_regions:
+  russia:
+    margin_kmh: 19  # РФ: +19 км/ч
+    margin_type: absolute
+  
+  turkey:
+    margin_percent: 10  # Турция: +10%
+    margin_type: percent
+  
+  belarus:
+    margin_kmh: 9  # Беларусь: +9 км/ч
+    margin_type: absolute
+  
+  europe:
+    margin_kmh: 0  # Европа: строгий лимит
+    margin_type: absolute
+
+# Default region (for now - hardcoded to avoid DB queries)
+default_region: russia
+
+# Agent type presets
+agent_types:
+  car_normal:
+    type: car
+    priority: 0
+    acceleration_mps2: 2.5      # m/s² acceleration
+    deceleration_mps2: 4.0      # m/s² braking
+    turn_speed_factor: 0.6      # speed *= 0.6 on turns
+    driver_mode: normal         # how aggressive driver is
+    # Speed calculation:
+    # target_speed = min(
+    #   edge_speed_limit + margin,
+    #   agent_max_speed_override (if set)
+    # ) * driver_factor
+    driver_speed_factor: 0.92   # drives at 92% of max allowed
+    max_speed_override_kmh: null  # null = use edge limit + margin
+    
+  car_patient:
+    type: car
+    priority: 0
+    acceleration_mps2: 2.0
+    deceleration_mps2: 3.5
+    turn_speed_factor: 0.7
+    driver_mode: patient
+    driver_speed_factor: 0.85   # drives slower (85%)
+    max_speed_override_kmh: null
+    
+  car_hurry:
+    type: car
+    priority: 0
+    acceleration_mps2: 3.0
+    deceleration_mps2: 5.0
+    turn_speed_factor: 0.5      # takes turns faster
+    driver_mode: hurry
+    driver_speed_factor: 0.98   # drives at limit (98%)
+    max_speed_override_kmh: null
+    
+  emergency:
+    type: emergency
+    priority: 20                # highest priority
+    acceleration_mps2: 4.0
+    deceleration_mps2: 6.0
+    turn_speed_factor: 0.7
+    driver_mode: hurry
+    driver_speed_factor: 1.0    # ignores limits
+    max_speed_override_kmh: 90  # can go up to 90 km/h even on 40 limit roads
+    ignore_capacity: true       # doesn't slow down in traffic
+    
+  truck:
+    type: truck
+    priority: 0
+    acceleration_mps2: 1.5      # slower acceleration
+    deceleration_mps2: 3.0
+    turn_speed_factor: 0.5      # must slow down more on turns
+    driver_mode: normal
+    driver_speed_factor: 0.90
+    max_speed_override_kmh: 70  # trucks limited to 70 km/h in Russia
+
+# Movement physics
+physics:
+  # Acceleration/deceleration zones (% of edge length)
+  accel_zone_percent: 5       # first 5% of edge - accelerating
+  decel_zone_percent: 10      # last 10% of edge - decelerating
+  turn_approach_percent: 10   # slow down in last 10% before turn
+  
+  # Turn angle thresholds (degrees)
+  turn_thresholds:
+    slight_turn: 30           # < 30° - no penalty
+    medium_turn: 60           # 30-60° - apply turn_speed_factor
+    sharp_turn: 90            # > 60° - apply turn_speed_factor * 0.7
+  
+  # Turn speed limits (% of maxspeed by angle)
+  # Based on final.instruction.md recommendations
+  turn_speed_limits:
+    straight: 100             # < 30° - full speed
+    slight: 60                # 30-60° - 60% speed
+    turn: 40                  # 60-120° - 40% speed
+    sharp: 20                 # 120-150° - 20% speed
+    uturn: 10                 # 150-180° - 10% speed (U-turn)
+  
+  # Teleport detection
+  teleport_detection:
+    enabled: true
+    threshold_multiplier: 1.5  # max_distance = max_speed * dt * 1.5
+    log_level: warning
+
+# Simulation defaults
+simulation:
+  fps: 20                     # simulation ticks per second
+  dt: 0.05                    # 1/fps = 0.05s per tick
+  
+# Default agent config (if none specified)
+default_agent: car_normal
