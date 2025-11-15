@@ -5,6 +5,7 @@ Manages agent batch and simulation tick loop.
 """
 
 import asyncio
+import os
 import sys
 import time
 from pathlib import Path
@@ -139,6 +140,10 @@ class SimulationManager:
                     )
                 
                 self.tick_count += 1
+                
+                # DB sync every 5 seconds (100 ticks @ 20 FPS)
+                if self.tick_count % (self.fps * 5) == 0:
+                    await self._sync_agents_to_db()
                 
                 # Log stats every second
                 if self.tick_count % self.fps == 0:
@@ -439,47 +444,124 @@ class SimulationManager:
         Queries PostgreSQL for all edges and builds GraphCache
         (dense numpy arrays indexed by edge_id).
         """
-        # TODO: Import PostGISManager or use direct connection
-        # For now, placeholder (will implement when DB layer ready)
-        logger.warning(
-            "GraphCache loading not implemented yet "
-            "(waiting for database integration)"
-        )
+        # Database connection parameters (TODO: from config)
+        db_host = os.getenv('POSTGRES_HOST', 'localhost')
+        db_port = int(os.getenv('POSTGRES_PORT', 5432))
+        db_name = os.getenv('POSTGRES_DB', 'osm')
+        db_user = os.getenv('POSTGRES_USER', 'postgres')
+        db_password = os.getenv('POSTGRES_PASSWORD', 'postgres')
         
-        # Expected implementation:
-        # ```
-        # from src.data.postgis_manager import PostGISManager
-        # db = PostGISManager()
-        #
-        # # Query: SELECT * FROM graphs.get_simulation_graph()
-        # edges = db.query("SELECT * FROM graphs.get_simulation_graph()")
-        #
-        # # Find max edge_id
-        # max_edge_id = max(e['edge_id'] for e in edges)
-        #
-        # # Create dense arrays (size = max_edge_id + 1)
-        # speeds = np.zeros(max_edge_id + 1)
-        # start_lons = np.zeros(max_edge_id + 1)
-        # start_lats = np.zeros(max_edge_id + 1)
-        # end_lons = np.zeros(max_edge_id + 1)
-        # end_lats = np.zeros(max_edge_id + 1)
-        # lengths = np.zeros(max_edge_id + 1)
-        #
-        # for edge in edges:
-        #     idx = edge['edge_id']
-        #     speeds[idx] = edge['speed_limit_kmh']
-        #     start_lons[idx] = edge['start_lon']
-        #     start_lats[idx] = edge['start_lat']
-        #     end_lons[idx] = edge['end_lon']
-        #     end_lats[idx] = edge['end_lat']
-        #     lengths[idx] = edge['length_m']
-        #
-        # self.graph_cache = GraphCache(
-        #     speeds=speeds,
-        #     start_lons=start_lons,
-        #     start_lats=start_lats,
-        #     end_lons=end_lons,
-        #     end_lats=end_lats,
-        #     lengths=lengths
-        # )
-        # ```
+        try:
+            # Connect to database
+            import asyncpg
+            conn = await asyncpg.connect(
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password
+            )
+            
+            # Query: SELECT * FROM graphs.get_simulation_graph()
+            logger.info("Loading graph from database...")
+            rows = await conn.fetch(
+                "SELECT * FROM graphs.get_simulation_graph()"
+            )
+            
+            if not rows:
+                logger.warning("No edges found in database")
+                await conn.close()
+                return
+            
+            # Find max edge_id
+            max_edge_id = max(row['edge_id'] for row in rows)
+            logger.info(f"Graph size: {len(rows)} edges, max_id={max_edge_id}")
+            
+            # Create dense arrays (size = max_edge_id + 1)
+            speeds = np.zeros(max_edge_id + 1, dtype=np.float32)
+            start_lons = np.zeros(max_edge_id + 1, dtype=np.float32)
+            start_lats = np.zeros(max_edge_id + 1, dtype=np.float32)
+            end_lons = np.zeros(max_edge_id + 1, dtype=np.float32)
+            end_lats = np.zeros(max_edge_id + 1, dtype=np.float32)
+            lengths = np.zeros(max_edge_id + 1, dtype=np.float32)
+            
+            # Fill arrays
+            for row in rows:
+                idx = row['edge_id']
+                speeds[idx] = row['speed_limit_kmh']
+                start_lons[idx] = row['start_lon']
+                start_lats[idx] = row['start_lat']
+                end_lons[idx] = row['end_lon']
+                end_lats[idx] = row['end_lat']
+                lengths[idx] = row['length_m']
+            
+            # Create GraphCache
+            self.graph_cache = GraphCache(
+                speeds=speeds,
+                start_lons=start_lons,
+                start_lats=start_lats,
+                end_lons=end_lons,
+                end_lats=end_lats,
+                lengths=lengths
+            )
+            
+            await conn.close()
+            logger.success(f"Graph cache loaded: {len(rows)} edges")
+            
+        except Exception as e:
+            logger.error(f"Failed to load graph cache: {e}", exc_info=e)
+            # Continue without graph (for testing without DB)
+    
+    async def _sync_agents_to_db(self):
+        """
+        Sync agent positions to database (every 5 sec).
+        
+        Updates agents table with current positions.
+        """
+        if self.batch is None or self.batch.size == 0:
+            return
+        
+        db_host = os.getenv('POSTGRES_HOST', 'localhost')
+        db_port = int(os.getenv('POSTGRES_PORT', 5432))
+        db_name = os.getenv('POSTGRES_DB', 'osm')
+        db_user = os.getenv('POSTGRES_USER', 'postgres')
+        db_password = os.getenv('POSTGRES_PASSWORD', 'postgres')
+        
+        try:
+            import asyncpg
+            conn = await asyncpg.connect(
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password
+            )
+            
+            # Build UPDATE query (batch)
+            # UPDATE agents SET lat=$1, lon=$2, edge_id=$3 WHERE agent_id=$4
+            
+            values = [
+                (
+                    float(self.batch.lats[i]),
+                    float(self.batch.lons[i]),
+                    int(self.batch.edge_ids[i]),
+                    str(self.batch.agent_ids[i])
+                )
+                for i in range(self.batch.size)
+            ]
+            
+            await conn.executemany(
+                """
+                UPDATE agents
+                SET lat = $1, lon = $2, edge_id = $3, updated_at = NOW()
+                WHERE agent_id = $4
+                """,
+                values
+            )
+            
+            await conn.close()
+            logger.debug(f"Synced {self.batch.size} agents to DB")
+            
+        except Exception as e:
+            logger.warning(f"Failed to sync agents to DB: {e}")
+
