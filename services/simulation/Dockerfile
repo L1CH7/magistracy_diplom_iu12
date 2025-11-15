@@ -2,17 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy service requirements
+# Оптимизация pip с BuildKit mount cache
 COPY services/simulation/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-compile -r requirements.txt
 
-# Copy source (from context root = project root)
+# Копируем исходники
 COPY services/simulation/src/ ./src/
 COPY src/shared ./src/shared/
-COPY configs ./configs/
 
-# Expose port
 EXPOSE 8001
 
-# Run
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]

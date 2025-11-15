@@ -2,11 +2,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Оптимизация pip с BuildKit mount cache
 COPY services/router/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-compile -r requirements.txt
 
+# Копируем исходники
 COPY services/router/src/ ./src/
-COPY configs ./configs/
 
 EXPOSE 8003
 

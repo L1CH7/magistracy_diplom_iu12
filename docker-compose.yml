@@ -1,15 +1,13 @@
-# Docker Compose для мультиагентной навигационной системы (9 микросервисов)
-version: '3.8'
-
+# Docker Compose для мультиагентной навигационной системы
 services:
-  # PostgreSQL + PostGIS
+  # PostgreSQL + PostGIS для хранения графа дорог
   postgis:
     image: postgis/postgis:16-3.4
     container_name: diplom-postgis
     environment:
       POSTGRES_DB: osm
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
       POSTGRES_INITDB_ARGS: "-E UTF8"
     ports:
       - "5432:5432"
@@ -19,12 +17,12 @@ services:
     networks:
       - nav-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d osm"]
+      test: ["CMD-SHELL", "pg_isready -U diplom -d osm"]
       interval: 10s
       timeout: 5s
       retries: 5
   
-  # Redis (для Traffic Manager cache)
+  # Redis для кэша Traffic Manager
   redis:
     image: redis:7-alpine
     container_name: diplom-redis
@@ -38,11 +36,13 @@ services:
       timeout: 3s
       retries: 3
   
-  # Phase 2: Simulation Service
+  # Simulation Service - агентная симуляция движения
   simulation:
     build:
       context: .
       dockerfile: services/simulation/Dockerfile
+      cache_from:
+        - diplom-simulation:latest
     image: diplom-simulation:latest
     container_name: diplom-simulation
     ports:
@@ -51,8 +51,8 @@ services:
       POSTGRES_HOST: postgis
       POSTGRES_PORT: 5432
       POSTGRES_DB: osm
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
     volumes:
       - ./logs/simulation:/app/logs
       - ./configs:/app/configs:ro
@@ -62,12 +62,21 @@ services:
       postgis:
         condition: service_healthy
     restart: unless-stopped
+    develop:
+      watch:
+        - action: sync
+          path: ./services/simulation/src
+          target: /app/src
+        - action: rebuild
+          path: ./services/simulation/Dockerfile
   
-  # Phase 3: Coordinator Service
+  # Coordinator Service - оркестрация маршрутов и WebSocket
   coordinator:
     build:
       context: .
       dockerfile: services/coordinator/Dockerfile
+      cache_from:
+        - diplom-coordinator:latest
     image: diplom-coordinator:latest
     container_name: diplom-coordinator
     ports:
@@ -86,11 +95,13 @@ services:
       - router
     restart: unless-stopped
   
-  # Phase 4: Router Service
+  # Router Service - расчёт K-маршрутов с diversity
   router:
     build:
       context: .
       dockerfile: services/router/Dockerfile
+      cache_from:
+        - diplom-router:latest
     image: diplom-router:latest
     container_name: diplom-router
     ports:
@@ -99,8 +110,8 @@ services:
       POSTGRES_HOST: postgis
       POSTGRES_PORT: 5432
       POSTGRES_DB: osm
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
     volumes:
       - ./logs/router:/app/logs
       - ./configs:/app/configs:ro
@@ -110,12 +121,21 @@ services:
       postgis:
         condition: service_healthy
     restart: unless-stopped
+    develop:
+      watch:
+        - action: sync
+          path: ./services/router/src
+          target: /app/src
+        - action: rebuild
+          path: ./services/router/Dockerfile
   
-  # Phase 5: Traffic Manager Service
+  # Traffic Manager Service - мониторинг нагрузки, кэш в Redis
   traffic-manager:
     build:
       context: .
       dockerfile: services/traffic-manager/Dockerfile
+      cache_from:
+        - diplom-traffic-manager:latest
     image: diplom-traffic-manager:latest
     container_name: diplom-traffic-manager
     ports:
@@ -124,8 +144,8 @@ services:
       POSTGRES_HOST: postgis
       POSTGRES_PORT: 5432
       POSTGRES_DB: osm
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
       REDIS_HOST: redis
       REDIS_PORT: 6379
     volumes:
@@ -139,12 +159,21 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    develop:
+      watch:
+        - action: sync
+          path: ./services/traffic-manager/src
+          target: /app/src
+        - action: rebuild
+          path: ./services/traffic-manager/Dockerfile
   
-  # Phase 7: Data Processor Service
+  # Data Processor Service - загрузка OSM и обработка графа
   data-processor:
     build:
       context: .
       dockerfile: services/data-processor/Dockerfile
+      cache_from:
+        - diplom-data-processor:latest
     image: diplom-data-processor:latest
     container_name: diplom-data-processor
     ports:
@@ -153,8 +182,8 @@ services:
       POSTGRES_HOST: postgis
       POSTGRES_PORT: 5432
       POSTGRES_DB: osm
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
     volumes:
       - ./logs/data-processor:/app/logs
       - ./data:/app/data
@@ -165,78 +194,15 @@ services:
       postgis:
         condition: service_healthy
     restart: unless-stopped
+    develop:
+      watch:
+        - action: sync
+          path: ./services/data-processor/src
+          target: /app/src
+        - action: rebuild
+          path: ./services/data-processor/Dockerfile
   
-  # Legacy server (compatibility)
-  server:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-    image: diplom-server:latest
-    ports:
-      - "8000:8000"
-    environment:
-      OSM_JSON_PATH: /app/data/osm_data.json
-      POSTGRES_HOST: postgis
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: osm
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - ./data:/app/data
-      - ./scripts:/app/scripts
-      - ./logs/server:/app/logs
-      - ./configs:/app/configs:ro
-    networks:
-      - nav-net
-    depends_on:
-      postgis:
-        condition: service_healthy
-    develop:
-      watch:
-        - action: sync
-          path: ./src
-          target: /app/src
-        - action: rebuild
-          path: ./Dockerfile.server
-
-  # GUI Client
-  client:
-    build:
-      context: .
-      dockerfile: Dockerfile.client
-    image: diplom-client:latest
-    depends_on:
-      - coordinator
-    environment:
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: "1"
-      QT_QPA_PLATFORM: xcb
-      QTWEBENGINE_DISABLE_SANDBOX: "1"
-      QT_DEBUG_PLUGINS: "1"
-      QTWEBENGINE_CHROMIUM_FLAGS: --enable-gpu-rasterization --ignore-gpu-blocklist
-      COORDINATOR_URL: http://coordinator:8002
-      TILE_URL: ${TILE_URL:-http://server:8000/tiles/osm/{z}/{x}/{y}.png}
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ~/.Xauthority:/root/.Xauthority:rw
-      - /dev/shm:/dev/shm
-      - ./logs/client:/app/logs
-      - ./configs:/app/configs:ro
-    devices:
-      - /dev/dri:/dev/dri
-    networks:
-      - nav-net
-    stdin_open: true
-    tty: true
-    develop:
-      watch:
-        - action: sync
-          path: ./src
-          target: /app/src
-        - action: rebuild
-          path: ./Dockerfile.client
-
-  # Loki (log aggregation)
+  # Loki (агрегация логов)
   loki:
     image: grafana/loki:latest
     container_name: diplom-loki
