@@ -33,6 +33,7 @@ class SidebarWidget(QFrame):
         sidebar_layout.addWidget(self.points_section)
 
         sidebar_layout.addStretch()
+        
         self.quit_btn = QPushButton("Quit (ESC)")
         self.quit_btn.setStyleSheet(
             "QPushButton { background-color: #ef4444; color: white; "

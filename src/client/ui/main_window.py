@@ -2,10 +2,9 @@
 import os
 import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from functools import partial
 
 from PyQt5.QtWidgets import QMainWindow, QWidget, QShortcut
-from PyQt5.QtCore import QUrl, QTimer
+from PyQt5.QtCore import QUrl
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtGui import QKeySequence
 
@@ -64,17 +63,75 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self._setup_shortcuts()
     
     def _start_assets_httpd(self) -> None:
-        """Start HTTP server for map.html assets."""
-        # ui/main_window.py -> ../assets
+        """Start HTTP server for map.html assets with URL injection."""
         assets_dir = os.path.join(
             os.path.dirname(__file__), '../assets'
         )
-        handler = partial(SimpleHTTPRequestHandler, directory=assets_dir)
-        httpd = ThreadingHTTPServer(("127.0.0.1", 9999), handler)
+        
+        # Prepare URL injection script
+        tile_url = os.environ.get(
+            "TILE_URL",
+            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        )
+        vector_tile_url = (
+            f"{self.server_url}/tiles/roads/{{z}}/{{x}}/{{y}}.pbf"
+        )
+        url_injection = f"""
+<script>
+    // Set tile URLs BEFORE module scripts load
+    window.TILE_URL = '{tile_url}';
+    window.VECTOR_TILE_URL = '{vector_tile_url}';
+    console.log('[INJECTION] TILE_URL:', window.TILE_URL);
+    console.log('[INJECTION] VECTOR_TILE_URL:', window.VECTOR_TILE_URL);
+</script>
+"""
+        
+        # Custom handler to inject URLs into map.html
+        class InjectionHandler(SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=assets_dir, **kwargs)
+            
+            def do_GET(self):
+                # Strip query string for path matching
+                path = self.path.split('?')[0]
+                if path == '/map.html' or path == '/':
+                    # Read template
+                    map_path = os.path.join(assets_dir, 'map.html')
+                    with open(map_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Inject URLs in body (BEFORE module scripts)
+                    content = content.replace(
+                        '<!-- URL_INJECTION_BODY_PLACEHOLDER -->',
+                        url_injection
+                    )
+                    # Also replace head placeholder (backward compat)
+                    content = content.replace(
+                        '<!-- URL_INJECTION_PLACEHOLDER -->',
+                        ''
+                    )
+                    
+                    # Send response with no-cache headers
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('Content-length',
+                                     str(len(content.encode())))
+                    self.end_headers()
+                    self.wfile.write(content.encode())
+                else:
+                    # Serve other files normally
+                    super().do_GET()
+        
+        httpd = ThreadingHTTPServer(("127.0.0.1", 9999),
+                                    InjectionHandler)
         self._assets_port = httpd.server_address[1]
         t = threading.Thread(target=httpd.serve_forever, daemon=True)
         t.start()
-        print(f"DEBUG: Assets HTTP server started on port {self._assets_port}")
+        log.debug("assets_httpd_started",
+                  port=self._assets_port,
+                  tile_url=tile_url,
+                  vector_tile_url=vector_tile_url)
     
     def _setup_ui(self) -> None:
         """Setup user interface: fullscreen map + overlay sidebar."""
@@ -86,21 +143,30 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self.map_frame.setGeometry(0, 0, self.width(), self.height())
         
         # === Map widget (fullscreen) ===
+        # NOTE: MapWidget constructor sets up WebConsolePage internally
         self.map_widget = MapWidget(self.map_frame)
         self.map_widget.setGeometry(0, 0, self.width(), self.height())
+        
+        # Verify console page is set BEFORE loading
+        page = self.map_widget.page()
+        log.debug("map_widget_page_type", page_type=type(page).__name__)
         
         # Setup QWebChannel for JS-to-Python communication
         self.channel = QWebChannel()
         self.channel.registerObject('zoom_bridge', self.zoom_bridge)
         self.channel.registerObject('points_bridge', self.points_bridge)
-        self.map_widget.page().setWebChannel(self.channel)
+        page.setWebChannel(self.channel)
         
-        # Load map HTML via HTTP server (to avoid CORS with tile server)
-        map_url = f"http://127.0.0.1:{self._assets_port}/map.html"
-        self.map_widget.load(QUrl(map_url))
-        
-        # Connect map loadFinished to inject TILE_URL
+        # Connect map loadFinished signal (URLs already in HTML)
         self.map_widget.loadFinished.connect(self._on_map_loaded)
+        
+        # Load map HTML via HTTP server (URLs injected by handler)
+        # Add timestamp to bypass WebEngine cache
+        import time
+        map_url = (f"http://127.0.0.1:{self._assets_port}"
+                   f"/map.html?v={int(time.time())}")
+        log.debug("loading_map_html", url=map_url)
+        self.map_widget.load(QUrl(map_url))
         
         # Setup sidebar (from MainWindowUI mixin)
         self._setup_sidebar()
@@ -176,19 +242,62 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self._update_overlay_positions()
     
     def _on_map_loaded(self, ok: bool) -> None:
-        """Inject TILE_URL after map.html loads."""
+        """Handle map.html load completion."""
+        log.info("map_loaded_signal", success=ok)
+        
         if not ok:
-            print("ERROR: map.html failed to load")
+            log.error("map_html_load_failed")
             return
         
-        # Inject TILE_URL from environment or use default
-        tile_url = os.environ.get(
-            "TILE_URL",
-            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        )
-        code = f"window.TILE_URL = '{tile_url}';"
-        print(f"DEBUG: Injecting TILE_URL: {tile_url}")
-        self.map_widget.page().runJavaScript(code)
+        log.debug("map_ready", message="URLs pre-injected, map initializing")
+        
+        # Diagnostic: force vector source check via manual inspection
+        def check_map_state():
+            # Write diagnostic info to window for inspection
+            self.map_widget.page().runJavaScript("""
+                if (window.map) {
+                    const src = window.map.getSource('graph-vector');
+                    const style = window.map.getStyle();
+                    window.__diagnostic = {
+                        hasSource: !!src,
+                        zoom: window.map.getZoom(),
+                        layerCount: style ? style.layers.length : 0
+                    };
+                }
+            """)
+            
+            # Read it back after delay
+            def read_diagnostic():
+                read_code = "JSON.stringify(window.__diagnostic || {});"
+                
+                def on_read(result):
+                    try:
+                        import json
+                        data = json.loads(result) if result else {}
+                        print(f"MAP_DIAGNOSTIC: {data}")
+                        log.info("map_diagnostic", diagnostic=data)
+                        
+                        # Log server availability
+                        import requests
+                        try:
+                            url = ("http://localhost:8000/tiles/"
+                                   "roads/14/9902/5121.pbf")
+                            r = requests.get(url, timeout=2)
+                            log.info("server_check",
+                                     status=r.status_code,
+                                     size=len(r.content))
+                        except Exception as e:
+                            log.error("server_unreachable", error=str(e))
+                    except Exception as e:
+                        log.error("diagnostic_error", error=str(e))
+                
+                self.map_widget.page().runJavaScript(read_code, on_read)
+            
+            QTimer.singleShot(100, read_diagnostic)
+        
+        # Delay check to let map initialize
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(3000, check_map_state)
         
         # Update overlay positions after map loads
         self._update_overlay_positions()
@@ -199,14 +308,65 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         # Setup event-based updates instead of periodic polling
         # JS will call window.pointsChangedCallback() when points change
         self._setup_js_callbacks()
+        
+        # MVT tiles auto-load via vectorTileUrl, no need for manual fetch
+        # self._auto_load_graph()
+    
+    def _auto_load_graph(self) -> None:
+        """Automatically load graph from server on startup."""
+        from src.client.config import DataConfig
+        from src.client.services.api_workers import GraphFetchWorker
+        
+        log.info("auto_loading_graph")
+        
+        # Use moscow_small bbox from config
+        bbox = DataConfig.DEFAULT_TEST_BBOX
+        
+        # Create background worker
+        self._graph_worker = GraphFetchWorker(self.server_url, bbox)
+        self._graph_worker.finished.connect(self._on_auto_graph_loaded)
+        self._graph_worker.error.connect(
+            lambda err: log.error("auto_graph_load_failed", error=err)
+        )
+        self._graph_worker.start()
+    
+    def _on_auto_graph_loaded(self, data: dict) -> None:
+        """Handle auto-loaded graph."""
+        import json
+        
+        geojson = data['geojson']
+        log.info(
+            "auto_graph_loaded",
+            ways=data['total_ways'],
+            cached=data.get('cached'),
+            features=len(geojson.get('features', []))
+        )
+        
+        # Display on map using 'graph' GeoJSON source (not MVT!)
+        geojson_str = json.dumps(geojson)
+        js_code = f"""
+        if (window.app && window.app.setGraphGeoJSON) {{
+            window.app.setGraphGeoJSON({geojson_str});
+            if (window.app.fitToGraph) {{
+                window.app.fitToGraph();
+            }}
+        }}
+        """
+        self.map_widget.page().runJavaScript(js_code)
     
     def _setup_js_callbacks(self):
-        """Setup JavaScript callbacks for event-based updates."""
+        """Setup JavaScript callbacks for event-based updates.
+        
+        IMPORTANT: WebChannel is already initialized in map-main.js!
+        Don't create another QWebChannel instance - just wait for it.
+        """
         js_code = """
-        // Setup points_bridge when QWebChannel is ready
-        if (window.qt && window.qt.webChannelTransport) {
-            new QWebChannel(window.qt.webChannelTransport, function(channel) {
-                window.points_bridge = channel.objects.points_bridge;
+        // Wait for existing QWebChannel to initialize (from map-main.js)
+        // Don't create new QWebChannel - reuse the existing one
+        function waitForChannel(attempts = 0) {
+            if (window.qt && window.qt.webChannelTransport && window.globalChannel) {
+                // Channel already initialized in map-main.js
+                window.points_bridge = window.globalChannel.objects.points_bridge;
                 
                 // Override the notification function to use the bridge
                 window.pointsChangedCallback = function() {
@@ -216,9 +376,16 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
                     }
                 };
                 
-                console.log('Points bridge connected');
-            });
+                console.log('Points bridge connected to existing channel');
+            } else if (attempts < 20) {
+                // Wait for map-main.js to initialize channel
+                setTimeout(() => waitForChannel(attempts + 1), 50);
+            } else {
+                console.error('Timeout waiting for global WebChannel');
+            }
         }
+        
+        waitForChannel();
         """
         self.map_widget.page().runJavaScript(js_code)
         log.debug("js_callbacks_setup")

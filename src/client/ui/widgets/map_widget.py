@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
 from PyQt5.QtCore import pyqtSignal, QUrl, Qt
 from PyQt5.QtGui import QFont
+from loguru import logger as log
 
 
 class WebConsolePage(QWebEnginePage):
@@ -11,9 +12,19 @@ class WebConsolePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level: int, message: str,
                                  line_number: int, source_id: str):
         """Handle JavaScript console messages."""
-        level_names = {0: 'LOG', 1: 'WARNING', 2: 'ERROR'}
-        level_name = level_names.get(level, str(level))
-        print(f"JS[{level_name}] {source_id}:{line_number} {message}")
+        # DEBUG: direct print to verify callback fires
+        print(f"[JSCONSOLE] level={level} msg={message}")
+        
+        # Map JS console levels to loguru
+        if level == 0:  # LOG
+            log.debug("js_console", source=source_id,
+                      line=line_number, msg=message)
+        elif level == 1:  # WARNING
+            log.warning("js_console_warn", source=source_id,
+                        line=line_number, msg=message)
+        else:  # ERROR
+            log.error("js_console_error", source=source_id,
+                      line=line_number, msg=message)
 
 
 class MapWidget(QWebEngineView):
@@ -26,8 +37,24 @@ class MapWidget(QWebEngineView):
 
     def __init__(self, parent: QWidget = None):
         """Initialize map widget."""
+        print('MapWidget.__init__ from', __file__)
         super().__init__(parent)
-        self.setPage(WebConsolePage())
+        
+        # Setup custom page with console logging
+        page = WebConsolePage()
+        print('WebConsolePage created:', type(page), page)
+        self.setPage(page)
+        
+        # Enable settings for proper operation
+        from PyQt5.QtWebEngineWidgets import QWebEngineSettings
+        settings = page.settings()
+        settings.setAttribute(
+            QWebEngineSettings.JavascriptEnabled, True
+        )
+        settings.setAttribute(
+            QWebEngineSettings.LocalContentCanAccessRemoteUrls, True
+        )
+        
         self.setContextMenuPolicy(Qt.NoContextMenu)
 
     def load_map(self, html_file: str) -> None:

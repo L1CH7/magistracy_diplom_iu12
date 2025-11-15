@@ -312,12 +312,13 @@ def startup_event() -> None:
         engine = SimpleRouteEngine(G)
         log.info("Route engine initialized")
         
-        # Load custom Graph for k-routing
-        from src.data.postgis_manager import PostGISManager
-        from src.routing.graph import Graph
-        db = PostGISManager()
-        cached_graph = Graph.load_from_db(db)
-        log.info("Custom graph cached", **cached_graph.get_stats())
+        # TODO: Re-enable K-routing graph after schema migration
+        # from src.data.postgis_manager import PostGISManager
+        # from src.routing.graph import Graph
+        # db = PostGISManager()
+        # cached_graph = Graph.load_from_db(db)
+        # log.info("Custom graph cached", **cached_graph.get_stats())
+        log.warning("K-routing graph disabled (schema migration pending)")
     except Exception as e:
         log.error("Startup failed", error=str(e), exc_info=True)
         raise

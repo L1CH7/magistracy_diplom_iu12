@@ -14,6 +14,7 @@ Steps:
 import uuid
 import asyncpg
 import asyncio
+import json
 import os
 from loguru import logger
 from typing import Dict, List
@@ -105,24 +106,128 @@ class DataProcessorManager:
         """
         Run fetch job (background).
         
-        TODO: Implement Overpass API call.
+        Fetches OSM data via Overpass API and saves to PostgreSQL.
         """
+        from src.data.osm_overpass import fetch_overpass, build_highway_query
+        
         logger.info(f"Running fetch job: {job_id}")
         
         self.jobs[job_id]["status"] = "running"
         
         try:
-            # TODO: Call Overpass API
-            # TODO: Save to file
-            # TODO: Update progress
+            job_data = self.jobs[job_id]
+            bbox = job_data["bbox"]  # [min_lon, min_lat, max_lon, max_lat]
+            highway_types = job_data.get("highway_types", [])
+            
+            # Build Overpass query (south, west, north, east)
+            query = build_highway_query(
+                (bbox[1], bbox[0], bbox[3], bbox[2])
+            )
+            
+            # Fetch from Overpass API
+            logger.info(f"Fetching OSM data for bbox {bbox}")
+            osm_data = fetch_overpass(query, timeout=180)
+            
+            # Count elements
+            elements = osm_data.get("elements", [])
+            ways_count = len([e for e in elements if e.get("type") == "way"])
+            
+            logger.info(f"Fetched {len(elements)} elements, {ways_count} ways")
+            
+            # Save to PostgreSQL osm.ways table
+            await self._save_ways_to_db(osm_data)
             
             self.jobs[job_id]["status"] = "done"
             self.jobs[job_id]["progress"] = 1.0
+            self.jobs[job_id]["ways_count"] = ways_count
+            
+            logger.success(f"Fetch job complete: {job_id}")
             
         except Exception as e:
-            logger.error(f"Fetch job failed: {e}", exc_info=e)
+            logger.error(f"Fetch job failed: {str(e)}", exc_info=True)
             self.jobs[job_id]["status"] = "error"
             self.jobs[job_id]["error"] = str(e)
+    
+    async def _save_ways_to_db(self, osm_data: dict):
+        """Save OSM ways to PostgreSQL osm.ways table."""
+        elements = osm_data.get("elements", [])
+        ways = [e for e in elements if e.get("type") == "way"]
+        
+        logger.info(f"Saving {len(ways)} ways to osm.ways")
+        
+        async with self.db_pool.acquire() as conn:
+            for way in ways:
+                osm_id = way.get("id")
+                tags = way.get("tags", {})
+                highway = tags.get("highway")
+                
+                if not highway:
+                    continue
+                
+                # Build LineString from nodes
+                nodes = way.get("nodes", [])
+                if len(nodes) < 2:
+                    continue
+                
+                # Get node coordinates
+                node_coords = []
+                for node_id in nodes:
+                    node = next(
+                        (e for e in elements 
+                         if e.get("type") == "node" and e.get("id") == node_id),
+                        None
+                    )
+                    if node:
+                        lon = node.get("lon")
+                        lat = node.get("lat")
+                        if lon is not None and lat is not None:
+                            node_coords.append([lon, lat])
+                
+                if len(node_coords) < 2:
+                    continue
+                
+                # Build geometry as LineString
+                geom_json = {
+                    "type": "LineString",
+                    "coordinates": node_coords
+                }
+                
+                # Insert or update way
+                await conn.execute("""
+                    INSERT INTO osm.ways (
+                        osm_id, geom, geom_3857, tags, highway, name, lanes,
+                        maxspeed
+                    ) VALUES (
+                        $1,
+                        ST_GeomFromGeoJSON($2),
+                        ST_Transform(ST_GeomFromGeoJSON($2), 3857),
+                        $3::jsonb,
+                        $4,
+                        $5,
+                        $6::integer,
+                        $7
+                    )
+                    ON CONFLICT (osm_id) DO UPDATE
+                    SET geom = EXCLUDED.geom,
+                        geom_3857 = EXCLUDED.geom_3857,
+                        tags = EXCLUDED.tags,
+                        highway = EXCLUDED.highway,
+                        name = EXCLUDED.name,
+                        lanes = EXCLUDED.lanes,
+                        maxspeed = EXCLUDED.maxspeed
+                """,
+                    osm_id,
+                    json.dumps(geom_json),
+                    json.dumps(tags),
+                    highway,
+                    tags.get("name"),
+                    (int(tags.get("lanes"))
+                     if tags.get("lanes") and tags.get("lanes").isdigit()
+                     else None),
+                    tags.get("maxspeed")
+                )
+        
+        logger.success(f"Saved {len(ways)} ways to osm.ways")
     
     async def start_process_job(
         self,

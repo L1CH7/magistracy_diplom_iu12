@@ -258,22 +258,6 @@ class MainWindowHandlers:
         
         self.map_widget.page().runJavaScript(js, callback)
     
-    # REMOVED: Button "Get Road Graph" - no longer needed with vector tiles
-    # @track_metric("GRAPH_FETCH")
-    # def _on_get_road_graph(self) -> None:
-    #     """Handle get road graph button click - fetch from bbox."""
-    #     pass
-    
-    # REMOVED: These methods are no longer needed with vector tiles
-    # def _load_graph_in_batches(self, features: list) -> None:
-    #     pass
-    # def _on_graph_progress(self, message: str) -> None:
-    #     pass
-    # def _on_graph_error(self, error_msg: str) -> None:
-    #     pass
-    # def _on_graph_finished(self, data: dict) -> None:
-    #     pass
-    
     def _update_selected_points(self) -> None:
         """Update selected points display in sidebar."""
         # Skip sync if widget just made a change

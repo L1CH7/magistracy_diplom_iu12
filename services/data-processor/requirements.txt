@@ -7,3 +7,8 @@ pydantic-settings==2.1.0
 loguru==0.7.2
 pytest==7.4.4
 pytest-asyncio==0.23.3
+
+# For OSM data processing
+requests==2.31.0
+networkx==3.2.1
+psycopg2-binary==2.9.9

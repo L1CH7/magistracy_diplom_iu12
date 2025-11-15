@@ -7,8 +7,12 @@ COPY services/data-processor/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-compile -r requirements.txt
 
-# Копируем исходники
+# Копируем исходники service
 COPY services/data-processor/src/ ./src/
+
+# Копируем общие утилиты (osm_overpass, graph_builder, etc)
+COPY src/data ./src/data/
+COPY src/utils ./src/utils/
 
 EXPOSE 8005
 

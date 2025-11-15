@@ -90,7 +90,7 @@ function buildGraphWidthExpression() {
  * Create MapLibre GL style object.
  * @param {string} tileUrl - URL template for raster tiles
  */
-export function createMapStyle(tileUrl, vectorTileUrl) {
+export function createMapStyle(tileUrl) {
   return {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
@@ -100,17 +100,11 @@ export function createMapStyle(tileUrl, vectorTileUrl) {
         tiles: [tileUrl],
         tileSize: MAP_CONFIG.tiles.tileSize,
       },
-      graph: {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      },
       'graph-vector': {
         type: 'vector',
-        tiles: [
-          'http://server:8000/tiles/roads/{z}/{x}/{y}.pbf'
-        ],
+        tiles: ['http://localhost:8000/tiles/roads/{z}/{x}/{y}.pbf'],
         minzoom: 0,
-        maxzoom: 14
+        maxzoom: 14  // Match R-D-1 configuration
       },
       routes: {
         type: 'geojson',
@@ -134,8 +128,7 @@ export function createMapStyle(tileUrl, vectorTileUrl) {
         type: 'raster',
         source: 'osm',
       },
-      // Vector tile graph layers with flexible LOD
-      // Layer 1: Highways (zoom 0-10)
+      // MVT Layer 1: Highways only (zoom 0-10)
       {
         id: 'graph-highways',
         type: 'line',
@@ -154,7 +147,7 @@ export function createMapStyle(tileUrl, vectorTileUrl) {
           ]
         },
       },
-      // Layer 2: Major roads (zoom 10-12)
+      // MVT Layer 2: Major roads (zoom 10-12)
       {
         id: 'graph-major',
         type: 'line',
@@ -187,7 +180,7 @@ export function createMapStyle(tileUrl, vectorTileUrl) {
           ]
         },
       },
-      // Layer 3: Arterial roads (zoom 12-14)
+      // MVT Layer 3: Arterial roads (zoom 12-14)
       {
         id: 'graph-arterial',
         type: 'line',
@@ -226,7 +219,7 @@ export function createMapStyle(tileUrl, vectorTileUrl) {
           ]
         },
       },
-      // Layer 4: All roads (zoom 14+)
+      // MVT Layer 4: All roads (zoom 14+)
       {
         id: 'graph-all',
         type: 'line',
@@ -297,7 +290,7 @@ export function createMapStyle(tileUrl, vectorTileUrl) {
           ]
         },
       },
-      // Text labels for arterial roads (zoom 12-14)
+      // MVT Labels: Arterial roads (zoom 12-14)
       {
         id: 'graph-labels-arterial',
         type: 'symbol',
@@ -321,7 +314,7 @@ export function createMapStyle(tileUrl, vectorTileUrl) {
           'text-halo-width': 2
         }
       },
-      // Text labels for all roads (zoom 14+)
+      // MVT Labels: All roads (zoom 14+)
       {
         id: 'graph-labels-all',
         type: 'symbol',

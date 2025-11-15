@@ -202,6 +202,42 @@ services:
         - action: rebuild
           path: ./services/data-processor/Dockerfile
   
+  # Legacy Server (для GUI compatibility - /osm/fetch_road_graph)
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+      cache_from:
+        - diplom-server:latest
+    image: diplom-server:latest
+    container_name: diplom-server
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: postgis
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: osm
+      POSTGRES_USER: diplom
+      POSTGRES_PASSWORD: diplom_pass
+      OSM_JSON_PATH: /app/data/osm_data.json
+    volumes:
+      - ./data:/app/data
+      - ./logs/server:/app/logs
+      - ./configs:/app/configs:ro
+    networks:
+      - nav-net
+    depends_on:
+      postgis:
+        condition: service_healthy
+    restart: unless-stopped
+    develop:
+      watch:
+        - action: sync
+          path: ./src/server
+          target: /app/src/server
+        - action: rebuild
+          path: ./Dockerfile.server
+  
   # Loki (агрегация логов)
   loki:
     image: grafana/loki:latest
