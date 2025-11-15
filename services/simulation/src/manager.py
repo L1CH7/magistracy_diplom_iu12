@@ -6,18 +6,13 @@ Manages agent batch and simulation tick loop.
 
 import asyncio
 import os
-import sys
 import time
-from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 from loguru import logger
 
-# Add project root to path
-sys.path.append(str(Path(__file__).parents[3]))
-
-from src.shared.agent import (  # noqa: E402
+from src.shared.agent import (
     AgentBatch,
     GraphCache,
     move_batch,
