@@ -55,6 +55,9 @@ class CoordinatorManager:
         """Initialize coordinator (setup HTTP client, etc)."""
         self.http_client = httpx.AsyncClient(timeout=30.0)
         
+        # Start position polling loop
+        asyncio.create_task(self._position_poll_loop())
+        
         # TODO: Start rerouting loop
         # asyncio.create_task(self._rerouting_loop())
         
@@ -225,3 +228,51 @@ class CoordinatorManager:
                 
             except Exception as e:
                 logger.error(f"Rerouting error: {e}", exc_info=e)
+    
+    async def _position_poll_loop(self):
+        """
+        Poll Simulation Service for agent positions.
+        
+        Polls every 0.5 sec (2 FPS for GUI).
+        Broadcasts to WebSocket clients via callback.
+        """
+        logger.info("Position polling loop started")
+        
+        while True:
+            try:
+                await asyncio.sleep(0.5)  # 2 Hz polling
+                
+                if len(self.agents) == 0:
+                    continue
+                
+                # Get all agent positions from Simulation
+                positions = []
+                
+                for agent_id in self.agents.keys():
+                    try:
+                        response = await self.http_client.get(
+                            f"{self.simulation_url}/simulation/agents/"
+                            f"{agent_id}/position"
+                        )
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            positions.append({
+                                "agent_id": agent_id,
+                                "lat": data["lat"],
+                                "lon": data["lon"],
+                                "edge_id": data.get("edge_id"),
+                                "speed_mps": data.get("current_speed_mps")
+                            })
+                    except Exception as e:
+                        logger.debug(
+                            f"Failed to get position for {agent_id}: {e}"
+                        )
+                
+                # Broadcast to GUI clients
+                if positions and self.broadcast_callback:
+                    await self.broadcast_callback(positions)
+                
+            except Exception as e:
+                logger.error(f"Position polling error: {e}", exc_info=e)
+                await asyncio.sleep(1.0)  # Backoff on error
