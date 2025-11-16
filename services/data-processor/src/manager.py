@@ -56,6 +56,7 @@ class DataProcessorManager:
         # Load business logic from configs
         self.tile_size_degrees = self._load_tile_size()
         self.default_bbox = self._load_default_bbox()
+        self.overpass_config = self._load_overpass_config()
         
         logger.info("DataProcessorManager initialized (tile-based)")
     
@@ -149,6 +150,62 @@ class DataProcessorManager:
         except Exception as e:
             logger.error(f"Failed to load bbox from config: {e}, using fallback")
             return {"west": 37.50, "south": 55.70, "east": 37.75, "north": 55.95}
+    
+    def _load_overpass_config(self) -> Dict:
+        """
+        Load Overpass configuration from configs/data-processor/overpass.yaml.
+        
+        Returns dict with retry settings, server lists, etc.
+        """
+        import yaml
+        from pathlib import Path
+        
+        try:
+            config_path = Path("/app/configs/data-processor/overpass.yaml")
+            if not config_path.exists():
+                config_path = (
+                    Path(__file__).parent.parent.parent.parent
+                    / "configs" / "data-processor" / "overpass.yaml"
+                )
+            
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f)
+                
+                logger.info(
+                    f"Loaded Overpass config: "
+                    f"{len(config.get('primary_servers', []))} primary, "
+                    f"{len(config.get('fallback_servers', []))} fallback servers"
+                )
+                return config
+            else:
+                logger.warning("Overpass config not found, using defaults")
+                return self._get_default_overpass_config()
+        
+        except Exception as e:
+            logger.error(f"Failed to load Overpass config: {e}, using defaults")
+            return self._get_default_overpass_config()
+    
+    def _get_default_overpass_config(self) -> Dict:
+        """Get default Overpass configuration if file not found."""
+        return {
+            "retry": {
+                "max_retries_per_server": 3,
+                "initial_retry_delay": 5,
+                "max_retry_delay": 60,
+                "backoff_multiplier": 2,
+                "max_servers_to_try": 5
+            },
+            "primary_servers": [
+                "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+                "https://overpass.openstreetmap.ru/api/interpreter"
+            ],
+            "fallback_servers": [
+                "https://overpass-api.de/api/interpreter",
+                "https://overpass.kumi.systems/api/interpreter"
+            ],
+            "timeout": 300
+        }
     
     async def initialize(self):
         """Initialize manager with connection retries."""
@@ -257,15 +314,17 @@ class DataProcessorManager:
     
     async def ensure_tile_downloaded(self, tile_key: tuple) -> Dict:
         """
-        Ensure tile is present in database.
+        Ensure tile is present in database with retry logic and fallback servers.
         
         If tile exists - return status.
         If downloading - return downloading status.
-        If not - start download, return downloading status.
+        If not - start download with retry/fallback, return downloading status.
         
         Returns:
-            {"status": "exists|downloading|downloaded|error", "ways_count": int}
+            {"status": "exists|downloading|downloaded|failed", "ways_count": int}
         """
+        import asyncio
+        
         # Check if already downloading
         if tile_key in self.downloading_tiles:
             return {
@@ -286,7 +345,7 @@ class DataProcessorManager:
                 "ways_count": check["ways_count"]
             }
         
-        # Download tile
+        # Download tile with retry logic
         logger.info(
             f"Downloading tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}]"
         )
@@ -297,65 +356,121 @@ class DataProcessorManager:
             "progress": 0.0
         }
         
-        try:
-            from src.data.osm_overpass import (
-                fetch_overpass,
-                build_highway_query
-            )
-            
-            tile_bbox = self._tile_to_bbox(tile_key)
-            
-            # Build Overpass query (south, west, north, east)
-            query = build_highway_query(
-                (tile_bbox[1], tile_bbox[0], tile_bbox[3], tile_bbox[2])
-            )
-            
-            # Fetch tile
-            osm_data = fetch_overpass(query, timeout=60)
-            
-            # Count elements
-            elements = osm_data.get("elements", [])
-            ways = [e for e in elements if e.get("type") == "way"]
-            ways_count = len(ways)
-            
-            logger.info(
-                f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
-                f"fetched: {ways_count} ways"
-            )
-            
-            # Save to DB with progress
-            saved_count = await self._save_ways_to_db(osm_data, tile_key)
-            
-            # Remove from downloading
-            del self.downloading_tiles[tile_key]
-            
-            logger.success(
-                f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
-                f"saved: {saved_count} ways"
-            )
-            
-            # Notify WebSocket clients (GUI) that tile is ready
-            await self._notify_tile_ready(tile_key)
-            
-            return {
-                "status": "downloaded",
-                "ways_count": saved_count
-            }
-            
-        except Exception as e:
-            logger.error(
-                f"Tile download error "
-                f"[{tile_key[0]:.2f}, {tile_key[1]:.2f}]: {e}"
-            )
-            
-            # Remove from downloading
+        # Load retry config
+        retry_config = self.overpass_config.get("retry", {})
+        max_retries_per_server = retry_config.get("max_retries_per_server", 3)
+        initial_delay = retry_config.get("initial_retry_delay", 5)
+        max_delay = retry_config.get("max_retry_delay", 60)
+        backoff_multiplier = retry_config.get("backoff_multiplier", 2)
+        max_servers = retry_config.get("max_servers_to_try", 5)
+        
+        # Build server list (primary + fallback)
+        primary = self.overpass_config.get("primary_servers", [])
+        fallback = self.overpass_config.get("fallback_servers", [])
+        all_servers = (primary + fallback)[:max_servers]
+        
+        if not all_servers:
+            logger.error("No Overpass servers configured!")
             if tile_key in self.downloading_tiles:
                 del self.downloading_tiles[tile_key]
+            return {"status": "failed", "error": "No servers configured"}
+        
+        from src.data.osm_overpass import build_highway_query
+        
+        tile_bbox = self._tile_to_bbox(tile_key)
+        query = build_highway_query(
+            (tile_bbox[1], tile_bbox[0], tile_bbox[3], tile_bbox[2])
+        )
+        
+        total_attempts = 0
+        last_error = None
+        
+        # Try each server
+        for server_idx, server_url in enumerate(all_servers):
+            logger.info(
+                f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                f"trying server {server_idx + 1}/{len(all_servers)}: {server_url}"
+            )
             
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            # Retry loop for current server
+            delay = initial_delay
+            for retry in range(max_retries_per_server):
+                total_attempts += 1
+                
+                try:
+                    from src.data.osm_overpass import fetch_overpass_from_url
+                    
+                    # Fetch tile from specific server
+                    osm_data = await fetch_overpass_from_url(
+                        server_url, query, timeout=self.overpass_config.get("timeout", 300)
+                    )
+                    
+                    # Success! Save to DB
+                    elements = osm_data.get("elements", [])
+                    ways = [e for e in elements if e.get("type") == "way"]
+                    ways_count = len(ways)
+                    
+                    logger.info(
+                        f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                        f"fetched: {ways_count} ways (attempt {total_attempts})"
+                    )
+                    
+                    saved_count = await self._save_ways_to_db(osm_data, tile_key)
+                    
+                    # Remove from downloading
+                    del self.downloading_tiles[tile_key]
+                    
+                    logger.success(
+                        f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                        f"saved: {saved_count} ways (server: {server_url})"
+                    )
+                    
+                    # Notify WebSocket clients
+                    await self._notify_tile_ready(tile_key)
+                    
+                    return {
+                        "status": "downloaded",
+                        "ways_count": saved_count
+                    }
+                    
+                except Exception as e:
+                    last_error = str(e)
+                    logger.warning(
+                        f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                        f"attempt {total_attempts} failed: {e}"
+                    )
+                    
+                    # Wait before retry (exponential backoff)
+                    if retry < max_retries_per_server - 1:
+                        logger.info(f"Retrying in {delay}s...")
+                        await asyncio.sleep(delay)
+                        delay = min(delay * backoff_multiplier, max_delay)
+            
+            # All retries for this server failed, try next server
+            logger.warning(
+                f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                f"all retries failed for server {server_url}"
+            )
+        
+        # All servers exhausted
+        logger.error(
+            f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+            f"download FAILED after {total_attempts} attempts across {len(all_servers)} servers. "
+            f"Last error: {last_error}"
+        )
+        
+        # Mark as failed in DB
+        await self._mark_tile_failed(tile_key, last_error, total_attempts)
+        
+        # Remove from downloading
+        if tile_key in self.downloading_tiles:
+            del self.downloading_tiles[tile_key]
+        
+        return {
+            "status": "failed",
+            "error": last_error,
+            "attempts": total_attempts
+        }
     
     async def start_fetch_job(
         self,
@@ -769,14 +884,15 @@ class DataProcessorManager:
         default = self.default_bbox
         
         # No intersection if:
-        # - bbox completely to the right of default
-        # - bbox completely to the left of default
-        # - bbox completely above default
-        # - bbox completely below default
-        if (west >= default["east"] or
-                east <= default["west"] or
-                south >= default["north"] or
-                north <= default["south"]):
+        # - bbox completely to the right of default (west >= east)
+        # - bbox completely to the left of default (east <= west)
+        # - bbox completely above default (south >= north)
+        # - bbox completely below default (north <= south)
+        # Use strict inequalities to correctly handle edge cases
+        if (west > default["east"] or
+                east < default["west"] or
+                south > default["north"] or
+                north < default["south"]):
             return False
         
         return True
@@ -803,6 +919,45 @@ class DataProcessorManager:
             return False
         
         return True
+    
+    async def _mark_tile_failed(self, tile_key: tuple, error: str, attempts: int):
+        """
+        Mark tile as failed in cached_tiles table.
+        
+        Args:
+            tile_key: (lon, lat)
+            error: Error message
+            attempts: Number of download attempts
+        """
+        tile_bbox = self._tile_to_bbox(tile_key)
+        tile_key_str = str(tile_key)
+        
+        async with self.db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO osm.cached_tiles (
+                    tile_key, min_lon, min_lat, max_lon, max_lat, 
+                    bbox, total_ways, download_status, download_error, 
+                    download_attempts, last_download_attempt
+                )
+                VALUES ($1, $2, $3, $4, $5, 
+                    ST_MakeEnvelope($2, $3, $4, $5, 4326), 
+                    0, 'failed', $6, $7, CURRENT_TIMESTAMP)
+                ON CONFLICT (tile_key) DO UPDATE SET
+                    download_status = 'failed',
+                    download_error = $6,
+                    download_attempts = osm.cached_tiles.download_attempts + $7,
+                    last_download_attempt = CURRENT_TIMESTAMP
+            """, 
+                tile_key_str,
+                tile_bbox[0], tile_bbox[1], tile_bbox[2], tile_bbox[3],
+                error,
+                attempts
+            )
+        
+        logger.info(
+            f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+            f"marked as FAILED in DB"
+        )
     
     async def get_ways_count(self) -> int:
         """Get total number of ways in database."""

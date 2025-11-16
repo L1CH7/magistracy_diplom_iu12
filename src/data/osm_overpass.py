@@ -105,6 +105,38 @@ def build_highway_query(bbox: Tuple[float, float, float, float]) -> str:
     """
 
 
+async def fetch_overpass_from_url(
+    url: str,
+    query: str,
+    timeout: int = 300
+) -> Dict:
+    """Fetch data from specific Overpass server (async version for retry logic).
+    
+    Args:
+        url: Specific Overpass API URL to use
+        query: Overpass QL query string
+        timeout: Request timeout in seconds
+    
+    Returns:
+        Parsed JSON response from Overpass API
+    
+    Raises:
+        Exception: If request fails
+    """
+    import aiohttp
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url,
+            data={"data": query},
+            timeout=aiohttp.ClientTimeout(total=timeout),
+            headers={"User-Agent": "Diplom-NavMAS/0.1 (Research Project)"}
+        ) as response:
+            response.raise_for_status()
+            data = await response.json()
+            return data
+
+
 def fetch_overpass(
     query: str,
     url: Optional[str] = None,

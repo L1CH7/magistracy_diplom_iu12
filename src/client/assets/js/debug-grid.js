@@ -376,6 +376,7 @@ window.toggleDebugOverlay = toggleDebugOverlay;
 window.initDebugOverlay = initDebugOverlay;
 
 // Ctrl+Shift+D toggle (only works if debug enabled in config)
+// Ctrl+Shift+V show viewport bbox
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.shiftKey && e.key === 'D') {
     e.preventDefault();
@@ -385,6 +386,29 @@ document.addEventListener('keydown', (e) => {
       logToPython('[debug-grid.js] Ctrl+Shift+D pressed, but debug.enabled=false in config');
       logToPython('[debug-grid.js] Enable debug mode in configs/client/gui.yaml to use overlay');
     }
+  }
+  
+  // Ctrl+Shift+V: Show current viewport bbox
+  if (e.ctrlKey && e.shiftKey && e.key === 'V') {
+    e.preventDefault();
+    if (!window.map) {
+      logToPython('[debug-grid.js] Map not initialized');
+      return;
+    }
+    const bounds = window.map.getBounds();
+    const bbox = {
+      west: bounds.getWest(),
+      south: bounds.getSouth(),
+      east: bounds.getEast(),
+      north: bounds.getNorth()
+    };
+    const zoom = window.map.getZoom();
+    const center = window.map.getCenter();
+    
+    logToPython(`[VIEWPORT] zoom=${zoom.toFixed(2)} center=[${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}]`);
+    logToPython(`[VIEWPORT] bbox=[${bbox.west.toFixed(4)}, ${bbox.south.toFixed(4)}, ${bbox.east.toFixed(4)}, ${bbox.north.toFixed(4)}]`);
+    console.log('Viewport bbox:', bbox);
+    console.log('Zoom:', zoom, 'Center:', center);
   }
 });
 

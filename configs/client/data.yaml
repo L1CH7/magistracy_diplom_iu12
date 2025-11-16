@@ -31,7 +31,7 @@ bboxes:
     description: "Moscow MKAD +5km"
   
   # Active bbox for initial load
-  default: moscow_medium
+  default: moscow_small
 
 graph:
   # Display limits for graph rendering
