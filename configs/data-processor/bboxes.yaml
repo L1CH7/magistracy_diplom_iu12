@@ -1,0 +1,32 @@
+# Bounding Boxes Configuration
+# Predefined areas for Data Processor to download and process
+
+# Test bounding boxes for development
+# Format: [min_lon, min_lat, max_lon, max_lat]
+
+moscow_tiny:
+  coords: [37.60, 55.75, 37.61, 55.76]
+  description: "Tiny (1 tile @ 0.01°) - instant dynamics demo"
+
+moscow_micro:
+  coords: [37.60, 55.75, 37.65, 55.80]
+  description: "Micro (25 tiles 5x5 @ 0.01°) - fast download for dynamics"
+
+moscow_small:
+  coords: [37.5609, 55.7510, 37.6016, 55.7631]
+  description: "Small Moscow region (quick testing)"
+
+moscow_center:
+  coords: [37.4, 55.5, 37.9, 55.9]
+  description: "Moscow city center"
+
+moscow_medium:
+  coords: [37.50, 55.70, 37.75, 55.95]
+  description: "Moscow medium (25 tiles 5x5 @ 0.05°)"
+
+moscow_mkad:
+  coords: [37.32, 55.49, 37.90, 55.93]
+  description: "Moscow MKAD +5km"
+
+# Active bbox for initial load
+default: moscow_medium

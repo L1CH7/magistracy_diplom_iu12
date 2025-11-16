@@ -1,24 +1,56 @@
 import json
-from typing import Dict, Tuple, Optional, Callable
+import os
+from typing import Dict, Tuple, Optional
 import requests
 import time
+import yaml
+from pathlib import Path
 
 
-# Russian servers (VK maps) - primary
-VK_OVERPASS_URLS = [
-    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    "https://overpass.openstreetmap.ru/api/interpreter",
-    "https://overpass.openstreetmap.ru/cgi/interpreter",
-]
+def _load_overpass_config() -> dict:
+    """Load Overpass config from configs/data-processor/overpass.yaml."""
+    config_path = Path("/app/configs/data-processor/overpass.yaml")
+    if not config_path.exists():
+        # Try local dev path
+        config_path = (
+            Path(__file__).parent.parent.parent
+            / "configs" / "data-processor" / "overpass.yaml"
+        )
+    
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    
+    # Fallback to hardcoded defaults
+    return {
+        "server_priority": "ru",
+        "primary_servers": [
+            "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+            "https://overpass.openstreetmap.ru/api/interpreter",
+        ],
+        "fallback_servers": [
+            "https://overpass-api.de/api/interpreter",
+        ],
+        "timeout": 300,
+    }
 
-# Fallback to standard OSM Overpass
-FALLBACK_OVERPASS_URLS = [
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-]
 
-# Default: use VK servers first
-OVERPASS_URLS = VK_OVERPASS_URLS + FALLBACK_OVERPASS_URLS
+# Load config once at module import
+_config = _load_overpass_config()
+
+# Build server list based on priority
+if _config.get("server_priority", "ru").lower() == "de":
+    # German servers first (more reliable)
+    OVERPASS_URLS = (
+        _config.get("fallback_servers", [])
+        + _config.get("primary_servers", [])
+    )
+else:
+    # Russian servers first (default - faster for Moscow)
+    OVERPASS_URLS = (
+        _config.get("primary_servers", [])
+        + _config.get("fallback_servers", [])
+    )
 
 
 def build_highway_query(bbox: Tuple[float, float, float, float]) -> str:
@@ -76,7 +108,7 @@ def build_highway_query(bbox: Tuple[float, float, float, float]) -> str:
 def fetch_overpass(
     query: str,
     url: Optional[str] = None,
-    timeout: int = 180
+    timeout: int = 300  # Increased from 180 to 300 (5 min)
 ) -> Dict:
     """Fetch data from Overpass API with automatic server fallback.
     

@@ -503,6 +503,31 @@ export class MapAPI {
     return Math.sqrt(distX * distX + distY * distY);
   }
 
+  /**
+   * Refresh MVT tiles by clearing cache and re-requesting.
+   * Call this after new OSM data is loaded to update the map display.
+   */
+  refreshMVTTiles() {
+    const source = this.map.getSource('graph-vector');
+    if (!source) {
+      console.warn('graph-vector source not found');
+      return;
+    }
+    
+    // Remove and re-add source to force cache invalidation
+    const sourceDef = {
+      type: 'vector',
+      tiles: ['http://localhost:8005/api/v1/tiles/{z}/{x}/{y}.mvt'],
+      minzoom: 0,
+      maxzoom: 18
+    };
+    
+    this.map.removeSource('graph-vector');
+    this.map.addSource('graph-vector', sourceDef);
+    
+    console.log('[MVT] Tiles refreshed - cache invalidated');
+  }
+
   // Deprecated/stub methods for compatibility
   setPickMode(mode) {
     console.log('setPickMode called with:', mode, '(deprecated; use context menu)');

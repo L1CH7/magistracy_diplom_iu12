@@ -7,6 +7,7 @@ import { createMapStyle } from './map-style.js';
 import { PointsManager } from './points-manager.js';
 import { AgentAnimator } from './agent-animator.js';
 import { MapAPI } from './map-api.js';
+import { startMVTRefresh } from './mvt-refresh.js';
 
 let mapInitialized = false;
 let map = null;
@@ -18,6 +19,16 @@ let mapLoaded = false;
 // Track last mouse position for Ctrl shortcuts
 let lastMousePosition = null;
 let lastContextMenuPos = null;
+
+// Helper function to log to Python via QWebChannel
+function logToPython(message) {
+  if (window.globalChannel && window.globalChannel.objects.logger_bridge) {
+    window.globalChannel.objects.logger_bridge.log_info(message);
+  } else {
+    // Fallback to console if bridge not ready
+    console.log(message);
+  }
+}
 
 export function initializeMap() {
   if (mapInitialized) return;
@@ -49,6 +60,20 @@ export function initializeMap() {
   mapLoaded = true;
   pointsManager.setMapLoaded(true);
   console.log('Map initialized, marking as loaded');
+  
+  // Log viewport changes (for debugging)
+  map.on('moveend', () => {
+    const bounds = map.getBounds();
+    const center = map.getCenter();
+    const zoom = map.getZoom();
+    const message = (
+      `[MAP] moveend | z:${zoom.toFixed(1)} | ` +
+      `c:[${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}] | ` +
+      `bbox:[${bounds.getWest().toFixed(4)}, ${bounds.getSouth().toFixed(4)}, ` +
+      `${bounds.getEast().toFixed(4)}, ${bounds.getNorth().toFixed(4)}]`
+    );
+    logToPython(message);
+  });
 
   // Setup event listeners
   setupEventListeners();
@@ -62,7 +87,7 @@ export function initializeMap() {
 
   // Map load event for additional initialization
   map.on('load', () => {
-    console.log('Map tiles loaded successfully');
+    logToPython('[MAP] Tiles loaded successfully');
   });
 }
 

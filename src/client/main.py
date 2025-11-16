@@ -12,8 +12,13 @@ from src.client.ui.main_window import MainWindow
 
 def main():
     """Main entry point - minimal configuration."""
-    # Initialize logging (JSON files in .agent_dir/logs/, no stdout)
-    configure_loguru(log_level="DEBUG", log_to_file=True, stdout=True)
+    # Initialize logging
+    configure_loguru(
+        service_name="gui",
+        log_level="DEBUG",
+        log_to_file=True,
+        stdout=True
+    )
     
     # Изоляция от системной темы (не зависит от KDE/GNOME)
     os.environ["QT_QPA_PLATFORMTHEME"] = ""  # Disable platform theme

@@ -2,7 +2,7 @@
 Data Processor models.
 """
 
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -54,3 +54,42 @@ class ProcessGraphResponse(BaseModel):
     
     job_id: str = Field(..., description="Job ID")
     status: str = Field(..., description="Job status")
+
+
+class TileKey(BaseModel):
+    """OSM tile key (0.5°x0.5°)."""
+    
+    lon: float = Field(..., description="Longitude (left edge)")
+    lat: float = Field(..., description="Latitude (bottom edge)")
+
+
+class TileStatusResponse(BaseModel):
+    """Tile availability status."""
+    
+    tile: TileKey
+    exists_in_db: bool = Field(..., description="Tile в БД")
+    ways_count: Optional[int] = Field(
+        None,
+        description="Количество ways в тайле"
+    )
+    download_status: Optional[str] = Field(
+        None,
+        description="Статус скачивания (downloading/done/error)"
+    )
+
+
+class GlobalStatusResponse(BaseModel):
+    """Global data processor status."""
+    
+    active_downloads: int = Field(
+        ...,
+        description="Количество активных скачиваний"
+    )
+    total_tiles_in_db: int = Field(
+        ...,
+        description="Всего тайлов в БД"
+    )
+    downloading_tiles: List[TileKey] = Field(
+        default_factory=list,
+        description="Список скачивающихся тайлов"
+    )

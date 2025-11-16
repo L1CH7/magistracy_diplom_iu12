@@ -3,7 +3,7 @@
 ## Формат лога
 Стандартный формат:
 ```
-[YYYY.MM.DD HH:MM:SS.mmm] {thread_id} LEVEL Message
+[YYYY.MM.DD HH:MM:SS.mmm] {commit_hex} LEVEL Message
 ```
 
 Пример:

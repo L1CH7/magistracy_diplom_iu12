@@ -11,6 +11,7 @@ from PyQt5.QtGui import QKeySequence
 from src.client.ui.widgets.map_widget import MapWidget
 from src.client.handlers.zoom_bridge import ZoomBridge
 from src.client.handlers.points_bridge import PointsBridge
+from src.client.handlers.logger_bridge import LoggerBridge
 from src.client.models.points_presenter import PointsPresenter
 from src.client.ui.main_window_handlers import MainWindowHandlers
 from src.client.ui.main_window_ui import MainWindowUI
@@ -39,6 +40,9 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         
         self.points_bridge = PointsBridge()
         self.points_bridge.points_changed.connect(self._update_selected_points)
+        
+        self.logger_bridge = LoggerBridge()
+        # No connection needed - LoggerBridge logs directly
         
         # Points presenter: single source of truth for points with styling
         self.points_presenter = PointsPresenter()
@@ -93,6 +97,7 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self.channel = QWebChannel()
         self.channel.registerObject('zoom_bridge', self.zoom_bridge)
         self.channel.registerObject('points_bridge', self.points_bridge)
+        self.channel.registerObject('logger_bridge', self.logger_bridge)
         self.map_widget.page().setWebChannel(self.channel)
         
         # Connect map loadFinished signal (URLs already in HTML)

@@ -22,12 +22,16 @@ bboxes:
     coords: [37.4, 55.5, 37.9, 55.9]
     description: "Moscow city center"
   
+  moscow_medium:
+    coords: [37.50, 55.70, 37.75, 55.95]
+    description: "Moscow medium (25 tiles 5x5 @ 0.05°)"
+  
   moscow_mkad:
     coords: [37.32, 55.49, 37.90, 55.93]
     description: "Moscow MKAD +5km"
   
   # Active bbox for initial load
-  default: moscow_mkad
+  default: moscow_medium
 
 graph:
   # Display limits for graph rendering

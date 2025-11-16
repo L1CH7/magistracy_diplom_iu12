@@ -12,16 +12,15 @@ class WebConsolePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level: int, message: str,
                                  line_number: int, source_id: str):
         """Handle JavaScript console messages."""
-        # Map JS console levels to loguru
-        if level == 0:  # LOG
-            log.debug("js_console", source=source_id,
-                      line=line_number, msg=message)
+        # Map JS console levels to loguru (loguru style output)
+        source_file = source_id.split('/')[-1] if source_id else "unknown"
+        
+        if level == 0:  # LOG/INFO
+            log.info(f"[JS] {message}")
         elif level == 1:  # WARNING
-            log.warning("js_console_warn", source=source_id,
-                        line=line_number, msg=message)
+            log.warning(f"[JS] {message}")
         else:  # ERROR
-            log.error("js_console_error", source=source_id,
-                      line=line_number, msg=message)
+            log.error(f"[JS] {message} (line {line_number} in {source_file})")
 
 
 class MapWidget(QWebEngineView):

@@ -102,9 +102,9 @@ export function createMapStyle(tileUrl) {
       },
       'graph-vector': {
         type: 'vector',
-        tiles: ['http://localhost:8000/tiles/roads/{z}/{x}/{y}.pbf'],
+        tiles: ['http://localhost:8005/api/v1/tiles/{z}/{x}/{y}.mvt'],
         minzoom: 0,
-        maxzoom: 14  // Match R-D-1 configuration
+        maxzoom: 18
       },
       routes: {
         type: 'geojson',
@@ -133,7 +133,7 @@ export function createMapStyle(tileUrl) {
         id: 'graph-highways',
         type: 'line',
         source: 'graph-vector',
-        'source-layer': 'roads',
+        'source-layer': 'ways',
         minzoom: 0,
         maxzoom: 10,
         filter: ['in', 'highway', 'motorway', 'motorway_link'],
@@ -152,7 +152,7 @@ export function createMapStyle(tileUrl) {
         id: 'graph-major',
         type: 'line',
         source: 'graph-vector',
-        'source-layer': 'roads',
+        'source-layer': 'ways',
         minzoom: 10,
         maxzoom: 12,
         filter: [
@@ -185,7 +185,7 @@ export function createMapStyle(tileUrl) {
         id: 'graph-arterial',
         type: 'line',
         source: 'graph-vector',
-        'source-layer': 'roads',
+        'source-layer': 'ways',
         minzoom: 12,
         maxzoom: 14,
         filter: [
@@ -224,7 +224,7 @@ export function createMapStyle(tileUrl) {
         id: 'graph-all',
         type: 'line',
         source: 'graph-vector',
-        'source-layer': 'roads',
+        'source-layer': 'ways',
         minzoom: 14,
         paint: {
           'line-color': [
@@ -295,7 +295,7 @@ export function createMapStyle(tileUrl) {
         id: 'graph-labels-arterial',
         type: 'symbol',
         source: 'graph-vector',
-        'source-layer': 'roads',
+        'source-layer': 'ways',
         minzoom: 12,
         maxzoom: 14,
         filter: [
@@ -319,7 +319,7 @@ export function createMapStyle(tileUrl) {
         id: 'graph-labels-all',
         type: 'symbol',
         source: 'graph-vector',
-        'source-layer': 'roads',
+        'source-layer': 'ways',
         minzoom: 14,
         filter: ['has', 'name'],
         layout: {

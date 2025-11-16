@@ -9,7 +9,7 @@
  */
 
 export class TileLoader {
-  constructor(map, apiBaseUrl) {
+  constructor(map, apiBaseUrl, maxBounds) {
     this.map = map;
     this.apiBaseUrl = apiBaseUrl;
     this.tileSize = 0.05; // degrees (~5.5km)
@@ -17,42 +17,71 @@ export class TileLoader {
     this.allFeatures = []; // accumulated GeoJSON features
     this.loading = false;
     
+    // Max bounds - only download tiles within this area
+    this.maxBounds = maxBounds || {
+      west: 37.50,
+      south: 55.70,
+      east: 37.70,
+      north: 55.80
+    };
+    
     console.log('[TILE LOADER] Initialized', {
       tileSize: this.tileSize,
-      apiUrl: apiBaseUrl
+      apiUrl: apiBaseUrl,
+      maxBounds: this.maxBounds
     });
   }
   
   /**
    * Calculate tile keys for current viewport.
    * 
-   * @param {number} bufferFactor - Buffer around viewport (default 0.5)
-   * @returns {Array<string>} Array of tile_keys
+   * ONLY returns tiles within maxBounds (moscow_medium by default).
+   * Viewport is STRICTLY intersected with maxBounds (no buffer outside).
+   * 
+   * @returns {Array<string>} Array of tile_keys "lat_lon"
    */
-  getViewportTiles(bufferFactor = 0.5) {
+  getViewportTiles() {
     const bounds = this.map.getBounds();
-    const west = bounds.getWest();
-    const east = bounds.getEast();
-    const south = bounds.getSouth();
-    const north = bounds.getNorth();
+    const origWest = bounds.getWest();
+    const origEast = bounds.getEast();
+    const origSouth = bounds.getSouth();
+    const origNorth = bounds.getNorth();
     
-    const lonRange = east - west;
-    const latRange = north - south;
+    let west = origWest;
+    let east = origEast;
+    let south = origSouth;
+    let north = origNorth;
     
-    // Add buffer
-    const minLon = west - lonRange * bufferFactor;
-    const maxLon = east + lonRange * bufferFactor;
-    const minLat = south - latRange * bufferFactor;
-    const maxLat = north + latRange * bufferFactor;
+    // Log original viewport before intersection
+    console.log(`[TILE LOADER] Original viewport: [${origWest.toFixed(4)}, ${origSouth.toFixed(4)}, ${origEast.toFixed(4)}, ${origNorth.toFixed(4)}] (size: ${(origEast-origWest).toFixed(4)}° × ${(origNorth-origSouth).toFixed(4)}°)`);
     
-    // Calculate tile grid
+    // STRICT intersection with maxBounds - no buffer outside
+    west = Math.max(west, this.maxBounds.west);
+    east = Math.min(east, this.maxBounds.east);
+    south = Math.max(south, this.maxBounds.south);
+    north = Math.min(north, this.maxBounds.north);
+    
+    // If viewport doesn't intersect maxBounds at all, return empty
+    if (west >= east || south >= north) {
+      console.log(`[TILE LOADER] Viewport doesn't intersect maxBounds, no tiles`);
+      return [];
+    }
+    
+    console.log(`[TILE LOADER] Intersected with maxBounds: [${west.toFixed(4)}, ${south.toFixed(4)}, ${east.toFixed(4)}, ${north.toFixed(4)}]`);
+    
+    // Calculate tile grid ONLY within intersection
+    // Tile at (lon, lat) covers [lon, lon+tileSize) x [lat, lat+tileSize)
+    // So we need: lon >= west AND lon+tileSize <= east (to stay within bounds)
     const tiles = [];
-    let lat = Math.floor(minLat / this.tileSize) * this.tileSize;
+    const startLat = Math.ceil(south / this.tileSize) * this.tileSize;
+    const startLon = Math.ceil(west / this.tileSize) * this.tileSize;
     
-    while (lat < maxLat) {
-      let lon = Math.floor(minLon / this.tileSize) * this.tileSize;
+    let lat = startLat;
+    while (lat < north && lat + this.tileSize <= this.maxBounds.north) {
+      let lon = startLon;
       
-      while (lon < maxLon) {
+      while (lon < east && lon + this.tileSize <= this.maxBounds.east) {
+        // Add tile (guaranteed to be fully within maxBounds)
         const tileKey = `${lat.toFixed(2)}_${lon.toFixed(2)}`;
         tiles.push(tileKey);
         lon += this.tileSize;
@@ -61,6 +90,7 @@ export class TileLoader {
       lat += this.tileSize;
     }
     
+    console.log(`[TILE LOADER] Calculated ${tiles.length} tiles for viewport (bounds: [${west.toFixed(2)}, ${south.toFixed(2)}, ${east.toFixed(2)}, ${north.toFixed(2)}])`);
     return tiles;
   }
   
@@ -70,6 +100,8 @@ export class TileLoader {
    * @returns {Promise<void>}
    */
   async loadViewportTiles() {
+    console.log('[TILE LOADER] loadViewportTiles() called');
+    
     if (this.loading) {
       console.log('[TILE LOADER] Already loading, skipping');
       return;
@@ -78,50 +110,59 @@ export class TileLoader {
     this.loading = true;
     
     try {
-      const viewportTiles = this.getViewportTiles(0.5);
+      // Get tiles for current viewport (strictly within maxBounds)
+      const viewportTiles = this.getViewportTiles();
+      
       const missingTiles = viewportTiles.filter(
         key => !this.loadedTiles.has(key)
       );
       
       if (missingTiles.length === 0) {
-        console.log('[TILE LOADER] All tiles cached');
+        console.log('[TILE LOADER] All viewport tiles already loaded');
         this.loading = false;
         return;
       }
       
       console.log(
-        `[TILE LOADER] Loading ${missingTiles.length} tiles ` +
-        `(${this.loadedTiles.size} already cached)`
+        `[TILE LOADER] Loading ${missingTiles.length} missing tiles ` +
+        `(${this.loadedTiles.size} already loaded)`
       );
       
-      // Load tiles in parallel (max 5 concurrent)
-      const batchSize = 5;
-      for (let i = 0; i < missingTiles.length; i += batchSize) {
-        const batch = missingTiles.slice(i, i + batchSize);
-        await Promise.all(batch.map(key => this.loadTile(key)));
+      // Load tiles sequentially for better progress visibility
+      for (let i = 0; i < missingTiles.length; i++) {
+        const tileKey = missingTiles[i];
+        console.log(`[TILE LOADER] Loading tile ${i+1}/${missingTiles.length}: ${tileKey}`);
+        await this.loadTile(tileKey);
       }
       
       console.log(
-        `[TILE LOADER] Complete: ${this.loadedTiles.size} tiles, ` +
-        `${this.allFeatures.length} total features`
+        `[TILE LOADER] Complete: ${this.loadedTiles.size} tiles total loaded`
       );
       
+    } catch (error) {
+      console.error('[TILE LOADER] Error:', error);
     } finally {
       this.loading = false;
     }
   }
   
   /**
-   * Load single tile from server.
+   * Load single OSM tile from Data Processor.
    * 
    * @param {string} tileKey - Tile identifier "lat_lon"
    * @returns {Promise<void>}
    */
   async loadTile(tileKey) {
     try {
-      const url = `${this.apiBaseUrl}/osm/fetch_tile/${tileKey}`;
+      // Parse tileKey (format: "55.70_37.50")
+      const [latStr, lonStr] = tileKey.split('_');
+      const lat = parseFloat(latStr);
+      const lon = parseFloat(lonStr);
+      
+      // Call Data Processor /ensure endpoint
+      const url = `http://localhost:8005/api/v1/data/tile/${lon}/${lat}/ensure`;
       const response = await fetch(url, {
-        method: 'GET',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
       
@@ -133,20 +174,21 @@ export class TileLoader {
       
       const data = await response.json();
       
-      if (data.type === 'success' && data.geojson) {
-        const features = data.geojson.features || [];
-        
-        // Add features to accumulator
-        this.allFeatures.push(...features);
+      // Mark as loaded and trigger MVT refresh
+      if (data.status === 'exists' || data.status === 'downloaded') {
         this.loadedTiles.add(tileKey);
         
-        // Update map source incrementally
-        this.updateMapSource();
-        
         console.log(
-          `[TILE LOADER] ${tileKey}: +${features.length} roads ` +
-          `(total: ${this.allFeatures.length})`
+          `[TILE LOADER] ${tileKey}: ${data.status} ` +
+          `(${data.ways_count} ways)`
         );
+        
+        // Reload MVT layer to show new data
+        const vectorSource = this.map.getSource('graph-vector');
+        if (vectorSource && data.status === 'downloaded') {
+          // Trigger style update to reload tiles
+          this.map.triggerRepaint();
+        }
       }
       
     } catch (error) {
@@ -155,15 +197,13 @@ export class TileLoader {
   }
   
   /**
-   * Update map source with all accumulated features.
+   * Update MVT vector source (reload tiles).
    */
   updateMapSource() {
-    const src = this.map.getSource('graph');
-    if (src) {
-      src.setData({
-        type: 'FeatureCollection',
-        features: this.allFeatures
-      });
+    // MVT source reloads automatically, just trigger repaint
+    const vectorSource = this.map.getSource('graph-vector');
+    if (vectorSource) {
+      this.map.triggerRepaint();
     }
   }
   
