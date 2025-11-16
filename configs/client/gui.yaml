@@ -46,7 +46,7 @@ assets:
 
 # Debug mode
 debug:
-  enabled: false  # Enable debug overlay (Ctrl+Shift+D to toggle)
+  enabled: true  # Enable debug overlay (Ctrl+Shift+D to toggle)
 
 # UI limits
 limits:

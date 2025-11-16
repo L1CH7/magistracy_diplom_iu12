@@ -319,6 +319,22 @@ async function toggleDebugOverlay() {
     return;
   }
   
+  // Check if map is ready
+  if (!window.map) {
+    logToPython('[Debug] ERROR: Map not initialized yet');
+    return;
+  }
+  
+  // Wait for style.load if not loaded yet (async)
+  if (!window.map.isStyleLoaded()) {
+    logToPython('[Debug] Map style not loaded yet, waiting for style.load event...');
+    window.map.once('style.load', async () => {
+      logToPython('[Debug] Style loaded, adding debug layers now');
+      await toggleDebugOverlay(); // Retry after style loads
+    });
+    return;
+  }
+  
   if (!debugLayersAdded) {
     // Enable debug mode
     if (!debugConfig) {
