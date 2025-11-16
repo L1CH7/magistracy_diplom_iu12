@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
@@ -23,6 +23,9 @@ sys.path.insert(0, str(root_path))
 from src.utils.loguru_config import configure_loguru
 
 configure_loguru(service_name="data-processor")
+
+# WebSocket clients registry
+ws_clients: set[WebSocket] = set()
 
 
 from .manager import DataProcessorManager  # noqa: E402
@@ -38,6 +41,27 @@ from .models import (  # noqa: E402
 data_manager: DataProcessorManager = None
 
 
+async def broadcast_to_websockets(message: dict):
+    """Broadcast message to all connected WebSocket clients."""
+    if not ws_clients:
+        return
+    
+    import json
+    message_json = json.dumps(message)
+    
+    # Send to all clients (remove disconnected on failure)
+    disconnected = []
+    for client in ws_clients:
+        try:
+            await client.send_text(message_json)
+        except Exception:
+            disconnected.append(client)
+    
+    # Clean up disconnected clients
+    for client in disconnected:
+        ws_clients.discard(client)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
@@ -48,6 +72,9 @@ async def lifespan(app: FastAPI):
     # Initialize manager
     data_manager = DataProcessorManager()
     await data_manager.initialize()
+    
+    # Register WebSocket notification callback
+    data_manager.set_ws_notify_callback(broadcast_to_websockets)
     
     logger.success("Data Processor Service ready")
     
@@ -317,4 +344,80 @@ async def get_mvt_tile(z: int, x: int, y: int):
             "Cache-Control": "public, max-age=3600"
         }
     )
+
+
+@app.get("/api/v1/debug/config")
+async def get_debug_config():
+    """
+    Get debug configuration for GUI visualization.
+    
+    Returns:
+    {
+        "default_bbox": {"west": ..., "south": ..., "east": ..., "north": ...},
+        "tile_size_degrees": 0.05,
+        "loaded_tiles": [[lon, lat], ...]  // Tiles currently in DB
+    }
+    """
+    # Get tiles currently in DB (filtered by default_bbox)
+    loaded_tiles = []
+    bounds = data_manager.default_bbox
+    tile_size = data_manager.tile_size_degrees
+    async with data_manager.db_pool.acquire() as conn:
+        # Query distinct tile keys (rounded to tile_size grid)
+        # Filter by default_bbox to show only tiles within configured area
+        rows = await conn.fetch("""
+            SELECT DISTINCT
+                FLOOR(ST_X(ST_Centroid(geom)) / $1) * $1 AS tile_lon,
+                FLOOR(ST_Y(ST_Centroid(geom)) / $1) * $1 AS tile_lat
+            FROM osm.ways
+            WHERE ST_Intersects(
+                geom,
+                ST_MakeEnvelope($2, $3, $4, $5, 4326)
+            )
+            ORDER BY tile_lon, tile_lat
+        """, tile_size, bounds["west"], bounds["south"],
+             bounds["east"], bounds["north"])
+        
+        loaded_tiles = [
+            [float(row['tile_lon']), float(row['tile_lat'])]
+            for row in rows
+        ]
+    
+    return {
+        "default_bbox": data_manager.default_bbox,
+        "tile_size_degrees": data_manager.tile_size_degrees,
+        "loaded_tiles": loaded_tiles
+    }
+
+
+@app.websocket("/api/v1/ws/tile-updates")
+async def websocket_tile_updates(websocket: WebSocket):
+    """
+    WebSocket endpoint for tile update notifications.
+    
+    GUI connects here to receive push notifications when tiles finish
+    downloading.
+    
+    Message format:
+    {
+        "type": "tiles_ready",
+        "tiles": [[z, x, y], ...]  // MVT tiles affected by OSM tile
+    }
+    """
+    await websocket.accept()
+    ws_clients.add(websocket)
+    logger.info(f"[WS] GUI connected, total clients: {len(ws_clients)}")
+    
+    try:
+        # Keep connection alive
+        while True:
+            # Wait for ping/pong to detect disconnect
+            await websocket.receive_text()
+    except Exception as e:
+        logger.info(f"[WS] GUI disconnected: {e}")
+    finally:
+        ws_clients.remove(websocket)
+        logger.info(
+            f"[WS] GUI removed, remaining clients: {len(ws_clients)}"
+        )
 

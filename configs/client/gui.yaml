@@ -44,6 +44,10 @@ assets:
   dir: '/app/src/client/assets'
   port: 9999
 
+# Debug mode
+debug:
+  enabled: false  # Enable debug overlay (Ctrl+Shift+D to toggle)
+
 # UI limits
 limits:
   points_max_visible: 5

@@ -12,9 +12,11 @@ from src.client.ui.widgets.map_widget import MapWidget
 from src.client.handlers.zoom_bridge import ZoomBridge
 from src.client.handlers.points_bridge import PointsBridge
 from src.client.handlers.logger_bridge import LoggerBridge
+from src.client.handlers.config_bridge import ConfigBridge
 from src.client.models.points_presenter import PointsPresenter
 from src.client.ui.main_window_handlers import MainWindowHandlers
 from src.client.ui.main_window_ui import MainWindowUI
+from src.utils.config_loader import config_loader
 from loguru import logger as log
 
 # Logging is configured in loguru_config.py on import
@@ -43,6 +45,12 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         
         self.logger_bridge = LoggerBridge()
         # No connection needed - LoggerBridge logs directly
+        
+        # Config bridge - exposes GUI config to JS
+        gui_config = config_loader.load('client/gui.yaml')
+        self.config_bridge = ConfigBridge(gui_config)
+        debug_enabled = gui_config.get('debug', {}).get('enabled', False)
+        log.info(f"gui_config_loaded debug_enabled={debug_enabled}")
         
         # Points presenter: single source of truth for points with styling
         self.points_presenter = PointsPresenter()
@@ -93,11 +101,16 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self.map_widget = MapWidget(self.map_frame)
         self.map_widget.setGeometry(0, 0, self.width(), self.height())
         
+        # CRITICAL: Clear WebView HTTP cache to force reload fresh JS
+        self.map_widget.page().profile().clearHttpCache()
+        log.info("webview_cache_cleared")
+        
         # Setup QWebChannel for JS-to-Python communication
         self.channel = QWebChannel()
         self.channel.registerObject('zoom_bridge', self.zoom_bridge)
         self.channel.registerObject('points_bridge', self.points_bridge)
         self.channel.registerObject('logger_bridge', self.logger_bridge)
+        self.channel.registerObject('config_bridge', self.config_bridge)
         self.map_widget.page().setWebChannel(self.channel)
         
         # Connect map loadFinished signal (URLs already in HTML)

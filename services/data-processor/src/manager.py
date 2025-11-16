@@ -43,6 +43,9 @@ class DataProcessorManager:
         # Tile download tracking
         self.downloading_tiles: Dict[tuple, Dict] = {}
         
+        # WebSocket notification callback (set by main.py)
+        self.ws_notify_callback = None
+        
         # Config from environment (infrastructure only)
         self.db_host = os.getenv("POSTGRES_HOST", "localhost")
         self.db_port = int(os.getenv("POSTGRES_PORT", "5432"))
@@ -55,6 +58,11 @@ class DataProcessorManager:
         self.default_bbox = self._load_default_bbox()
         
         logger.info("DataProcessorManager initialized (tile-based)")
+    
+    def set_ws_notify_callback(self, callback):
+        """Set WebSocket notification callback."""
+        self.ws_notify_callback = callback
+        logger.info("WebSocket notification callback registered")
     
     def _load_tile_size(self) -> float:
         """
@@ -325,6 +333,9 @@ class DataProcessorManager:
                 f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
                 f"saved: {saved_count} ways"
             )
+            
+            # Notify WebSocket clients (GUI) that tile is ready
+            await self._notify_tile_ready(tile_key)
             
             return {
                 "status": "downloaded",
@@ -799,6 +810,66 @@ class DataProcessorManager:
             count = await conn.fetchval("SELECT COUNT(*) FROM osm.ways")
             return count or 0
     
+    async def _notify_tile_ready(self, tile_key: tuple) -> None:
+        """
+        Notify WebSocket clients that OSM tile is ready.
+        
+        Calculates which MVT tiles are affected and sends notification.
+        """
+        if not self.ws_notify_callback:
+            return
+        
+        # Calculate affected MVT tiles
+        # For simplicity, notify about zoom level 14 (where MVT ~= OSM tile)
+        # In production, calculate actual affected MVT tiles
+        tile_bbox = self._tile_to_bbox(tile_key)
+        
+        # Example: notify about a single representative MVT tile
+        # Real implementation should calculate all affected MVT tiles
+        import math
+        
+        # Web Mercator tile calculation for zoom 14
+        z = 14
+        lon_min, lat_min, lon_max, lat_max = tile_bbox
+        
+        # Convert to tile coordinates
+        n = 2 ** z
+        x_min = int((lon_min + 180) / 360 * n)
+        y_min = int((1 - math.log(
+            math.tan(math.radians(lat_max)) +
+            1 / math.cos(math.radians(lat_max))
+        ) / math.pi) / 2 * n)
+        
+        x_max = int((lon_max + 180) / 360 * n)
+        y_max = int((1 - math.log(
+            math.tan(math.radians(lat_min)) +
+            1 / math.cos(math.radians(lat_min))
+        ) / math.pi) / 2 * n)
+        
+        # Generate list of affected tiles
+        affected_tiles = []
+        for x in range(x_min, x_max + 1):
+            for y in range(y_min, y_max + 1):
+                affected_tiles.append([z, x, y])
+        
+        # Send notification
+        try:
+            await self.ws_notify_callback({
+                "type": "tiles_ready",
+                "tiles": affected_tiles,
+                "osm_tile": {
+                    "lon": tile_key[0],
+                    "lat": tile_key[1]
+                }
+            })
+            logger.info(
+                f"[WS] Notified clients: OSM tile "
+                f"[{tile_key[0]:.2f}, {tile_key[1]:.2f}] ready, "
+                f"{len(affected_tiles)} MVT tiles affected"
+            )
+        except Exception as e:
+            logger.error(f"[WS] Notification failed: {e}")
+    
     async def get_mvt_tile(self, z: int, x: int, y: int) -> dict:
         """
         Generate Mapbox Vector Tile (MVT) for given tile coordinates.
@@ -839,6 +910,14 @@ class DataProcessorManager:
         # Download-on-demand: check tile status WITHOUT blocking
         downloading = False
         for tile_key in osm_tiles:
+            # Server-side validation: only download tiles within bounds
+            if not self._is_tile_in_bounds(tile_key):
+                logger.trace(
+                    f"OSM tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                    f"outside bounds, skipping download"
+                )
+                continue
+            
             # Check if already downloading
             if tile_key in self.downloading_tiles:
                 downloading = True

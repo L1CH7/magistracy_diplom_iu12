@@ -113,13 +113,21 @@ function setupEventListeners() {
   window.globalChannel = null;
   
   if (window.qt && window.qt.webChannelTransport) {
-    new QWebChannel(window.qt.webChannelTransport, function(channel) {
+    new QWebChannel(window.qt.webChannelTransport, async function(channel) {
       window.globalChannel = channel;
-      console.log('QWebChannel initialized globally');
+      console.log('[map-main.js] QWebChannel initialized globally');
       
       // Setup zoom bridge
       if (channel.objects.zoom_bridge) {
-        console.log('Zoom bridge registered');
+        console.log('[map-main.js] Zoom bridge registered');
+      }
+      
+      // Initialize debug overlay if enabled in config
+      if (channel.objects.config_bridge && typeof window.initDebugOverlay === 'function') {
+        // QWebChannel methods return Promises even with result= annotation
+        const enabled = await channel.objects.config_bridge.isDebugEnabled();
+        console.log(`[map-main.js] Debug mode: ${enabled}`);
+        await window.initDebugOverlay(enabled);
       }
     });
   }

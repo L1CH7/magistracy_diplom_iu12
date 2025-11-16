@@ -1,0 +1,31 @@
+# Debug Overlay Configuration
+# Visual styles for debug visualization on map
+
+# Default bbox border (shows configured download area)
+bbox_border:
+  color: "#00ffff"           # Cyan (acid blue)
+  width: 3
+  dasharray: [4, 4]          # Dash pattern [line, gap]
+  opacity: 0.9
+
+# OSM tile grid (shows tile boundaries)
+tile_grid:
+  color: "#000000"           # Black
+  width: 0.5
+  opacity: 0.4
+
+# Loaded tiles (tiles with data in DB)
+loaded_tiles:
+  fill_color: "#00ff00"      # Green
+  fill_opacity: 0.15
+  border_color: "#00aa00"    # Dark green
+  border_width: 1
+  border_opacity: 0.3
+
+# Labels for grid coordinates
+grid_labels:
+  enabled: true
+  color: "#000000"
+  size: 10
+  halo_color: "#ffffff"
+  halo_width: 2
