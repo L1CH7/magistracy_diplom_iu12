@@ -128,7 +128,7 @@ export function createMapStyle(tileUrl) {
         type: 'raster',
         source: 'osm',
       },
-      // MVT Layer 1: Highways only (zoom 0-10)
+      // LOD Layer 1: Motorways (zoom 0-9.99)
       {
         id: 'graph-highways',
         type: 'line',
@@ -147,7 +147,7 @@ export function createMapStyle(tileUrl) {
           ]
         },
       },
-      // MVT Layer 2: Major roads (zoom 10-12)
+      // LOD Layer 2: Major roads (zoom 10-11.99)
       {
         id: 'graph-major',
         type: 'line',
@@ -180,7 +180,7 @@ export function createMapStyle(tileUrl) {
           ]
         },
       },
-      // MVT Layer 3: Arterial roads (zoom 12-14)
+      // LOD Layer 3: Arterial roads (zoom 12-13.99)
       {
         id: 'graph-arterial',
         type: 'line',
@@ -219,7 +219,7 @@ export function createMapStyle(tileUrl) {
           ]
         },
       },
-      // MVT Layer 4: All roads (zoom 14+)
+      // LOD Layer 4: All roads (zoom >= 14)
       {
         id: 'graph-all',
         type: 'line',
@@ -290,7 +290,7 @@ export function createMapStyle(tileUrl) {
           ]
         },
       },
-      // MVT Labels: Arterial roads (zoom 12-14)
+      // MVT Labels: Arterial roads (zoom 12-13.99)
       {
         id: 'graph-labels-arterial',
         type: 'symbol',
@@ -314,7 +314,7 @@ export function createMapStyle(tileUrl) {
           'text-halo-width': 2
         }
       },
-      // MVT Labels: All roads (zoom 14+)
+      // MVT Labels: All roads (zoom >= 14)
       {
         id: 'graph-labels-all',
         type: 'symbol',

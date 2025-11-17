@@ -43,6 +43,10 @@ class DataProcessorManager:
         # Tile download tracking
         self.downloading_tiles: Dict[tuple, Dict] = {}
         
+        # In-memory cache: processed tiles (complete/empty/failed)
+        # Format: {(lon, lat): {"status": str, "timestamp": float}}
+        self.processed_tiles_cache: Dict[tuple, Dict] = {}
+        
         # WebSocket notification callback (set by main.py)
         self.ws_notify_callback = None
         
@@ -225,6 +229,9 @@ class DataProcessorManager:
                     timeout=5
                 )
                 
+                # Preload processed tiles cache from DB
+                await self._preload_tiles_cache()
+                
                 logger.success("Data Processor initialized")
                 return
             except Exception as e:
@@ -235,6 +242,42 @@ class DataProcessorManager:
                     await asyncio.sleep(retry_delay)
                 else:
                     raise
+    
+    async def _preload_tiles_cache(self):
+        """
+        Preload processed tiles cache from DB.
+        
+        Loads all tiles from cached_tiles table into memory cache
+        to avoid DB queries spam on MVT requests.
+        """
+        import time
+        
+        async with self.db_pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT tile_key, download_status
+                FROM osm.cached_tiles
+                WHERE download_status IN ('complete', 'empty', 'partial', 'failed')
+            """)
+            
+            for row in rows:
+                # Parse tile_key "37.60_55.75" -> (37.60, 55.75)
+                parts = row["tile_key"].split("_")
+                if len(parts) == 2:
+                    try:
+                        lon = float(parts[0])
+                        lat = float(parts[1])
+                        tile_key = (lon, lat)
+                        
+                        self.processed_tiles_cache[tile_key] = {
+                            "status": row["download_status"],
+                            "timestamp": time.time()
+                        }
+                    except ValueError:
+                        continue
+        
+        logger.info(
+            f"Preloaded {len(self.processed_tiles_cache)} tiles into memory cache"
+        )
     
     async def shutdown(self):
         """Shutdown manager."""
@@ -268,32 +311,100 @@ class DataProcessorManager:
         """
         Check tile presence in database.
         
+        CRITICAL: Check in-memory cache first to avoid DB queries spam.
+        
         Returns:
-            {"exists": bool, "ways_count": int}
+            {"exists": bool, "ways_count": int, "status": str}
         """
+        import time
+        
+        # Check in-memory cache FIRST (avoid DB spam)
+        if tile_key in self.processed_tiles_cache:
+            cached_entry = self.processed_tiles_cache[tile_key]
+            age = time.time() - cached_entry["timestamp"]
+            
+            # Cache valid for 60 seconds
+            if age < 60:
+                status = cached_entry["status"]
+                logger.debug(
+                    f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                    f"found in memory cache: status={status}"
+                )
+                
+                # If complete/empty/partial - tile exists
+                if status in ("complete", "empty", "partial"):
+                    return {"exists": True, "ways_count": 0, "status": status}
+                
+                # If failed >= 5 attempts - don't retry
+                if status == "failed":
+                    return {"exists": True, "ways_count": 0, "status": "failed"}
+        
         tile_bbox = self._tile_to_bbox(tile_key)
         
         async with self.db_pool.acquire() as conn:
+            # Check cached_tiles in DB
+            # tile_key format: "37.60_55.75"
+            cached = await conn.fetchrow("""
+                SELECT download_status, download_attempts
+                FROM osm.cached_tiles
+                WHERE tile_key = $1
+            """, f"{tile_key[0]:.2f}_{tile_key[1]:.2f}")
+            
+            if cached:
+                status = cached["download_status"]
+                
+                # Count ways for this tile (if needed)
+                ways_count = await conn.fetchval("""
+                    SELECT COUNT(*)
+                    FROM osm.ways
+                    WHERE geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
+                """, tile_bbox[0], tile_bbox[1], tile_bbox[2], tile_bbox[3])
+                
+                # Tile already processed (complete/empty/partial)
+                if status in ("complete", "empty", "partial"):
+                    logger.debug(
+                        f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                        f"already in cached_tiles: status={status}, ways={ways_count}"
+                    )
+                    return {"exists": True, "ways_count": ways_count, "status": status}
+                
+                # Failed tile - allow retry if attempts < 5
+                if status == "failed":
+                    attempts = cached["download_attempts"] or 0
+                    if attempts >= 5:
+                        logger.debug(
+                            f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                            f"failed {attempts} times, not retrying"
+                        )
+                        return {"exists": True, "ways_count": 0, "status": "failed"}
+                    else:
+                        logger.debug(
+                            f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                            f"failed {attempts} times, allowing retry"
+                        )
+                        return {"exists": False, "ways_count": 0, "status": "failed"}
+            
+            # Not in cached_tiles - check ways table (legacy)
             count = await conn.fetchval("""
                 SELECT COUNT(*)
                 FROM osm.ways
                 WHERE geom && ST_MakeEnvelope($1, $2, $3, $4, 4326)
             """, tile_bbox[0], tile_bbox[1], tile_bbox[2], tile_bbox[3])
-        
-        exists = count > 0
-        
-        if exists:
-            logger.debug(
-                f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
-                f"exists in DB: {count} ways"
-            )
-        else:
-            logger.debug(
-                f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
-                f"missing from DB"
-            )
-        
-        return {"exists": exists, "ways_count": count}
+            
+            exists = count > 0
+            
+            if exists:
+                logger.debug(
+                    f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                    f"exists in ways (legacy): {count} ways"
+                )
+            else:
+                logger.debug(
+                    f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
+                    f"missing from DB completely"
+                )
+            
+            return {"exists": exists, "ways_count": count, "status": "ready"}
     
     async def get_global_status(self) -> Dict:
         """Get global Data Processor status."""
@@ -420,6 +531,13 @@ class DataProcessorManager:
                     # Remove from downloading
                     del self.downloading_tiles[tile_key]
                     
+                    # Add to memory cache
+                    import time
+                    self.processed_tiles_cache[tile_key] = {
+                        "status": "complete" if saved_count > 0 else "empty",
+                        "timestamp": time.time()
+                    }
+                    
                     logger.success(
                         f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
                         f"saved: {saved_count} ways (server: {server_url})"
@@ -434,10 +552,14 @@ class DataProcessorManager:
                     }
                     
                 except Exception as e:
-                    last_error = str(e)
+                    # Capture full error details
+                    error_msg = str(e) if str(e) else repr(e)
+                    error_type = type(e).__name__
+                    last_error = f"{error_type}: {error_msg}"
+                    
                     logger.warning(
                         f"Tile [{tile_key[0]:.2f}, {tile_key[1]:.2f}] "
-                        f"attempt {total_attempts} failed: {e}"
+                        f"attempt {total_attempts} failed: {last_error}"
                     )
                     
                     # Wait before retry (exponential backoff)
@@ -465,6 +587,13 @@ class DataProcessorManager:
         # Remove from downloading
         if tile_key in self.downloading_tiles:
             del self.downloading_tiles[tile_key]
+        
+        # Add to memory cache (prevent retry for 60s)
+        import time
+        self.processed_tiles_cache[tile_key] = {
+            "status": "failed",
+            "timestamp": time.time()
+        }
         
         return {
             "status": "failed",

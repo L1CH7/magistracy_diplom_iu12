@@ -25,8 +25,8 @@ moscow_medium:
   description: "Moscow medium (25 tiles 5x5 @ 0.05°)"
 
 moscow_mkad:
-  coords: [37.32, 55.49, 37.90, 55.93]
+  coords: [37.30, 55.45, 37.90, 56.00]
   description: "Moscow MKAD +5km"
 
 # Active bbox for initial load
-default: moscow_small
+default: moscow_mkad

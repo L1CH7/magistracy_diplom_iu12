@@ -8,16 +8,17 @@ server_priority: "de"
 
 # Primary servers (prefer these)
 primary_servers:
-  # Russian servers (VK maps) - usually faster for Russian data
-  - "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
-  - "https://overpass.openstreetmap.ru/api/interpreter"
-  - "https://overpass.openstreetmap.ru/cgi/interpreter"
+  # German servers - RELIABLE, clean data (no duplicates/fragments)
+  - "https://overpass.kumi.systems/api/interpreter"
+  - "https://overpass-api.de/api/interpreter"
 
 # Fallback servers (if primary fail)
 fallback_servers:
-  # German servers - reliable but slower for Russian data
-  - "https://overpass-api.de/api/interpreter"
-  - "https://overpass.kumi.systems/api/interpreter"
+  # Russian servers - FAST but may return CORRUPTED data (duplicates, fragments)
+  # ONLY use if German servers timeout
+  - "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+  - "https://overpass.openstreetmap.ru/api/interpreter"
+  - "https://overpass.openstreetmap.ru/cgi/interpreter"
 
 # Timeout for Overpass requests (seconds)
 timeout: 300  # 5 minutes (increased from 180)
@@ -40,4 +41,4 @@ retry:
 # 0.05 = ~5.5km (Moscow medium: 5x5 = 25 tiles)
 # 0.01 = ~1.1km (Moscow micro: 5x5 = 25 tiles, fast demo)
 # 0.005 = ~550m (Moscow medium: 50x50 = 2500 tiles, long download, great dynamics)
-tile_size_degrees: 0.01
+tile_size_degrees: 0.05
