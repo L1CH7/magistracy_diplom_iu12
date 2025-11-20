@@ -125,7 +125,7 @@ class OSMQueries:
     # ==================== MVT Generation ====================
     
     GENERATE_MVT_TILE = """
-        SELECT ST_AsMVT(tile, 'roads', 4096, 'geom')
+        SELECT ST_AsMVT(tile, 'ways', 4096, 'geom')
         FROM (
             SELECT
                 osm_id,

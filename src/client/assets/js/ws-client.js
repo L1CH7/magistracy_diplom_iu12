@@ -125,14 +125,15 @@ function disconnectWebSocket() {
   }
 }
 
+// WebSocket disabled: endpoint /api/v1/ws/tile-updates not implemented yet
 // Auto-connect when page loads
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(connectWebSocket, 1000); // Connect after 1s delay
-  });
-} else {
-  setTimeout(connectWebSocket, 1000);
-}
+// if (document.readyState === 'loading') {
+//   document.addEventListener('DOMContentLoaded', () => {
+//     setTimeout(connectWebSocket, 1000); // Connect after 1s delay
+//   });
+// } else {
+//   setTimeout(connectWebSocket, 1000);
+// }
 
 // Export for manual control
 window.wsClient = {

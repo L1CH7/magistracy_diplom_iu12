@@ -159,8 +159,9 @@ export class TileLoader {
       const lat = parseFloat(latStr);
       const lon = parseFloat(lonStr);
       
-      // Call Data Processor /ensure endpoint
-      const url = `http://localhost:8005/api/v1/data/tile/${lon}/${lat}/ensure`;
+      // Call Data Processor /tiles/download endpoint
+      const bbox_size = 0.2;  // Default tile size
+      const url = `http://localhost:8005/api/v1/tiles/download?lon=${lon}&lat=${lat}&bbox_size=${bbox_size}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -175,19 +176,21 @@ export class TileLoader {
       const data = await response.json();
       
       // Mark as loaded and trigger MVT refresh
-      if (data.status === 'exists' || data.status === 'downloaded') {
+      if (data.status === 'started') {
         this.loadedTiles.add(tileKey);
         
         console.log(
-          `[TILE LOADER] ${tileKey}: ${data.status} ` +
-          `(${data.ways_count} ways)`
+          `[TILE LOADER] ${tileKey}: download started ` +
+          `(tile_key: ${data.tile_key})`
         );
         
-        // Reload MVT layer to show new data
+        // Reload MVT layer to show new data after download completes
         const vectorSource = this.map.getSource('graph-vector');
-        if (vectorSource && data.status === 'downloaded') {
-          // Trigger style update to reload tiles
-          this.map.triggerRepaint();
+        if (vectorSource) {
+          // Wait a bit for download to complete, then repaint
+          setTimeout(() => {
+            this.map.triggerRepaint();
+          }, 5000);  // 5 seconds should be enough for most tiles
         }
       }
       

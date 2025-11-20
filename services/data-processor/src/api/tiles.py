@@ -8,6 +8,7 @@ Endpoints:
 """
 
 import asyncio
+import gzip
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import Response as FastAPIResponse
 from loguru import logger
@@ -136,8 +137,11 @@ async def get_mvt_tile(z: int, x: int, y: int):
                 headers={"Cache-Control": "public, max-age=3600"}
             )
         
+        # Compress MVT data with gzip
+        compressed_data = gzip.compress(mvt_data, compresslevel=6)
+        
         return Response(
-            content=mvt_data,
+            content=compressed_data,
             media_type="application/x-protobuf",
             headers={
                 "Content-Encoding": "gzip",

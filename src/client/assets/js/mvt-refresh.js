@@ -13,12 +13,12 @@ let refreshCheckInterval = null;
  */
 async function getWayCount() {
   try {
-    const response = await fetch('http://localhost:8005/api/v1/data/stats');
+    const response = await fetch('http://localhost:8005/api/v1/status');
     if (!response.ok) {
       return null;
     }
     const stats = await response.json();
-    return stats.ways_count || 0;
+    return stats.database?.ways || 0;
   } catch (error) {
     console.log('[MVT-Refresh] Failed to fetch stats:', error.message);
     return null;
