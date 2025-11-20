@@ -18,6 +18,7 @@ help:
 	@echo "  make migrate      - Применить миграции БД"
 	@echo "  make gui          - Запуск GUI локально (использует .venv.gui)"
 	@echo "  make clean        - Удалить все контейнеры и volumes"
+	@echo "  make clean-db     - Полная очистка БД (ways + cached_tiles)"
 
 # Сборка с кэшем и параллелизацией
 build:
@@ -84,3 +85,13 @@ gui:
 clean:
 	docker compose down -v
 	docker system prune -f
+
+# Полная очистка БД (OSM данных)
+clean-db:
+	@echo "Очистка osm.ways и osm.cached_tiles..."
+	docker compose exec postgis psql -U diplom -d osm -c "TRUNCATE TABLE osm.ways CASCADE"
+	docker compose exec postgis psql -U diplom -d osm -c "TRUNCATE TABLE osm.cached_tiles CASCADE"
+	@echo "✓ БД очищена (ways + cached_tiles)"
+	@echo "Перезапуск data-processor для сброса кеша..."
+	docker compose restart data-processor
+	@echo "✓ Готово"

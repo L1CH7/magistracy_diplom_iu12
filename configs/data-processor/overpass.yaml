@@ -37,8 +37,12 @@ retry:
   max_servers_to_try: 5    # Try up to 5 different servers total
 
 # Tile size for grid-based downloads (degrees)
-# Smaller = more tiles, faster per-tile, better progress visibility
-# 0.05 = ~5.5km (Moscow medium: 5x5 = 25 tiles)
-# 0.01 = ~1.1km (Moscow micro: 5x5 = 25 tiles, fast demo)
-# 0.005 = ~550m (Moscow medium: 50x50 = 2500 tiles, long download, great dynamics)
-tile_size_degrees: 0.05
+# null / ~ / not set = MONOLITHIC mode (single tile for entire bbox) - may timeout on large areas
+# 0.2 = ~22km (Moscow: ~4 tiles) - RECOMMENDED (balance: few tiles, no fragmentation, stable download)
+# 0.1 = ~11km (Moscow: ~9 tiles) - medium granularity
+# 0.05 = ~5.5km (Moscow: ~25 tiles) - high granularity, may have fragmentation artifacts
+# 0.01 = ~1.1km (Moscow: ~625 tiles) - very high granularity, fragmentation issues
+#
+# TRADE-OFF: larger tiles = fewer requests, faster overall, but single request timeout risk
+#            smaller tiles = more requests, better progress, but fragmentation artifacts in MapLibre
+tile_size_degrees: 0.2  # 22km tiles (RECOMMENDED)
