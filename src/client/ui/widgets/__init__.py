@@ -1,5 +1,5 @@
 """UI Widgets package."""
-from .collapsible import CollapsibleSection
+from .collapsible_section import CollapsibleSection
 from .web_console import WebConsolePage
 
 __all__ = [

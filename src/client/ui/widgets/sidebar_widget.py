@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QFrame, QVBoxLayout, QPushButton, QLabel, QTextEdit, QWidget
 )
-from .collapsible import CollapsibleSection
+from .collapsible_section import CollapsibleSection
 from .selected_points_widget import SelectedPointsWidget
 from .route_panel import RoutePanel
 from .simulation_panel import SimulationPanel
