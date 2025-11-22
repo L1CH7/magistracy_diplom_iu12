@@ -153,6 +153,109 @@ function setupEventListeners() {
     lastContextMenuPos = map.unproject([e.clientX, e.clientY]);
     window.lastContextMenuPos = lastContextMenuPos;
     console.log('Right-click at:', lastContextMenuPos);
+    
+    // Debug mode: redownload tile on right-click
+    if (window.redownloadTileAt && typeof window.redownloadTileAt === 'function') {
+      // Check if debug overlay is VISIBLE (not just enabled in config)
+      const debugActive = window.debugEnabled && window.debugLayersVisible;
+      if (debugActive) {
+        // Рассчитываем bbox тайла
+        if (window.debugConfig) {
+          const TILE_SIZE = window.debugConfig.tile_size_degrees;
+          const lon = lastContextMenuPos.lng;
+          const lat = lastContextMenuPos.lat;
+          const tileX = Math.floor(lon / TILE_SIZE) * TILE_SIZE;
+          const tileY = Math.floor(lat / TILE_SIZE) * TILE_SIZE;
+          const tileBbox = {
+            west: tileX,
+            south: tileY,
+            east: tileX + TILE_SIZE,
+            north: tileY + TILE_SIZE
+          };
+          
+          // Добавляем временную подсветку тайла
+          if (!map.getSource('debug-highlight-tile')) {
+            map.addSource('debug-highlight-tile', {
+              type: 'geojson',
+              data: {
+                type: 'Feature',
+                geometry: {
+                  type: 'Polygon',
+                  coordinates: [[
+                    [tileBbox.west, tileBbox.south],
+                    [tileBbox.east, tileBbox.south],
+                    [tileBbox.east, tileBbox.north],
+                    [tileBbox.west, tileBbox.north],
+                    [tileBbox.west, tileBbox.south]
+                  ]]
+                }
+              }
+            });
+            
+            map.addLayer({
+              id: 'debug-highlight-tile-fill',
+              type: 'fill',
+              source: 'debug-highlight-tile',
+              paint: {
+                'fill-color': '#ff0000',
+                'fill-opacity': 0.3
+              }
+            });
+            
+            map.addLayer({
+              id: 'debug-highlight-tile-border',
+              type: 'line',
+              source: 'debug-highlight-tile',
+              paint: {
+                'line-color': '#ff0000',
+                'line-width': 2
+              }
+            });
+          } else {
+            // Обновляем существующую подсветку
+            map.getSource('debug-highlight-tile').setData({
+              type: 'Feature',
+              geometry: {
+                type: 'Polygon',
+                coordinates: [[
+                  [tileBbox.west, tileBbox.south],
+                  [tileBbox.east, tileBbox.south],
+                  [tileBbox.east, tileBbox.north],
+                  [tileBbox.west, tileBbox.north],
+                  [tileBbox.west, tileBbox.south]
+                ]]
+              }
+            });
+          }
+          
+          const confirmed = confirm(
+            `Redownload tile bbox?\n\n` +
+            `West: ${tileBbox.west.toFixed(4)}°\n` +
+            `South: ${tileBbox.south.toFixed(4)}°\n` +
+            `East: ${tileBbox.east.toFixed(4)}°\n` +
+            `North: ${tileBbox.north.toFixed(4)}°\n\n` +
+            'This will force re-fetch OSM data for this tile.'
+          );
+          
+          // Убираем подсветку после confirm
+          if (map.getLayer('debug-highlight-tile-fill')) {
+            map.removeLayer('debug-highlight-tile-fill');
+          }
+          if (map.getLayer('debug-highlight-tile-border')) {
+            map.removeLayer('debug-highlight-tile-border');
+          }
+          if (map.getSource('debug-highlight-tile')) {
+            map.removeSource('debug-highlight-tile');
+          }
+          
+          if (confirmed) {
+            window.redownloadTileAt(lon, lat);
+          }
+        }
+      }
+    }
+    
+    // Call Python context menu handler if exists
     if (window.onMapContextMenu) {
       window.onMapContextMenu(lastContextMenuPos);
     }

@@ -38,7 +38,11 @@ async function fetchDebugConfig() {
       return null;
     }
     const config = await response.json();
-    logToPython(`[Debug] Config loaded: ${JSON.stringify(config)}`);
+    logToPython(`[Debug] Config loaded: tile_size=${config.tile_size_degrees}°`);
+    
+    // Экспортируем в window для доступа из map-main.js
+    window.debugConfig = config;
+    
     return config;
   } catch (error) {
     logToPython(`[Debug] ERROR: Error fetching config: ${error}`);
@@ -47,28 +51,80 @@ async function fetchDebugConfig() {
 }
 
 /**
- * Load debug styles (hardcoded for now, can be loaded from config later).
+ * Fetch list of loaded tiles from Data Processor.
+ */
+async function fetchLoadedTiles() {
+  try {
+    logToPython('[Debug] Fetching loaded tiles from /api/v1/debug/loaded-tiles');
+    const response = await fetch('http://localhost:8005/api/v1/debug/loaded-tiles');
+    if (!response.ok) {
+      logToPython(`[Debug] ERROR: Failed to fetch loaded tiles: ${response.status}`);
+      return [];
+    }
+    const tileKeys = await response.json();
+    logToPython(`[Debug] Loaded tiles count: ${tileKeys.length}`);
+    
+    // Convert tile keys ['37.30_55.45', ...] to [lon, lat] pairs
+    const tiles = tileKeys.map(key => {
+      const [lon, lat] = key.split('_').map(parseFloat);
+      return [lon, lat];
+    });
+    
+    return tiles;
+  } catch (error) {
+    logToPython(`[Debug] ERROR: Error fetching loaded tiles: ${error}`);
+    return [];
+  }
+}
+
+/**
+ * Load debug styles from config.
  */
 function getDebugStyles() {
-  // Hardcoded styles matching configs/client/debug.yaml
+  if (!debugConfig) {
+    // Fallback если конфиг не загружен
+    logToPython('[Debug] WARNING: getDebugStyles called without config, using fallback');
+    return {
+      bbox_border: {
+        color: '#00ffff',
+        width: 3,
+        dasharray: [4, 4],
+        opacity: 0.9
+      },
+      tile_grid: {
+        color: '#000000',
+        width: 0.5,
+        opacity: 0.4
+      },
+      loaded_tiles: {
+        fill_color: '#00ff00',
+        fill_opacity: 0.15,
+        border_color: '#00aa00',
+        border_width: 1,
+        border_opacity: 0.3
+      }
+    };
+  }
+  
+  // Используем стили из конфига
   return {
     bbox_border: {
-      color: '#00ffff',
-      width: 3,
-      dasharray: [4, 4],
-      opacity: 0.9
+      color: debugConfig.bbox_border?.color || '#00ffff',
+      width: debugConfig.bbox_border?.width || 3,
+      dasharray: debugConfig.bbox_border?.dasharray || [4, 4],
+      opacity: debugConfig.bbox_border?.opacity || 0.9
     },
     tile_grid: {
-      color: '#000000',
-      width: 0.5,
-      opacity: 0.4
+      color: debugConfig.grid.color,
+      width: debugConfig.grid.width,
+      opacity: debugConfig.grid.opacity
     },
     loaded_tiles: {
-      fill_color: '#00ff00',
-      fill_opacity: 0.15,
-      border_color: '#00aa00',
-      border_width: 1,
-      border_opacity: 0.3
+      fill_color: debugConfig.loaded_tiles.fill_color,
+      fill_opacity: debugConfig.loaded_tiles.fill_opacity,
+      border_color: debugConfig.loaded_tiles.border_color,
+      border_width: debugConfig.loaded_tiles.border_width,
+      border_opacity: debugConfig.loaded_tiles.border_opacity
     }
   };
 }
@@ -168,7 +224,7 @@ function generateLoadedTiles(tiles, tileSize) {
 /**
  * Add debug layers to map.
  */
-function addDebugLayers() {
+async function addDebugLayers() {
   logToPython('[Debug] addDebugLayers called');
   
   if (!window.map || !debugConfig) {
@@ -185,83 +241,109 @@ function addDebugLayers() {
   const map = window.map;
   logToPython('[Debug] Adding debug sources and layers...');
   
-  // Add sources
-  map.addSource('debug-bbox', {
-    type: 'geojson',
-    data: {
-      type: 'FeatureCollection',
-      features: [generateBboxBorder(debugConfig.default_bbox)]
-    }
-  });
+  try {
   
-  map.addSource('debug-grid', {
-    type: 'geojson',
-    data: {
-      type: 'FeatureCollection',
-      features: generateTileGrid(
-        debugConfig.default_bbox,
-        debugConfig.tile_size_degrees,
-        map.getBounds()
-      )
-    }
-  });
+  // Add sources (check if not exists first)
+  if (!map.getSource('debug-bbox')) {
+    map.addSource('debug-bbox', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [generateBboxBorder(debugConfig.default_bbox)]
+      }
+    });
+  }
   
-  map.addSource('debug-tiles', {
-    type: 'geojson',
-    data: {
-      type: 'FeatureCollection',
-      features: generateLoadedTiles(
-        debugConfig.loaded_tiles,
-        debugConfig.tile_size_degrees
-      )
-    }
-  });
+  if (!map.getSource('debug-grid')) {
+    map.addSource('debug-grid', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: generateTileGrid(
+          debugConfig.default_bbox,
+          debugConfig.tile_size_degrees,
+          map.getBounds()
+        )
+      }
+    });
+  }
+  
+  if (!map.getSource('debug-tiles')) {
+    // Загружаем loaded tiles асинхронно
+    const loadedTiles = await fetchLoadedTiles();
+    const tileFeatures = generateLoadedTiles(
+      loadedTiles,
+      debugConfig.tile_size_degrees
+    );
+    
+    map.addSource('debug-tiles', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: tileFeatures
+      }
+    });
+    
+    logToPython(`[Debug] Added ${tileFeatures.length} loaded tile features`);
+  }
   
   // Load styles
   const styles = getDebugStyles();
   
-  // Add layers
+  // Add layers (check if not exists first)
   // 1. Loaded tiles (green fill, lowest z-order)
-  map.addLayer({
-    id: 'debug-tiles-fill',
-    type: 'fill',
-    source: 'debug-tiles',
-    paint: {
-      'fill-color': styles.loaded_tiles.fill_color,
-      'fill-opacity': styles.loaded_tiles.fill_opacity
-    }
-  });
+  if (!map.getLayer('debug-tiles-fill')) {
+    map.addLayer({
+      id: 'debug-tiles-fill',
+      type: 'fill',
+      source: 'debug-tiles',
+      paint: {
+        'fill-color': styles.loaded_tiles.fill_color,
+        'fill-opacity': styles.loaded_tiles.fill_opacity
+      }
+    });
+  }
   
   // 2. Grid lines (black thin)
-  map.addLayer({
-    id: 'debug-grid-lines',
-    type: 'line',
-    source: 'debug-grid',
-    paint: {
-      'line-color': styles.tile_grid.color,
-      'line-width': styles.tile_grid.width,
-      'line-opacity': styles.tile_grid.opacity
-    }
-  });
+  if (!map.getLayer('debug-grid-lines')) {
+    map.addLayer({
+      id: 'debug-grid-lines',
+      type: 'line',
+      source: 'debug-grid',
+      paint: {
+        'line-color': styles.tile_grid.color,
+        'line-width': styles.tile_grid.width,
+        'line-opacity': styles.tile_grid.opacity
+      }
+    });
+  }
   
   // 3. Default bbox border (cyan dashed, highest z-order)
-  map.addLayer({
-    id: 'debug-bbox-border',
-    type: 'line',
-    source: 'debug-bbox',
-    paint: {
-      'line-color': styles.bbox_border.color,
-      'line-width': styles.bbox_border.width,
-      'line-dasharray': styles.bbox_border.dasharray,
-      'line-opacity': styles.bbox_border.opacity
-    }
-  });
+  if (!map.getLayer('debug-bbox-border')) {
+    map.addLayer({
+      id: 'debug-bbox-border',
+      type: 'line',
+      source: 'debug-bbox',
+      paint: {
+        'line-color': styles.bbox_border.color,
+        'line-width': styles.bbox_border.width,
+        'line-dasharray': styles.bbox_border.dasharray,
+        'line-opacity': styles.bbox_border.opacity
+      }
+    });
+  }
   
   debugLayersAdded = true;
+  window.debugLayersVisible = true;
   logToPython('[Debug] Layers added successfully');
   
   // Update grid on map move
   map.on('moveend', refreshDebugLayers);
+  
+  } catch (error) {
+    logToPython(`[Debug] ERROR adding layers: ${error.message}`);
+    console.error('[Debug] Layer add failed:', error);
+  }
 }
 
 /**
@@ -307,6 +389,7 @@ function removeDebugLayers() {
   if (map.getSource('debug-tiles')) map.removeSource('debug-tiles');
   
   debugLayersAdded = false;
+  window.debugLayersVisible = false;
   console.log('[Debug] Layers removed');
 }
 
@@ -344,7 +427,7 @@ async function toggleDebugOverlay() {
         return;
       }
     }
-    addDebugLayers();
+    await addDebugLayers();
     logToPython('[Debug] Debug overlay ENABLED');
   } else {
     // Disable debug mode
@@ -362,6 +445,14 @@ async function initDebugOverlay(enabled) {
   logToPython(`[debug-grid.js] initDebugOverlay called with enabled = ${enabled}`);
   debugEnabled = enabled;
   if (enabled) {
+    // Загружаем конфиг заранее для доступа из map-main.js (ПКМ)
+    if (!debugConfig) {
+      debugConfig = await fetchDebugConfig();
+      if (!debugConfig) {
+        logToPython('[debug-grid.js] ERROR: Failed to load debug config');
+      }
+    }
+    
     logToPython('[debug-grid.js] Debug mode enabled (Ctrl+Shift+D to toggle overlay)');
     // Do NOT auto-show overlay, only prepare for Ctrl+Shift+D toggle
     logToPython('[debug-grid.js] Debug overlay ready, press Ctrl+Shift+D to show');
@@ -374,6 +465,11 @@ async function initDebugOverlay(enabled) {
 // Export for global access
 window.toggleDebugOverlay = toggleDebugOverlay;
 window.initDebugOverlay = initDebugOverlay;
+
+// Getter for debug enabled state
+Object.defineProperty(window, 'debugEnabled', {
+  get: function() { return debugEnabled; }
+});
 
 // Ctrl+Shift+D toggle (only works if debug enabled in config)
 // Ctrl+Shift+V show viewport bbox
@@ -411,5 +507,78 @@ document.addEventListener('keydown', (e) => {
     console.log('Zoom:', zoom, 'Center:', center);
   }
 });
+
+/**
+ * Redownload tile at specific coordinates.
+ * Called from right-click context menu in debug mode.
+ */
+async function redownloadTileAt(lon, lat) {
+  if (!debugEnabled) {
+    logToPython('[Debug] Redownload only available in debug mode');
+    return;
+  }
+  
+  if (!debugConfig) {
+    logToPython('[Debug] Config not loaded, fetching...');
+    debugConfig = await fetchDebugConfig();
+    if (!debugConfig) {
+      alert('Failed to load debug config');
+      return;
+    }
+  }
+  
+  const TILE_SIZE = debugConfig.tile_size_degrees;
+  const tileX = Math.floor(lon / TILE_SIZE) * TILE_SIZE;
+  const tileY = Math.floor(lat / TILE_SIZE) * TILE_SIZE;
+  
+  // Вычисляем количество знаков после запятой для tile_key
+  const precision = Math.max(2, -Math.floor(Math.log10(TILE_SIZE)) + 1);
+  const tileKey = `${tileX.toFixed(precision)}_${tileY.toFixed(precision)}`;
+  
+  // Вычисляем bbox тайла (4 координаты)
+  const tileBbox = {
+    west: tileX,
+    south: tileY,
+    east: tileX + TILE_SIZE,
+    north: tileY + TILE_SIZE
+  };
+  
+  logToPython(`[Debug] Redownload bbox: [${tileBbox.west.toFixed(precision)}, ${tileBbox.south.toFixed(precision)}, ${tileBbox.east.toFixed(precision)}, ${tileBbox.north.toFixed(precision)}]`);
+  
+  try {
+    const url = `http://localhost:8005/api/v1/tiles/redownload?west=${tileBbox.west}&south=${tileBbox.south}&east=${tileBbox.east}&north=${tileBbox.north}`;
+    const response = await fetch(url, { method: 'POST' });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      logToPython(`[Debug] Redownload failed: ${error.detail}`);
+      alert(`Redownload failed: ${error.detail}`);
+      return;
+    }
+    
+    const result = await response.json();
+    logToPython(`[Debug] Redownload started for bbox: ${JSON.stringify(result.bbox)}`);
+    alert(`Redownload started for bbox.\nWait ~20s for completion.`);
+    
+    // Refresh overlay and MVT tiles after 20 seconds
+    setTimeout(() => {
+      if (debugLayersAdded && window.map) {
+        logToPython('[Debug] Refreshing overlay after redownload');
+        refreshDebugLayers();
+      }
+      // Force MVT tile refresh
+      if (window.app && window.app.refreshMVTTiles) {
+        window.app.refreshMVTTiles();
+      }
+    }, 20000);
+    
+  } catch (error) {
+    logToPython(`[Debug] Redownload error: ${error}`);
+    alert(`Error: ${error.message}`);
+  }
+}
+
+// Export for map context menu
+window.redownloadTileAt = redownloadTileAt;
 
 console.log('[debug-grid.js] Debug grid module loaded');

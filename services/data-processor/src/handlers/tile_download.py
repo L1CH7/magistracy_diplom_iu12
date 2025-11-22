@@ -148,13 +148,15 @@ class TileDownloadHandler:
         """
         west, south, east, north = bbox
         
-        # Build Overpass QL query
+        # Build Overpass QL query (same as old osm_loader.py)
         query = f"""
         [out:json][timeout:{self.timeout}];
         (
           way["highway"]({south},{west},{north},{east});
         );
-        out geom;
+        out body;
+        >;
+        out skel qt;
         """
         
         # Try servers in order of least failures
@@ -226,6 +228,16 @@ class TileDownloadHandler:
             if e.get("type") == "node"
         }
         
+        # Debug: check node_map size
+        nodes_with_coords = sum(
+            1 for n in node_map.values()
+            if n.get("lat") and n.get("lon")
+        )
+        logger.debug(
+            f"Node lookup: {len(node_map)} total nodes, "
+            f"{nodes_with_coords} with coordinates"
+        )
+        
         # Drivable road types
         drivable_types = {
             'motorway', 'motorway_link',
@@ -237,18 +249,36 @@ class TileDownloadHandler:
             'living_street', 'service'
         }
         
+        # Debug: collect highway types and filter reasons
+        highway_types = {}
+        filter_stats = {
+            "total": 0,
+            "passed_highway": 0,
+            "no_nodes": 0,
+            "no_coords": 0,
+            "success": 0
+        }
+        
         for idx, way in enumerate(ways, start=1):
+            filter_stats["total"] += 1
+            
             osm_id = way.get("id")
             tags = way.get("tags", {})
             highway = tags.get("highway")
+            
+            # Debug: count highway types
+            highway_types[highway] = highway_types.get(highway, 0) + 1
             
             # Filter: only drivable roads
             if highway not in drivable_types:
                 continue
             
+            filter_stats["passed_highway"] += 1
+            
             # Build LineString from nodes
             nodes = way.get("nodes", [])
             if len(nodes) < 2:
+                filter_stats["no_nodes"] += 1
                 continue
             
             # Get node coordinates
@@ -259,7 +289,10 @@ class TileDownloadHandler:
                     node_coords.append([node["lon"], node["lat"]])
             
             if len(node_coords) < 2:
+                filter_stats["no_coords"] += 1
                 continue
+            
+            filter_stats["success"] += 1
             
             # Build geometry as LineString
             geom_json = {
@@ -290,6 +323,17 @@ class TileDownloadHandler:
                     progress,
                     items_processed=idx
                 )
+        
+        # Debug: log highway type distribution and filter stats
+        logger.debug(
+            f"Highway types in downloaded data: {highway_types}"
+        )
+        logger.debug(
+            f"Filter stats: {filter_stats}"
+        )
+        logger.debug(
+            f"Final result: {saved_count}/{total_ways} ways passed all filters"
+        )
         
         # Batch insert
         if batch_data:

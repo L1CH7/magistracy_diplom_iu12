@@ -45,4 +45,4 @@ retry:
 #
 # TRADE-OFF: larger tiles = fewer requests, faster overall, but single request timeout risk
 #            smaller tiles = more requests, better progress, but fragmentation artifacts in MapLibre
-tile_size_degrees: 0.2  # 22km tiles (RECOMMENDED)
+tile_size_degrees: 0.05  # 22km tiles (RECOMMENDED)

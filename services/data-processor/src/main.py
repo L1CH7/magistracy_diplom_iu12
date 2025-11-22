@@ -28,7 +28,7 @@ from src.db.pool import DatabasePool
 from src.state.task_manager import TaskManager
 from src.handlers.tile_download import TileDownloadHandler
 from src.handlers.mvt import MVTHandler
-from src.api import status, tiles
+from src.api import status, tiles, debug
 
 
 # ==================== Configuration ====================
@@ -160,6 +160,7 @@ app.add_middleware(
 # Mount routers
 app.include_router(status.router)
 app.include_router(tiles.router)
+app.include_router(debug.router)
 
 
 # ==================== Health Check ====================

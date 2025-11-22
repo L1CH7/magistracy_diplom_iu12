@@ -3,7 +3,8 @@ Tiles API - tile management endpoints.
 
 Endpoints:
 - POST /api/v1/tiles/download - download single tile
-- POST /api/v1/tiles/{tile_key}/redownload - force redownload
+- POST /api/v1/tiles/redownload?west=...&south=...&east=...&north=...
+        - force redownload bbox area
 - GET /api/v1/tiles/{z}/{x}/{y}.mvt - get MVT tile
 """
 
@@ -57,51 +58,44 @@ async def download_tile(lon: float, lat: float, bbox_size: float = 0.2):
     }
 
 
-@router.post("/{tile_key}/redownload")
-async def redownload_tile(tile_key: str):
+@router.post("/redownload")
+async def redownload_bbox(
+    west: float,
+    south: float,
+    east: float,
+    north: float
+):
     """
-    Force redownload of specific tile.
+    Force redownload of specific bbox area.
     
     Args:
-        tile_key: Tile identifier (e.g. "37.60_55.75")
+        west: Western longitude boundary
+        south: Southern latitude boundary
+        east: Eastern longitude boundary
+        north: Northern latitude boundary
     
     Returns:
-        {"status": "redownload_started"}
+        {"status": "redownload_started", "bbox": [...]}
     """
-    from ..db.queries import parse_tile_key, OSMQueries
+    # Создаём bbox tuple
+    bbox = (west, south, east, north)
     
-    # Parse tile key
-    tile_tuple = parse_tile_key(tile_key)
-    if not tile_tuple:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid tile_key format. Expected: 'lon_lat'"
-        )
+    # tile_key = левый нижний угол bbox
+    tile_key = (west, south)
     
-    # Reset tile status in DB
-    async with router.tile_handler.db.acquire() as conn:
-        result = await conn.fetchval(
-            OSMQueries.RESET_TILE_FOR_REDOWNLOAD,
-            tile_key
-        )
-        
-        if not result:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Tile {tile_key} not found"
-            )
-    
-    # Start download
-    lon, lat = tile_tuple
-    bbox = (lon, lat, lon + 0.2, lat + 0.2)
-    
+    # Запускаем загрузку одного тайла
     asyncio.create_task(
-        router.tile_handler.download_tile(tile_tuple, bbox)
+        router.tile_handler.download_tile(tile_key, bbox)
     )
     
     return {
         "status": "redownload_started",
-        "tile_key": tile_key
+        "bbox": {
+            "west": west,
+            "south": south,
+            "east": east,
+            "north": north
+        }
     }
 
 

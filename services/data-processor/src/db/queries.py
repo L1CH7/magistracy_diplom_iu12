@@ -28,8 +28,7 @@ class OSMQueries:
             highway = EXCLUDED.highway,
             name = EXCLUDED.name,
             lanes = EXCLUDED.lanes,
-            maxspeed = EXCLUDED.maxspeed,
-            updated_at = NOW()
+            maxspeed = EXCLUDED.maxspeed
     """
     
     COUNT_WAYS_IN_BBOX = """
