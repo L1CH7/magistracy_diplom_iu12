@@ -1,8 +1,83 @@
 # Map Configuration
-# Main config file with includes for LOD and rendering
+# Complete configuration for MapLibre GL map client
 
 # LOD (Level of Detail) layers - 4-layer progressive system
 lod: !include map.lod.yaml
 
 # Rendering configuration - colors, widths, highway groups
 rendering: !include map.rendering.yaml
+
+# Initial map view settings
+initial:
+  center: [37.6173, 55.7558]  # Moscow center [lon, lat]
+  zoom: 12
+  minZoom: 0
+  maxZoom: 19
+
+# Background color
+background_color: '#f3f4f6'  # Light gray
+
+# Width multipliers by lane count
+width_by_lanes:
+  1: 1.0
+  2: 1.5
+  3: 2.0
+  4: 2.5
+  5: 3.0
+  6: 3.5
+
+# Route visualization styles
+routes:
+  defaultColor: '#2563eb'  # Blue
+  width: 3
+
+# K-routes (alternative routes) styles
+k_routes:
+  inactive:
+    color: '#94a3b8'  # Gray
+    width: 3
+    opacity: 0.6
+  selected:
+    color: '#3b82f6'  # Blue
+    width: 5
+    opacity: 1.0
+  assigned:
+    color: '#22c55e'  # Green
+    width: 5
+    opacity: 1.0
+
+# Marker styles
+markers:
+  agent:
+    size: 16
+    color: '#22c55e'  # Green
+    borderColor: '#065f46'  # Dark green
+    borderWidth: 2
+  start:
+    size: 16
+    color: '#ffffff'  # White
+    borderColor: '#2563eb'  # Blue
+    borderWidth: 2
+  end:
+    size: 16
+    color: '#ffffff'  # White
+    borderColor: '#dc2626'  # Red
+    borderWidth: 2
+  via:
+    size: 10
+    borderColor: '#000000'  # Black
+    borderWidth: 2
+
+# Animation parameters
+animation:
+  agentSmoothing: 0.25  # Lerp alpha for agent movement
+  maxFrameDelta: 0.05   # Max seconds per animation frame
+  zoomDuration: 200     # Milliseconds
+  fitBoundsPadding: 40  # Pixels
+  fitBoundsDuration: 400  # Milliseconds
+  fitBoundsMaxZoom: 16
+
+# Tile configuration
+tiles:
+  tileSize: 256
+  defaultUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'

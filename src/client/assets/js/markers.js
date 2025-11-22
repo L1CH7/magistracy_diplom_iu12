@@ -2,7 +2,7 @@
  * Marker management - creation and styling of map markers.
  */
 
-import { MAP_CONFIG } from './map-config.js';
+import { getMapConfig } from './map-config-loader.js';
 
 /**
  * Create marker element based on type and color.
@@ -15,6 +15,12 @@ export function createMarkerElement(type, color = null) {
   // Normalize type: 'from' → 'start', 'to' → 'end'
   if (type === 'from') type = 'start';
   if (type === 'to') type = 'end';
+  
+  const MAP_CONFIG = getMapConfig();
+  if (!MAP_CONFIG) {
+    console.warn('[markers] Config not loaded yet');
+    return el;
+  }
   
   const cfg = MAP_CONFIG.markers[type];
 
@@ -80,5 +86,6 @@ export function getMarkerColor(type, point) {
   }
   
   console.warn(`Unknown marker type: ${type}`);
-  return MAP_CONFIG.markers[type]?.color || '#8b5cf6';
+  const MAP_CONFIG = getMapConfig();
+  return MAP_CONFIG?.markers[type]?.color || '#8b5cf6';
 }

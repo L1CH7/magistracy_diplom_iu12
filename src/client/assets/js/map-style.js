@@ -1,8 +1,10 @@
 /**
  * MapLibre style builder - creates MapLibre GL style object from config.
+ * 
+ * Config is loaded from configs/client/map.yaml via Python bridge.
  */
 
-import { MAP_CONFIG } from './map-config.js';
+import { getMapConfig } from './map-config-loader.js';
 
 /**
  * Build MapLibre expression for graph line colors based on OSM highway type.
@@ -91,6 +93,11 @@ function buildGraphWidthExpression() {
  * @param {string} tileUrl - URL template for raster tiles
  */
 export function createMapStyle(tileUrl) {
+  const MAP_CONFIG = getMapConfig();
+  if (!MAP_CONFIG) {
+    throw new Error('[map-style] Config not loaded! Call loadMapConfig() first');
+  }
+
   return {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',

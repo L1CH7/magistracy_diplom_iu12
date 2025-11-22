@@ -2,7 +2,7 @@
  * Agent animation - smooth movement of agent marker.
  */
 
-import { MAP_CONFIG } from './map-config.js';
+import { getMapConfig } from './map-config-loader.js';
 import { createMarkerElement } from './markers.js';
 
 export class AgentAnimator {
@@ -12,6 +12,7 @@ export class AgentAnimator {
     this.agentTarget = null;  // [lng, lat]
     this.currentBearing = 0;  // degrees, 0=North
     this.lastFrame = 0;
+    this.MAP_CONFIG = getMapConfig();  // Load config once
     
     // Create agent marker
     const el = createMarkerElement('agent');
@@ -57,17 +58,17 @@ export class AgentAnimator {
   }
 
   animate(timestamp) {
-    if (!this.agentCur || !this.agentTarget || !this.map) {
+    if (!this.agentCur || !this.agentTarget || !this.map || !this.MAP_CONFIG) {
       return;
     }
 
     const dt = Math.min(
       (timestamp - this.lastFrame) / 1000,
-      MAP_CONFIG.animation.maxFrameDelta
+      this.MAP_CONFIG.animation.maxFrameDelta
     );
     this.lastFrame = timestamp;
 
-    const alpha = MAP_CONFIG.animation.agentSmoothing;
+    const alpha = this.MAP_CONFIG.animation.agentSmoothing;
     const next = [
       this._lerp(this.agentCur[0], this.agentTarget[0], alpha),
       this._lerp(this.agentCur[1], this.agentTarget[1], alpha),

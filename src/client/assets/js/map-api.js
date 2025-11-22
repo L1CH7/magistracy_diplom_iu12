@@ -2,7 +2,7 @@
  * Map API - public interface for PyQt interaction.
  */
 
-import { MAP_CONFIG } from './map-config.js';
+import { getMapConfig } from './map-config-loader.js';
 
 export class MapAPI {
   constructor(map, pointsManager, agentAnimator) {
@@ -14,6 +14,7 @@ export class MapAPI {
     this._assignedRouteId = null;  // Agent's assigned route (green)
     this._assignedRouteFeature = null;  // Saved assigned route feature
     this._currentRouteIds = new Set();  // Track route IDs from last displayRoutes()
+    this.MAP_CONFIG = getMapConfig();  // Load config once
   }
 
   setGraphGeoJSON(geojson) {
@@ -45,9 +46,9 @@ export class MapAPI {
       this.map.fitBounds(
         [[minX, minY], [maxX, maxY]],
         {
-          padding: MAP_CONFIG.animation.fitBoundsPadding,
-          duration: MAP_CONFIG.animation.fitBoundsDuration,
-          maxZoom: MAP_CONFIG.animation.fitBoundsMaxZoom,
+          padding: this.MAP_CONFIG.animation.fitBoundsPadding,
+          duration: this.MAP_CONFIG.animation.fitBoundsDuration,
+          maxZoom: this.MAP_CONFIG.animation.fitBoundsMaxZoom,
         }
       );
     }
@@ -59,7 +60,7 @@ export class MapAPI {
       type: 'Feature',
       properties: {
         id: r.id ?? '',
-        color: r.color ?? MAP_CONFIG.layers.routes.defaultColor,
+        color: r.color ?? this.MAP_CONFIG.layers.routes.defaultColor,
       },
       geometry: { type: 'LineString', coordinates: r.coords },
     }));
@@ -142,13 +143,13 @@ export class MapAPI {
   // Zoom API
   zoomIn() {
     if (this.map) {
-      this.map.zoomIn({ duration: MAP_CONFIG.animation.zoomDuration });
+      this.map.zoomIn({ duration: this.MAP_CONFIG.animation.zoomDuration });
     }
   }
 
   zoomOut() {
     if (this.map) {
-      this.map.zoomOut({ duration: MAP_CONFIG.animation.zoomDuration });
+      this.map.zoomOut({ duration: this.MAP_CONFIG.animation.zoomDuration });
     }
   }
 
