@@ -269,10 +269,19 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         // Wait for existing QWebChannel to initialize (from map-main.js)
         // Don't create new QWebChannel - reuse the existing one
         function waitForChannel(attempts = 0) {
-            const hasChannel = (
-                window.qt && window.qt.webChannelTransport
-                && window.globalChannel
-            );
+            // Check if QWebChannel transport is available
+            if (!window.qt || !window.qt.webChannelTransport) {
+                if (attempts < 100) {
+                    // Wait for Qt transport (setWebChannel() from Python)
+                    setTimeout(() => waitForChannel(attempts + 1), 50);
+                } else {
+                    console.error('Timeout: Qt WebChannel transport not available');
+                }
+                return;
+            }
+            
+            // Transport is ready, check if map-main.js initialized the channel
+            const hasChannel = window.globalChannel;
             if (hasChannel) {
                 // Channel already initialized in map-main.js
                 const bridge = window.globalChannel.objects.points_bridge;
@@ -287,11 +296,11 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
                 };
                 
                 console.log('Points bridge connected to existing channel');
-            } else if (attempts < 20) {
-                // Wait for map-main.js to initialize channel
+            } else if (attempts < 100) {
+                // Wait for map-main.js to initialize channel (after qwebchannel.js loads)
                 setTimeout(() => waitForChannel(attempts + 1), 50);
             } else {
-                console.error('Timeout waiting for global WebChannel');
+                console.error('Timeout: global WebChannel not initialized by map-main.js');
             }
         }
         

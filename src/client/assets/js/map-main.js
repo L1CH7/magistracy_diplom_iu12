@@ -7,7 +7,7 @@ import { createMapStyle } from './map-style.js';
 import { PointsManager } from './points-manager.js';
 import { AgentAnimator } from './agent-animator.js';
 import { MapAPI } from './map-api.js';
-import { startMVTRefresh } from './mvt-refresh.js';
+import { connectDataProcessorWS } from './data-ws-client.js';
 
 let mapInitialized = false;
 let map = null;
@@ -92,6 +92,10 @@ export async function initializeMap() {
   // Map load event for additional initialization
   map.on('load', () => {
     logToPython('[MAP] Tiles loaded successfully');
+    
+    // Connect to Data Processor WebSocket AFTER map is fully ready
+    console.log('[map-main.js] Connecting to Data Processor WebSocket...');
+    connectDataProcessorWS();
   });
 
   // Zoom events (using global channel)
@@ -109,115 +113,8 @@ export async function initializeMap() {
     }
   });
 
-  // Right-click context menu
-  map.getCanvas().addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    lastContextMenuPos = map.unproject([e.clientX, e.clientY]);
-    window.lastContextMenuPos = lastContextMenuPos;
-    console.log('Right-click at:', lastContextMenuPos);
-    
-    // Debug mode: redownload tile on right-click
-    if (window.redownloadTileAt && typeof window.redownloadTileAt === 'function') {
-      const debugActive = window.debugEnabled && window.debugLayersVisible;
-      if (debugActive) {
-        if (window.debugConfig) {
-          const TILE_SIZE = window.debugConfig.tile_size_degrees;
-          const lon = lastContextMenuPos.lng;
-          const lat = lastContextMenuPos.lat;
-          const tileX = Math.floor(lon / TILE_SIZE) * TILE_SIZE;
-          const tileY = Math.floor(lat / TILE_SIZE) * TILE_SIZE;
-          const tileBbox = {
-            west: tileX,
-            south: tileY,
-            east: tileX + TILE_SIZE,
-            north: tileY + TILE_SIZE
-          };
-          
-          // Highlight tile
-          if (!map.getSource('debug-highlight-tile')) {
-            map.addSource('debug-highlight-tile', {
-              type: 'geojson',
-              data: {
-                type: 'Feature',
-                geometry: {
-                  type: 'Polygon',
-                  coordinates: [[
-                    [tileBbox.west, tileBbox.south],
-                    [tileBbox.east, tileBbox.south],
-                    [tileBbox.east, tileBbox.north],
-                    [tileBbox.west, tileBbox.north],
-                    [tileBbox.west, tileBbox.south]
-                  ]]
-                }
-              }
-            });
-            
-            map.addLayer({
-              id: 'debug-highlight-tile-fill',
-              type: 'fill',
-              source: 'debug-highlight-tile',
-              paint: {
-                'fill-color': '#ff0000',
-                'fill-opacity': 0.3
-              }
-            });
-            
-            map.addLayer({
-              id: 'debug-highlight-tile-border',
-              type: 'line',
-              source: 'debug-highlight-tile',
-              paint: {
-                'line-color': '#ff0000',
-                'line-width': 2
-              }
-            });
-          } else {
-            map.getSource('debug-highlight-tile').setData({
-              type: 'Feature',
-              geometry: {
-                type: 'Polygon',
-                coordinates: [[
-                  [tileBbox.west, tileBbox.south],
-                  [tileBbox.east, tileBbox.south],
-                  [tileBbox.east, tileBbox.north],
-                  [tileBbox.west, tileBbox.north],
-                  [tileBbox.west, tileBbox.south]
-                ]]
-              }
-            });
-          }
-          
-          const confirmed = confirm(
-            `Redownload tile bbox?\n\n` +
-            `West: ${tileBbox.west.toFixed(4)}°\n` +
-            `South: ${tileBbox.south.toFixed(4)}°\n` +
-            `East: ${tileBbox.east.toFixed(4)}°\n` +
-            `North: ${tileBbox.north.toFixed(4)}°\n\n` +
-            'This will force re-fetch OSM data for this tile.'
-          );
-          
-          // Remove highlight
-          if (map.getLayer('debug-highlight-tile-fill')) {
-            map.removeLayer('debug-highlight-tile-fill');
-          }
-          if (map.getLayer('debug-highlight-tile-border')) {
-            map.removeLayer('debug-highlight-tile-border');
-          }
-          if (map.getSource('debug-highlight-tile')) {
-            map.removeSource('debug-highlight-tile');
-          }
-          
-          if (confirmed) {
-            window.redownloadTileAt(lon, lat);
-          }
-        }
-      }
-    }
-    
-    if (window.onMapContextMenu) {
-      window.onMapContextMenu(lastContextMenuPos);
-    }
-  });
+  // NOTE: Right-click context menu listener moved to setupEventListeners()
+  // to avoid duplicate event registration
 }
 
 function setupEventListeners() {

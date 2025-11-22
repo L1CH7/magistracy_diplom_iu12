@@ -99,6 +99,9 @@ class TileDownloadHandler:
                 total_ways
             )
             
+            # Broadcast WebSocket event: ways updated
+            await self._broadcast_ways_updated()
+            
             # Mark as complete
             await self._update_tile_status(
                 tile_str, "complete", saved_count, ""  # Empty string not None
@@ -404,3 +407,21 @@ class TileDownloadHandler:
                 f"Failed to update tile {tile_key}: {e}"
             )
             raise
+    
+    async def _broadcast_ways_updated(self) -> None:
+        """Broadcast WebSocket event: ways updated."""
+        try:
+            # Query current way count
+            async with self.db.acquire() as conn:
+                count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM osm.ways"
+                )
+            
+            # Broadcast to all connected WebSocket clients
+            from src.api.websocket import broadcast_ways_updated
+            await broadcast_ways_updated(count)
+            
+            logger.info(f"Broadcasted ways_updated: {count} ways")
+            
+        except Exception as e:
+            logger.error(f"Failed to broadcast ways_updated: {e}")

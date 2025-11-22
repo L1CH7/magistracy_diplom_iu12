@@ -27,7 +27,7 @@ from src.db.pool import DatabasePool
 from src.state.task_manager import TaskManager
 from src.handlers.tile_download import TileDownloadHandler
 from src.handlers.mvt import MVTHandler
-from src.api import status, tiles, debug
+from src.api import status, tiles, debug, websocket
 
 
 # ==================== Configuration ====================
@@ -158,6 +158,7 @@ app.add_middleware(
 
 # Mount routers
 app.include_router(status.router)
+app.include_router(websocket.router)
 app.include_router(tiles.router)
 app.include_router(debug.router)
 
@@ -199,6 +200,7 @@ async def root():
             "tasks": "/api/v1/tasks",
             "download": "POST /api/v1/tiles/download",
             "mvt": "/api/v1/tiles/{z}/{x}/{y}.mvt",
+            "websocket": "/ws/data_updates",
             "health": "/health"
         }
     }

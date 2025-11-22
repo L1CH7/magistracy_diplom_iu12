@@ -511,22 +511,42 @@ export class MapAPI {
   refreshMVTTiles() {
     const source = this.map.getSource('graph-vector');
     if (!source) {
-      console.warn('graph-vector source not found');
+      console.warn('[MVT] graph-vector source not found');
       return;
     }
     
-    // Remove and re-add source to force cache invalidation
+    // Force cache invalidation by removing and re-adding source
+    // Step 1: Find all layers using this source
+    const layersToRestore = [];
+    const style = this.map.getStyle();
+    style.layers.forEach(layer => {
+      if (layer.source === 'graph-vector') {
+        layersToRestore.push(layer);
+      }
+    });
+    
+    // Step 2: Remove layers (required before removing source)
+    layersToRestore.forEach(layer => {
+      this.map.removeLayer(layer.id);
+    });
+    
+    // Step 3: Remove and re-add source with cache-busting parameter
+    this.map.removeSource('graph-vector');
+    const cacheBuster = Date.now();
     const sourceDef = {
       type: 'vector',
-      tiles: ['http://localhost:8005/api/v1/tiles/{z}/{x}/{y}.mvt'],
+      tiles: [`http://localhost:8005/api/v1/tiles/{z}/{x}/{y}.mvt?v=${cacheBuster}`],
       minzoom: 0,
       maxzoom: 18
     };
-    
-    this.map.removeSource('graph-vector');
     this.map.addSource('graph-vector', sourceDef);
     
-    console.log('[MVT] Tiles refreshed - cache invalidated');
+    // Step 4: Re-add layers
+    layersToRestore.forEach(layer => {
+      this.map.addLayer(layer);
+    });
+    
+    console.log(`[MVT] Tiles refreshed with cache-buster: v=${cacheBuster}`);
   }
 
   // Deprecated/stub methods for compatibility
