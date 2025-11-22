@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.append(str(Path(__file__).parents[2]))
+# Add service root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.manager import SimulationManager  # noqa: E402
 

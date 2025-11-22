@@ -8,8 +8,8 @@ Tests the routing system with Arbat graph data.
 import sys
 from pathlib import Path
 
-# Add src to path  # noqa: E402
-sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to path  # noqa: E402
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.routing.graph import Graph  # noqa: E402
 from src.routing.route_builder import build_routes  # noqa: E402

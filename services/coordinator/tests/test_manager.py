@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.append(str(Path(__file__).parents[1]))
+# Add service root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.manager import CoordinatorManager  # noqa: E402
 

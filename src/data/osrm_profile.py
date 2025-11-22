@@ -36,8 +36,8 @@ class CarProfile:
         """
         if config_path is None:
             # Default to project root configs/routing/car_profile.yaml
-            project_root = Path(__file__).parent.parent.parent
-            config_path = project_root / "configs" / "routing" / "car_profile.yaml"
+            from src.utils.project_root import PROJECT_ROOT
+            config_path = PROJECT_ROOT / "configs" / "routing" / "car_profile.yaml"
         
         self._load_config(config_path)
         log.info(

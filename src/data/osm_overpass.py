@@ -12,10 +12,8 @@ def _load_overpass_config() -> dict:
     config_path = Path("/app/configs/data-processor/overpass.yaml")
     if not config_path.exists():
         # Try local dev path
-        config_path = (
-            Path(__file__).parent.parent.parent
-            / "configs" / "data-processor" / "overpass.yaml"
-        )
+        from src.utils.project_root import PROJECT_ROOT
+        config_path = PROJECT_ROOT / "configs" / "data-processor" / "overpass.yaml"
     
     if config_path.exists():
         with open(config_path, 'r') as f:

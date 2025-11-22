@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 
-sys.path.append(str(Path(__file__).parents[1]))
+# Add service root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.main import app  # noqa: E402
 

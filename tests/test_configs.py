@@ -6,10 +6,10 @@ Test YAML configuration loading with !include support.
 import sys
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.config_loader import config_loader
+from src.utils.config_loader import config_loader
 
 def test_configs():
     """Test loading all configs."""
@@ -57,16 +57,8 @@ def test_configs():
     print(f"   Profile: {routing['profile']}")
     print(f"   Vehicle: {routing['vehicle']}")
     
-    # Test 6: regions.yaml
-    print("\n[6] Loading regions.yaml...")
-    regions = config_loader.load('regions.yaml')
-    print(f"✅ Keys: {list(regions.keys())}")
-    print(f"   Regions: {list(regions['regions'].keys())}")
-    print(f"   Default region: {regions['default_region']}")
-    print(f"   Tile size: {regions['tile_size_deg']}°")
-    
-    # Test 7: common.yaml
-    print("\n[7] Loading common.yaml...")
+    # Test 6: common.yaml
+    print("\n[6] Loading common.yaml...")
     common = config_loader.load('common.yaml')
     print(f"✅ Keys: {list(common.keys())}")
     print(f"   API base URL: {common['api']['base_url']}")

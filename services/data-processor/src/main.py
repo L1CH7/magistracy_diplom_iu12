@@ -17,9 +17,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-# Add project root to path
-root_path = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(root_path))
+# Add project root to path (need src.* imports)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from src.utils.loguru_config import configure_loguru
 

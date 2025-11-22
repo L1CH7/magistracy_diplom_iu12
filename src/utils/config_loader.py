@@ -74,8 +74,8 @@ class ConfigLoader:
             return container_path
         
         # Fall back to project root
-        project_root = Path(__file__).parent.parent.parent
-        config_path = project_root / 'configs'
+        from src.utils.project_root import PROJECT_ROOT
+        config_path = PROJECT_ROOT / 'configs'
         
         if not config_path.exists():
             raise FileNotFoundError(
