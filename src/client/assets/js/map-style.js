@@ -143,7 +143,7 @@ export function createMapStyle(tileUrl) {
         'source-layer': 'ways',
         minzoom: 0,
         maxzoom: 10,
-        filter: ['in', 'highway', 'motorway', 'motorway_link'],
+        filter: ['in', 'highway', 'motorway', 'motorway_link', 'trunk', 'trunk_link'],
         paint: {
           'line-color': '#1e40af',
           'line-width': [

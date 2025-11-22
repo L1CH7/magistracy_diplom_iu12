@@ -30,10 +30,89 @@ async def init_tiles_api(
     router.mvt_handler = mvt_handler
 
 
+def _clip_bbox_to_default(
+    west: float,
+    south: float,
+    east: float,
+    north: float
+) -> dict:
+    """
+    Clip requested bbox to default_bbox from bboxes.yaml.
+    
+    Returns intersection (requested ∩ default_bbox).
+    
+    Returns:
+        {
+            "clipped_bbox": (west, south, east, north),
+            "was_clipped": bool,
+            "default_bbox_name": str,
+            "original_bbox": (west, south, east, north) or None
+        }
+    
+    Raises:
+        HTTPException: If no intersection or invalid config
+    """
+    import yaml
+    from pathlib import Path
+    from fastapi import HTTPException
+    
+    # Load default_bbox from bboxes.yaml
+    config_path = Path("/app/configs/data-processor/bboxes.yaml")
+    with open(config_path, 'r') as f:
+        bboxes_config = yaml.safe_load(f)
+    
+    default_bbox_name = bboxes_config.get('default', 'moscow_mkad')
+    bbox_data = bboxes_config.get(default_bbox_name, {})
+    default_coords = bbox_data.get('coords')
+    
+    if not default_coords or len(default_coords) != 4:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invalid default bbox config: {default_bbox_name}"
+        )
+    
+    # default_bbox = (west, south, east, north)
+    def_west, def_south, def_east, def_north = default_coords
+    
+    # Compute intersection: requested ∩ default_bbox
+    clipped_west = max(west, def_west)
+    clipped_south = max(south, def_south)
+    clipped_east = min(east, def_east)
+    clipped_north = min(north, def_north)
+    
+    # Check if intersection is valid (non-empty)
+    if clipped_west >= clipped_east or clipped_south >= clipped_north:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Requested bbox does not intersect default_bbox "
+                f"({default_bbox_name}): "
+                f"[{def_west}, {def_south}, {def_east}, {def_north}]"
+            )
+        )
+    
+    # Check if bbox was clipped
+    was_clipped = (
+        clipped_west != west or clipped_south != south or
+        clipped_east != east or clipped_north != north
+    )
+    
+    return {
+        "clipped_bbox": (clipped_west, clipped_south, clipped_east, clipped_north),
+        "was_clipped": was_clipped,
+        "default_bbox_name": default_bbox_name,
+        "default_coords": default_coords,
+        "original_bbox": (west, south, east, north) if was_clipped else None
+    }
+
+
 @router.post("/download")
 async def download_tile(lon: float, lat: float, bbox_size: float = 0.2):
     """
     Start tile download in background.
+    
+    CLIPS requested bbox to default_bbox from bboxes.yaml config.
+    Only downloads intersection (requested ∩ default_bbox).
     
     Args:
         lon: Tile longitude (SW corner)
@@ -41,21 +120,50 @@ async def download_tile(lon: float, lat: float, bbox_size: float = 0.2):
         bbox_size: Tile size in degrees (default 0.2)
     
     Returns:
-        {"status": "started", "tile_key": "..."}
+        {"status": "started", "tile_key": "...", "bbox": {...}, "clipped": bool}
     """
-    tile_key = (lon, lat)
-    bbox = (lon, lat, lon + bbox_size, lat + bbox_size)
+    # Compute initial bbox
+    west, south = lon, lat
+    east, north = lon + bbox_size, lat + bbox_size
+    
+    # Clip to default_bbox
+    clip_result = _clip_bbox_to_default(west, south, east, north)
+    clipped_bbox = clip_result["clipped_bbox"]
+    was_clipped = clip_result["was_clipped"]
+    
+    # Use clipped bbox for download
+    tile_key = (clipped_bbox[0], clipped_bbox[1])
     
     # Start download in background
     asyncio.create_task(
-        router.tile_handler.download_tile(tile_key, bbox)
+        router.tile_handler.download_tile(tile_key, clipped_bbox)
     )
     
-    return {
+    result = {
         "status": "started",
-        "tile_key": f"{lon:.2f}_{lat:.2f}",
-        "bbox": bbox
+        "tile_key": f"{clipped_bbox[0]:.2f}_{clipped_bbox[1]:.2f}",
+        "bbox": {
+            "west": clipped_bbox[0],
+            "south": clipped_bbox[1],
+            "east": clipped_bbox[2],
+            "north": clipped_bbox[3]
+        },
+        "clipped": was_clipped
     }
+    
+    if was_clipped:
+        result["original_bbox"] = {
+            "west": west,
+            "south": south,
+            "east": east,
+            "north": north
+        }
+        result["message"] = (
+            f"Bbox clipped to {clip_result['default_bbox_name']} "
+            f"{clip_result['default_coords']}"
+        )
+    
+    return result
 
 
 @router.post("/redownload")
@@ -68,6 +176,11 @@ async def redownload_bbox(
     """
     Force redownload of specific bbox area.
     
+    CLIPS requested bbox to default_bbox from bboxes.yaml config.
+    Only downloads intersection (requested ∩ default_bbox).
+    
+    Uses same _clip_bbox_to_default() logic as /download endpoint.
+    
     Args:
         west: Western longitude boundary
         south: Southern latitude boundary
@@ -75,28 +188,45 @@ async def redownload_bbox(
         north: Northern latitude boundary
     
     Returns:
-        {"status": "redownload_started", "bbox": [...]}
+        {"status": "redownload_started", "bbox": {...}, "clipped": bool}
     """
-    # Создаём bbox tuple
-    bbox = (west, south, east, north)
+    # Clip to default_bbox (same logic as /download)
+    clip_result = _clip_bbox_to_default(west, south, east, north)
+    clipped_bbox = clip_result["clipped_bbox"]
+    was_clipped = clip_result["was_clipped"]
     
-    # tile_key = левый нижний угол bbox
-    tile_key = (west, south)
+    # Use clipped bbox for download
+    tile_key = (clipped_bbox[0], clipped_bbox[1])
     
-    # Запускаем загрузку одного тайла
+    # Запускаем загрузку (same as /download)
     asyncio.create_task(
-        router.tile_handler.download_tile(tile_key, bbox)
+        router.tile_handler.download_tile(tile_key, clipped_bbox)
     )
     
-    return {
+    result = {
         "status": "redownload_started",
         "bbox": {
+            "west": clipped_bbox[0],
+            "south": clipped_bbox[1],
+            "east": clipped_bbox[2],
+            "north": clipped_bbox[3]
+        },
+        "clipped": was_clipped
+    }
+    
+    if was_clipped:
+        result["original_bbox"] = {
             "west": west,
             "south": south,
             "east": east,
             "north": north
         }
-    }
+        result["message"] = (
+            f"Bbox clipped to {clip_result['default_bbox_name']} "
+            f"{clip_result['default_coords']}"
+        )
+    
+    return result
 
 
 @router.get("/{z}/{x}/{y}.mvt")
