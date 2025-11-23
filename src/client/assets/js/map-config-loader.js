@@ -39,14 +39,11 @@ export async function loadMapConfig() {
         
         // Transform YAML config to JS MAP_CONFIG format
         MAP_CONFIG = transformConfig(rawConfig);
-        console.log('[map-config-loader] Config loaded from YAML:', MAP_CONFIG);
         resolve(MAP_CONFIG);
       } catch (error) {
-        console.error('[map-config-loader] Failed to parse config:', error);
         reject(error);
       }
     }).catch(error => {
-      console.error('[map-config-loader] Failed to load config:', error);
       reject(error);
     });
   });
@@ -116,5 +113,3 @@ function transformConfig(yaml) {
 export function getMapConfig() {
   return MAP_CONFIG;
 }
-
-console.log('[map-config-loader] Module loaded');

@@ -60,7 +60,7 @@ export class MapAPI {
       type: 'Feature',
       properties: {
         id: r.id ?? '',
-        color: r.color ?? this.MAP_CONFIG.layers.routes.defaultColor,
+        color: r.color ?? this.MAP_CONFIG.routes.defaultColor,
       },
       geometry: { type: 'LineString', coordinates: r.coords },
     }));

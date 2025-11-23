@@ -52,14 +52,11 @@ def _clip_bbox_to_default(
     Raises:
         HTTPException: If no intersection or invalid config
     """
-    import yaml
-    from pathlib import Path
     from fastapi import HTTPException
+    from src.utils.config_loader import config_loader
     
     # Load default_bbox from bboxes.yaml
-    config_path = Path("/app/configs/data-processor/bboxes.yaml")
-    with open(config_path, 'r') as f:
-        bboxes_config = yaml.safe_load(f)
+    bboxes_config = config_loader.load('data-processor/bboxes.yaml')
     
     default_bbox_name = bboxes_config.get('default', 'moscow_mkad')
     bbox_data = bboxes_config.get(default_bbox_name, {})

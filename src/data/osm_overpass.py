@@ -3,24 +3,16 @@ import os
 from typing import Dict, Tuple, Optional
 import requests
 import time
-import yaml
-from pathlib import Path
+from src.utils.config_loader import config_loader
 
 
 def _load_overpass_config() -> dict:
     """Load Overpass config from configs/data-processor/overpass.yaml."""
-    config_path = Path("/app/configs/data-processor/overpass.yaml")
-    if not config_path.exists():
-        # Try local dev path
-        from src.utils.project_root import PROJECT_ROOT
-        config_path = PROJECT_ROOT / "configs" / "data-processor" / "overpass.yaml"
-    
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
-    
-    # Fallback to hardcoded defaults
-    return {
+    try:
+        return config_loader.load('data-processor/overpass.yaml')
+    except Exception:
+        # Fallback to hardcoded defaults
+        return {
         "server_priority": "ru",
         "primary_servers": [
             "https://maps.mail.ru/osm/tools/overpass/api/interpreter",

@@ -7,7 +7,38 @@ from loguru import logger as log
 
 
 class WebConsolePage(QWebEnginePage):
-    """Bridge JS console logs to Python output."""
+    """Bridge JS console logs to Python output with error interception."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.loadFinished.connect(self._inject_error_handler)
+
+    def _inject_error_handler(self):
+        """Inject global JS error handler to catch all errors."""
+        self.runJavaScript("""
+            (function() {
+                window.addEventListener('error', function(e) {
+                    console.error('[GLOBAL ERROR]', {
+                        message: e.message,
+                        filename: e.filename,
+                        lineno: e.lineno,
+                        colno: e.colno,
+                        stack: e.error ? e.error.stack : 'no stack'
+                    });
+                }, true);
+                
+                const originalEval = window.eval;
+                window.eval = function(code) {
+                    try {
+                        return originalEval(code);
+                    } catch(e) {
+                        const preview = code.substring(0, 80);
+                        console.error('[EVAL ERROR]', e.message, preview);
+                        throw e;
+                    }
+                };
+            })();
+        """)
 
     def javaScriptConsoleMessage(self, level: int, message: str,
                                  line_number: int, source_id: str):

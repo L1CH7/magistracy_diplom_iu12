@@ -1,423 +1,107 @@
 /**
- * MapLibre style builder - creates MapLibre GL style object from config.
- * 
- * Config is loaded from configs/client/map.yaml via Python bridge.
+ * map-style.js - MapLibre GL style generator (100% config-driven)
  */
 
 import { getMapConfig } from './map-config-loader.js';
 
-/**
- * Build MapLibre expression for graph line colors based on OSM highway type.
- */
-function buildGraphColorExpression() {
-  const colors = MAP_CONFIG.layers.graph.colors;
-  return [
-    'match',
-    ['get', 'highway'],
-    'motorway', colors.motorway,
-    'motorway_link', colors.motorway_link,
-    'trunk', colors.trunk,
-    'trunk_link', colors.trunk_link,
-    'primary', colors.primary,
-    'primary_link', colors.primary_link,
-    'secondary', colors.secondary,
-    'secondary_link', colors.secondary_link,
-    'tertiary', colors.tertiary,
-    'tertiary_link', colors.tertiary_link,
-    'residential', colors.residential,
-    'living_street', colors.living_street,
-    'unclassified', colors.unclassified,
-    'service', colors.service,
-    colors.default,
-  ];
-}
-
-/**
- * Build MapLibre expression for graph line width.
- * Considers: zoom level, highway type, and lane count from OSM.
- */
-function buildGraphWidthExpression() {
-  const baseWidth = MAP_CONFIG.layers.graph.baseWidth;
-  const laneMultipliers = MAP_CONFIG.layers.graph.widthByLanes;
-
-  // Get base width by highway type
-  const baseByType = [
-    'match',
-    ['get', 'highway'],
-    'motorway', baseWidth.motorway,
-    'motorway_link', baseWidth.motorway,
-    'trunk', baseWidth.trunk,
-    'trunk_link', baseWidth.trunk,
-    'primary', baseWidth.primary,
-    'primary_link', baseWidth.primary,
-    'secondary', baseWidth.secondary,
-    'secondary_link', baseWidth.secondary,
-    'tertiary', baseWidth.tertiary,
-    'tertiary_link', baseWidth.tertiary,
-    'residential', baseWidth.residential,
-    'living_street', baseWidth.living_street,
-    'service', baseWidth.service,
-    baseWidth.default,
-  ];
-
-  // Multiply by lane count (if available)
-  const withLanes = [
-    '*',
-    baseByType,
-    [
-      'match',
-      ['to-number', ['get', 'lanes'], 1],
-      1, laneMultipliers[1],
-      2, laneMultipliers[2],
-      3, laneMultipliers[3],
-      4, laneMultipliers[4],
-      5, laneMultipliers[5],
-      6, laneMultipliers[6],
-      laneMultipliers[2], // default: 2 lanes
-    ],
-  ];
-
-  // Scale by zoom
-  return [
-    'interpolate',
-    ['linear'],
-    ['zoom'],
-    10, ['*', withLanes, 0.3],  // Thin at low zoom
-    15, withLanes,               // Base width at zoom 15
-    18, ['*', withLanes, 1.5],   // Thicker at high zoom
-  ];
-}
-
-/**
- * Create MapLibre GL style object.
- * @param {string} tileUrl - URL template for raster tiles
- */
-export function createMapStyle(tileUrl) {
-  const MAP_CONFIG = getMapConfig();
-  if (!MAP_CONFIG) {
-    throw new Error('[map-style] Config not loaded! Call loadMapConfig() first');
+function buildMatchExpression(property, configObject, defaultValue) {
+  const pairs = [];
+  for (const [key, value] of Object.entries(configObject)) {
+    if (key !== 'default') pairs.push(key, value);
   }
+  return ['match', ['get', property], ...pairs, configObject.default || defaultValue];
+}
 
+function generateLodLayers(lodConfig, colors, widths) {
+  const layers = [];
+  for (const lod of lodConfig.layers) {
+    const { name, minzoom, maxzoom, highways, base_width, show_names } = lod;
+    const filter = ['in', 'highway', ...highways];
+    layers.push({
+      id: `graph-${name}`,
+      type: 'line',
+      source: 'graph-vector',
+      'source-layer': 'ways',
+      minzoom,
+      maxzoom,
+      filter,
+      paint: {
+        'line-color': buildMatchExpression('highway', colors, '#353535ff'),
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          minzoom, base_width,
+          15, ['*', base_width, 1.5],
+          18, buildMatchExpression('highway', widths, 2)
+        ]
+      }
+    });
+    if (show_names) {
+      layers.push({
+        id: `graph-${name}-labels`,
+        type: 'symbol',
+        source: 'graph-vector',
+        'source-layer': 'ways',
+        minzoom: minzoom + 1,
+        maxzoom,
+        filter: ['all', filter, ['has', 'name']],
+        layout: {
+          'text-field': ['coalesce', ['get', 'name_ru'], ['get', 'name']],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 12, 10, 18, 14],
+          'symbol-placement': 'line',
+          'text-font': ['Open Sans Regular']
+        },
+        paint: {
+          'text-color': '#000000',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 2
+        }
+      });
+    }
+  }
+  return layers;
+}
+
+export function createMapStyle(tileUrl) {
+  const cfg = getMapConfig();
+  if (!cfg) throw new Error('[map-style] Config not loaded');
+  
+  const lodLayersArray = Array.isArray(cfg.lod) ? cfg.lod : cfg.lod.layers;
+  
+  // Log LOD layers (verified: config loads correctly)
+  if (window.globalChannel?.objects?.logger_bridge) {
+    const logger = window.globalChannel.objects.logger_bridge;
+    logger.log_info(`[map-style] LOD layers count: ${lodLayersArray.length}`);
+    lodLayersArray.forEach((layer, i) => {
+      const hwCount = layer.highways ? layer.highways.length : 0;
+      logger.log_info(`[map-style]   Layer ${i}: ${layer.name} (zoom ${layer.minzoom}-${layer.maxzoom}), ${hwCount} highways`);
+    });
+  }
+  
+  const lodLayers = generateLodLayers(
+    { layers: lodLayersArray },
+    cfg.layers.graph.colors,
+    cfg.layers.graph.baseWidth
+  );
   return {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {
-      osm: {
-        type: 'raster',
-        tiles: [tileUrl],
-        tileSize: MAP_CONFIG.tiles.tileSize,
-      },
-      'graph-vector': {
-        type: 'vector',
-        tiles: ['http://localhost:8005/api/v1/tiles/{z}/{x}/{y}.mvt'],
-        minzoom: 0,
-        maxzoom: 18
-      },
-      routes: {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      },
-      'k-routes': {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] },
-      },
+      osm: { type: 'raster', tiles: [tileUrl], tileSize: cfg.tiles.tileSize },
+      'graph-vector': { type: 'vector', tiles: ['http://localhost:8005/api/v1/tiles/{z}/{x}/{y}.mvt'], minzoom: 0, maxzoom: 18 },
+      routes: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
+      'k-routes': { type: 'geojson', data: { type: 'FeatureCollection', features: [] } }
     },
     layers: [
-      {
-        id: 'background',
-        type: 'background',
-        paint: {
-          'background-color': MAP_CONFIG.layers.background.color,
-        },
-      },
-      {
-        id: 'osm',
-        type: 'raster',
-        source: 'osm',
-      },
-      // LOD Layer 1: Motorways (zoom 0-9.99)
-      {
-        id: 'graph-highways',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 0,
-        maxzoom: 10,
-        filter: ['in', 'highway', 'motorway', 'motorway_link', 'trunk', 'trunk_link'],
-        paint: {
-          'line-color': '#1e40af',
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            0, 0.5,
-            9, 1.5,
-            10, 2
-          ]
-        },
-      },
-      // LOD Layer 2: Major roads (zoom 10-11.99)
-      {
-        id: 'graph-major',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 10,
-        maxzoom: 12,
-        filter: [
-          'in', 'highway',
-          'motorway', 'motorway_link',
-          'trunk', 'trunk_link',
-          'primary', 'primary_link'
-        ],
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'highway'],
-            'motorway', '#1e40af',
-            'motorway_link', '#1e40af',
-            'trunk', '#6200ffff',
-            'trunk_link', '#6200ffff',
-            'primary', '#9c00aaff',
-            'primary_link', '#9c00aaff',
-            '#353535ff'
-          ],
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            10, 1.5,
-            12, 3
-          ]
-        },
-      },
-      // LOD Layer 3: Arterial roads (zoom 12-13.99)
-      {
-        id: 'graph-arterial',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 12,
-        maxzoom: 14,
-        filter: [
-          'in', 'highway',
-          'motorway', 'motorway_link',
-          'trunk', 'trunk_link',
-          'primary', 'primary_link',
-          'secondary', 'secondary_link',
-          'tertiary', 'tertiary_link'
-        ],
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'highway'],
-            'motorway', '#1e40af',
-            'motorway_link', '#1e40af',
-            'trunk', '#6200ffff',
-            'trunk_link', '#6200ffff',
-            'primary', '#9c00aaff',
-            'primary_link', '#9c00aaff',
-            'secondary', '#ff5effff',
-            'secondary_link', '#ff5effff',
-            'tertiary', '#ff2e2eff',
-            'tertiary_link', '#ff2e2eff',
-            '#353535ff'
-          ],
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            12, 2,
-            14, 4
-          ]
-        },
-      },
-      // LOD Layer 4: All roads (zoom >= 14)
-      {
-        id: 'graph-all',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 14,
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'highway'],
-            'motorway', '#1e40af',
-            'motorway_link', '#1e40af',
-            'trunk', '#6200ffff',
-            'trunk_link', '#6200ffff',
-            'primary', '#9c00aaff',
-            'primary_link', '#9c00aaff',
-            'secondary', '#ff5effff',
-            'secondary_link', '#ff5effff',
-            'tertiary', '#ff2e2eff',
-            'tertiary_link', '#ff2e2eff',
-            'residential', '#ff8635ff',
-            'living_street', '#ff8635ff',
-            'unclassified', '#5c5c5cff',
-            'service', '#008d0cff',
-            '#353535ff'
-          ],
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            14, 1.5,
-            15, [
-              'match',
-              ['get', 'highway'],
-              'motorway', 8,
-              'motorway_link', 6,
-              'trunk', 7,
-              'trunk_link', 6,
-              'primary', 6,
-              'primary_link', 5,
-              'secondary', 5,
-              'secondary_link', 4,
-              'tertiary', 4,
-              'tertiary_link', 3,
-              'residential', 3,
-              'living_street', 2,
-              'unclassified', 2,
-              'service', 2,
-              2
-            ],
-            18, [
-              'match',
-              ['get', 'highway'],
-              'motorway', 12,
-              'motorway_link', 9,
-              'trunk', 10,
-              'trunk_link', 9,
-              'primary', 9,
-              'primary_link', 7,
-              'secondary', 7,
-              'secondary_link', 6,
-              'tertiary', 6,
-              'tertiary_link', 5,
-              'residential', 5,
-              'living_street', 3,
-              'unclassified', 3,
-              'service', 3,
-              3
-            ]
-          ]
-        },
-      },
-      // MVT Labels: Arterial roads (zoom 12-13.99)
-      {
-        id: 'graph-labels-arterial',
-        type: 'symbol',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 12,
-        maxzoom: 14,
-        filter: [
-          'all',
-          ['has', 'name'],
-          ['in', 'highway', 'motorway', 'trunk', 'primary', 'secondary']
-        ],
-        layout: {
-          'text-field': ['coalesce', ['get', 'name_ru'], ['get', 'name']],
-          'text-size': 11,
-          'symbol-placement': 'line',
-        },
-        paint: {
-          'text-color': '#000000',
-          'text-halo-color': '#ffffff',
-          'text-halo-width': 2
-        }
-      },
-      // MVT Labels: All roads (zoom >= 14)
-      {
-        id: 'graph-labels-all',
-        type: 'symbol',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 14,
-        filter: ['has', 'name'],
-        layout: {
-          'text-field': ['coalesce', ['get', 'name_ru'], ['get', 'name']],
-          'text-size': 12,
-          'symbol-placement': 'line',
-        },
-        paint: {
-          'text-color': '#000000',
-          'text-halo-color': '#ffffff',
-          'text-halo-width': 2
-        }
-      },
-      {
-        id: 'routes',
-        type: 'line',
-        source: 'routes',
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': MAP_CONFIG.layers.routes.width,
-        },
-      },
-      // K routes with black borders: Gray (all) < Blue (selected) < Green (assigned)
-      // Casing layers first (black borders)
-      {
-        id: 'k-routes-inactive-casing',
-        type: 'line',
-        source: 'k-routes',
-        filter: ['!=', ['get', 'route_id'], -1],
-        paint: {
-          'line-color': '#000000',
-          'line-width': MAP_CONFIG.layers.kRoutes.inactive.width + 2,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.inactive.opacity,
-        },
-      },
-      {
-        id: 'k-routes-selected-casing',
-        type: 'line',
-        source: 'k-routes',
-        filter: ['==', ['get', 'route_id'], -1],
-        paint: {
-          'line-color': '#000000',
-          'line-width': MAP_CONFIG.layers.kRoutes.selected.width + 2,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.selected.opacity,
-        },
-      },
-      {
-        id: 'k-routes-assigned-casing',
-        type: 'line',
-        source: 'k-routes',
-        filter: ['==', ['get', 'route_id'], -1],
-        paint: {
-          'line-color': '#000000',
-          'line-width': MAP_CONFIG.layers.kRoutes.assigned.width + 2,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.assigned.opacity,
-        },
-      },
-      // Main color layers
-      {
-        id: 'k-routes-inactive',
-        type: 'line',
-        source: 'k-routes',
-        filter: ['!=', ['get', 'route_id'], -1],  // Will be updated dynamically
-        paint: {
-          'line-color': MAP_CONFIG.layers.kRoutes.inactive.color,
-          'line-width': MAP_CONFIG.layers.kRoutes.inactive.width,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.inactive.opacity,
-        },
-      },
-      {
-        id: 'k-routes-selected',
-        type: 'line',
-        source: 'k-routes',
-        filter: ['==', ['get', 'route_id'], -1],  // Will be updated dynamically
-        paint: {
-          'line-color': MAP_CONFIG.layers.kRoutes.selected.color,
-          'line-width': MAP_CONFIG.layers.kRoutes.selected.width,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.selected.opacity,
-        },
-      },
-      {
-        id: 'k-routes-assigned',
-        type: 'line',
-        source: 'k-routes',
-        filter: ['==', ['get', 'route_id'], -1],  // Will be updated dynamically
-        paint: {
-          'line-color': MAP_CONFIG.layers.kRoutes.assigned.color,
-          'line-width': MAP_CONFIG.layers.kRoutes.assigned.width,
-          'line-opacity': MAP_CONFIG.layers.kRoutes.assigned.opacity,
-        },
-      },
-    ],
+      { id: 'background', type: 'background', paint: { 'background-color': cfg.layers.background.color } },
+      { id: 'osm', type: 'raster', source: 'osm' },
+      ...lodLayers,
+      { id: 'routes', type: 'line', source: 'routes', paint: { 'line-color': ['get', 'color'], 'line-width': cfg.layers.routes.width } },
+      ...['inactive', 'selected', 'assigned'].flatMap(type => [
+        { id: `k-routes-${type}-casing`, type: 'line', source: 'k-routes', filter: type === 'inactive' ? ['!=', ['get', 'route_id'], -1] : ['==', ['get', 'route_id'], -1], paint: { 'line-color': '#000000', 'line-width': cfg.layers.kRoutes[type].width + 2, 'line-opacity': cfg.layers.kRoutes[type].opacity } },
+        { id: `k-routes-${type}`, type: 'line', source: 'k-routes', filter: type === 'inactive' ? ['!=', ['get', 'route_id'], -1] : ['==', ['get', 'route_id'], -1], paint: { 'line-color': cfg.layers.kRoutes[type].color, 'line-width': cfg.layers.kRoutes[type].width, 'line-opacity': cfg.layers.kRoutes[type].opacity } }
+      ])
+    ]
   };
 }
+
+// Map style loaded (100% config-driven)

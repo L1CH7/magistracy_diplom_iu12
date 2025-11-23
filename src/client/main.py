@@ -12,18 +12,34 @@ from src.client.ui.main_window import MainWindow
 
 def main():
     """Main entry point - minimal configuration."""
+    # Monkey-patch print to capture Qt WebEngine errors
+    import builtins
+    import traceback
+    original_print = builtins.print
+
+    def traced_print(*args, **kwargs):
+        msg = ' '.join(str(a) for a in args)
+        if 'js:' in msg.lower() and 'syntax' in msg.lower():
+            stack = '\n'.join(traceback.format_stack()[:-1])
+            original_print(f"[TRACED] {msg}\nStack:\n{stack}", **kwargs)
+        else:
+            original_print(*args, **kwargs)
+
+    builtins.print = traced_print
+    
     # Initialize logging
     configure_loguru(
         service_name="gui",
-        log_level="DEBUG",
+        log_level="TRACE",
         log_to_file=True,
         stdout=True
     )
     
     # Изоляция от системной темы (не зависит от KDE/GNOME)
     os.environ["QT_QPA_PLATFORMTHEME"] = ""  # Disable platform theme
-    os.environ["QT_STYLE_OVERRIDE"] = "Fusion"  # Use Qt's Fusion style
-    
+    os.environ["QT_STYLE_OVERRIDE"] = "Fusion"  # Use Qt Fusion
+    # Remote debug: QTWEBENGINE_REMOTE_DEBUGGING_PORT=9222
+
     app = QApplication(sys.argv)
     
     # Явно устанавливаем Fusion style и светлую палитру

@@ -79,8 +79,8 @@ class MainWindowHandlers:
             self.zoom_slider.blockSignals(True)
             self.zoom_slider.setValue(slider_pos)
             self.zoom_slider.blockSignals(False)
-            
-            log.debug(
+
+            log.trace(
                 "zoom_from_js",
                 zoom_level=zoom_value,
                 slider_position=slider_pos
@@ -323,7 +323,7 @@ class MainWindowHandlers:
             if (!bounds) return null;
             return {
                 sw: bounds.getSouthWest(),
-                ne: bounds.getNorthEast()
+                ne: bounds.getNorthEast()ec
             };
         })();
         """
@@ -332,7 +332,7 @@ class MainWindowHandlers:
             if result:
                 sw = result['sw']
                 ne = result['ne']
-                log.debug("map_bounds_updated", sw=sw, ne=ne)
+                log.trace("map_bounds_updated", sw=sw, ne=ne)
         
         self.map_widget.page().runJavaScript(js, callback)
     

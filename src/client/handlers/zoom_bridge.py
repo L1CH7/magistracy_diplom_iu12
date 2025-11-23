@@ -14,4 +14,8 @@ class ZoomBridge(QObject):
         Args:
             zoom: Current map zoom level
         """
-        self.zoom_changed.emit(zoom)
+        try:
+            self.zoom_changed.emit(zoom)
+        except Exception as e:
+            from loguru import logger as log
+            log.error(f"[ZoomBridge] Error emitting zoom_changed signal: {e}")

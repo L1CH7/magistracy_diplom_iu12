@@ -63,7 +63,7 @@ export async function initializeMap() {
   // Mark as loaded immediately
   mapLoaded = true;
   pointsManager.setMapLoaded(true);
-  console.log('Map initialized, marking as loaded');
+  logToPython('[MAP] Initialized, marking as loaded');
   
   // Log viewport changes (for debugging)
   map.on('moveend', () => {
@@ -94,18 +94,29 @@ export async function initializeMap() {
     logToPython('[MAP] Tiles loaded successfully');
     
     // Connect to Data Processor WebSocket AFTER map is fully ready
-    console.log('[map-main.js] Connecting to Data Processor WebSocket...');
+    logToPython('[map-main.js] Connecting to Data Processor WebSocket...');
     connectDataProcessorWS();
   });
 
-  // Zoom events (using global channel)
+  // Zoom events (using global channel) - throttled to avoid Qt bridge overflow
+  let zoomThrottle = null;
   map.on('zoom', () => {
     const zoom = Math.floor(map.getZoom());
     const fromUI = !mapAPI.shouldSkipZoomUpdate();
 
+    // Throttle zoom_bridge calls (max 1 per 100ms)
     if (fromUI && window.globalChannel && 
         window.globalChannel.objects.zoom_bridge) {
-      window.globalChannel.objects.zoom_bridge.notify_zoom(zoom);
+      if (!zoomThrottle) {
+        zoomThrottle = setTimeout(() => {
+          try {
+            window.globalChannel.objects.zoom_bridge.notify_zoom(zoom);
+          } catch (e) {
+            logToPython(`[MAP] zoom_bridge error: ${e.message}, zoom=${zoom}`);
+          }
+          zoomThrottle = null;
+        }, 100);
+      }
     }
 
     if (window.onZoomChanged) {
@@ -128,7 +139,7 @@ function setupEventListeners() {
   map.on('error', (e) => {
     try {
       const msg = e && e.error && e.error.message ? e.error.message : JSON.stringify(e);
-      console.log('[MapLibre error]', msg);
+      logToPython(`[MapLibre error] ${msg}`);
     } catch (err) {
       // ignore
     }
@@ -154,7 +165,7 @@ function setupEventListeners() {
     e.preventDefault();
     lastContextMenuPos = map.unproject([e.clientX, e.clientY]);
     window.lastContextMenuPos = lastContextMenuPos;
-    console.log('Right-click at:', lastContextMenuPos);
+    logToPython(`[MAP] Right-click at: ${JSON.stringify(lastContextMenuPos)}`);
     
     // Debug mode: redownload tile on right-click
     if (window.redownloadTileAt && typeof window.redownloadTileAt === 'function') {
@@ -270,17 +281,17 @@ window.globalChannel = null;
 if (window.qt && window.qt.webChannelTransport) {
   new QWebChannel(window.qt.webChannelTransport, async function(channel) {
     window.globalChannel = channel;
-    console.log('[map-main.js] QWebChannel initialized globally');
+    logToPython('[map-main.js] QWebChannel initialized globally');
     
     // Setup zoom bridge
     if (channel.objects.zoom_bridge) {
-      console.log('[map-main.js] Zoom bridge registered');
+      logToPython('[map-main.js] Zoom bridge registered');
     }
     
     // Initialize debug overlay if enabled in config
     if (channel.objects.config_bridge && typeof window.initDebugOverlay === 'function') {
       const enabled = await channel.objects.config_bridge.isDebugEnabled();
-      console.log(`[map-main.js] Debug mode: ${enabled}`);
+      logToPython(`[map-main.js] Debug mode: ${enabled}`);
       await window.initDebugOverlay(enabled);
     }
 

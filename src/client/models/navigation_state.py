@@ -214,8 +214,12 @@ class NavigationState(QObject):
         zoom = max(0.0, min(24.0, zoom))  # Clamp to valid range
         if self._current_zoom != zoom:
             self._current_zoom = zoom
-            self.zoom_changed.emit(zoom)
-    
+            try:
+                self.zoom_changed.emit(zoom)
+            except Exception as e:
+                from loguru import logger as log
+                log.error(f"[ZoomBridge] Error emitting zoom_changed signal: {e}")    
+                
     def get_zoom(self) -> float:
         """Get current zoom level."""
         return self._current_zoom

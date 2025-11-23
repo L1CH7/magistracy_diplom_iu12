@@ -7,9 +7,8 @@ Endpoints:
 
 from fastapi import APIRouter
 from loguru import logger
-import yaml
-import os
 from typing import List
+from src.utils.config_loader import config_loader
 
 
 router = APIRouter(prefix="/api/v1/debug", tags=["debug"])
@@ -22,34 +21,15 @@ async def get_debug_config():
     
     Returns grid tile size and download bounds.
     """
-    # Загружаем bbox из конфига
-    # В docker контейнере конфиги монтируются в /app/configs
-    bboxes_path = '/app/configs/data-processor/bboxes.yaml'
-    if not os.path.exists(bboxes_path):
-        # Локальный режим - относительный путь
-        bboxes_path = os.path.join(
-            os.path.dirname(__file__),
-            '../../../../configs/data-processor/bboxes.yaml'
-        )
-    
-    with open(bboxes_path, 'r') as f:
-        bboxes_config = yaml.safe_load(f)
+    # Load bboxes from config_loader
+    bboxes_config = config_loader.load('data-processor/bboxes.yaml')
     
     default_bbox_name = bboxes_config.get('default', 'moscow_mkad')
     bbox_data = bboxes_config.get(default_bbox_name, {})
     bbox_coords = bbox_data.get('coords', [37.30, 55.45, 37.90, 56.00])
     
-    # Загружаем tile_size_degrees из overpass.yaml
-    overpass_path = '/app/configs/data-processor/overpass.yaml'
-    if not os.path.exists(overpass_path):
-        overpass_path = os.path.join(
-            os.path.dirname(__file__),
-            '../../../../configs/data-processor/overpass.yaml'
-        )
-    
-    with open(overpass_path, 'r') as f:
-        overpass_config = yaml.safe_load(f)
-    
+    # Load tile_size_degrees from overpass.yaml
+    overpass_config = config_loader.load('data-processor/overpass.yaml')
     tile_size_degrees = overpass_config.get('tile_size_degrees', 0.05)
     
     config = {

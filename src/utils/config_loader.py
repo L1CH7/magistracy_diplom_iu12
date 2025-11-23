@@ -2,7 +2,7 @@
 Configuration loader with hot reload support for YAML configs.
 
 Features:
-- YAML loading with !include directive support
+- YAML loading with !include directive (via pyyaml-include if available)
 - Caching for performance
 - Environment variable expansion: ${VAR:default}
 - Hot reload via reload() method
@@ -32,30 +32,8 @@ from pathlib import Path
 from typing import Any, Dict
 from loguru import logger
 
-
-class IncludeLoader(yaml.SafeLoader):
-    """Custom YAML loader that supports !include directive."""
-    
-    def __init__(self, stream):
-        self._root = Path(stream.name).parent if hasattr(stream, 'name') else Path.cwd()
-        super().__init__(stream)
-
-
-def include_constructor(loader: IncludeLoader, node: yaml.Node) -> Any:
-    """Construct included YAML file."""
-    # Get the path from the node
-    include_path = loader.construct_scalar(node)
-    
-    # Resolve relative to current file
-    full_path = loader._root / include_path
-    
-    # Load the included file
-    with open(full_path, 'r', encoding='utf-8') as f:
-        return yaml.load(f, IncludeLoader)
-
-
-# Register the include constructor
-yaml.add_constructor('!include', include_constructor, IncludeLoader)
+# Config: custom directive name for includes
+INCLUDE_DIRECTIVE = '!include'
 
 
 class ConfigLoader:
@@ -64,6 +42,7 @@ class ConfigLoader:
     def __init__(self):
         self._cache: Dict[str, Any] = {}
         self._config_root = self._detect_config_root()
+        self._include_lib = None  # Lazy-loaded pyyaml-include
         logger.info(f"ConfigLoader initialized with root: {self._config_root}")
     
     def _detect_config_root(self) -> Path:
@@ -91,7 +70,7 @@ class ConfigLoader:
         Load configuration from YAML file with !include support.
         
         Args:
-            config_path: Relative path from config root (e.g., 'client/data.yaml')
+            config_path: Relative path from config root
         
         Returns:
             Parsed configuration dictionary
@@ -109,8 +88,35 @@ class ConfigLoader:
         
         logger.info(f"Loading config: {config_path}")
         
+        # Read file content
         with open(full_path, 'r', encoding='utf-8') as f:
-            config = yaml.load(f, IncludeLoader)
+            content = f.read()
+        
+        # Check if includes are used
+        if INCLUDE_DIRECTIVE in content:
+            if self._include_lib is None:
+                try:
+                    import yaml_include
+                    self._include_lib = yaml_include
+                    logger.debug("pyyaml-include loaded")
+                except ImportError:
+                    logger.error(
+                        "!include found but pyyaml-include not installed"
+                    )
+                    raise
+            
+            # Use pyyaml-include
+            loader = self._include_lib.Constructor(
+                base_dir=full_path.parent
+            )
+            yaml.add_constructor(
+                INCLUDE_DIRECTIVE, loader, yaml.FullLoader
+            )
+            with open(full_path, 'r', encoding='utf-8') as f:
+                config = yaml.load(f, yaml.FullLoader)
+        else:
+            # Plain YAML
+            config = yaml.safe_load(content)
         
         # Expand environment variables
         config = self._expand_env_vars(config)
@@ -167,7 +173,9 @@ class ConfigLoader:
                     var_name = var_spec
                     value = os.getenv(var_name)
                     if value is None:
-                        raise ValueError(f"Environment variable not set: {var_name}")
+                        raise ValueError(
+                            f"Environment variable not set: {var_name}"
+                        )
                     return value
             
             return obj

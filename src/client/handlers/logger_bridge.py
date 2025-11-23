@@ -25,3 +25,8 @@ class LoggerBridge(QObject):
     def log_error(self, message: str):
         """Log error message from JS."""
         log.error(f"[JS] {message}")
+
+    @pyqtSlot(str)
+    def log_trace(self, message: str):
+        """Log trace message from JS."""
+        log.trace(f"[JS] {message}")
