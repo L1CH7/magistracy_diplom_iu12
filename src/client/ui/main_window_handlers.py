@@ -63,6 +63,9 @@ class MainWindowHandlers:
         
         Called when user changes zoom with wheel/gestures.
         Updates slider to match map zoom WITHOUT calling server.
+        
+        NOTE: This is called VERY frequently during zoom (every frame).
+        Keep minimal to avoid Qt/Chromium bridge issues.
         """
         if self._zoom_slider_dragging:
             return  # User is dragging slider, don't update it
@@ -79,12 +82,6 @@ class MainWindowHandlers:
             self.zoom_slider.blockSignals(True)
             self.zoom_slider.setValue(slider_pos)
             self.zoom_slider.blockSignals(False)
-
-            log.trace(
-                "zoom_from_js",
-                zoom_level=zoom_value,
-                slider_position=slider_pos
-            )
             
             # Update bounds when zoom changes
             self._update_map_bounds()

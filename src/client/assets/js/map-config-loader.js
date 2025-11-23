@@ -83,6 +83,7 @@ function transformConfig(yaml) {
   // Return config directly from YAML (NO hardcoded defaults)
   return {
     initial: yaml.initial,
+    style: yaml.style,
 
     layers: {
       background: {

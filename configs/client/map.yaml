@@ -81,3 +81,8 @@ animation:
 tiles:
   tileSize: 256
   defaultUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+
+# MapLibre style settings
+style:
+  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
+  version: 8

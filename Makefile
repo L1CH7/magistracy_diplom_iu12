@@ -79,7 +79,7 @@ build-gui:
 
 gui:
 	@echo "Запуск GUI с .venv.gui..."
-	.venv.gui/bin/python src/client/main.py
+	.venv.gui/bin/python -B -u src/client/main.py
 
 # Очистка
 clean:

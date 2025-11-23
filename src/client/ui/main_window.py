@@ -38,7 +38,9 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         
         # Bridges for JS-to-Python communication (signals/slots ONLY!)
         self.zoom_bridge = ZoomBridge()
-        self.zoom_bridge.zoom_changed.connect(self._handle_zoom_from_js)
+        # DISABLED: Causes "js: Uncaught SyntaxError" during zoom
+        # TODO: Find alternative approach for zoom sync
+        # self.zoom_bridge.zoom_changed.connect(self._handle_zoom_from_js)
         
         self.points_bridge = PointsBridge()
         self.points_bridge.points_changed.connect(self._update_selected_points)

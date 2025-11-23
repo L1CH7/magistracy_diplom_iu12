@@ -3,7 +3,8 @@
  */
 
 import { loadMapConfig, getMapConfig } from './map-config-loader.js';
-import { createMapStyle } from './map-style.js';
+import { createMapStyle } from './map-style.new.FIXED2.js';  // INCREMENTAL: Partial YAML migration (STABLE)
+// import { createMapStyle } from './map-style.incremental.js';  // INCREMENTAL: Partial YAML migration (STABLE)
 import { PointsManager } from './points-manager.js';
 import { AgentAnimator } from './agent-animator.js';
 import { MapAPI } from './map-api.js';
@@ -49,6 +50,7 @@ export async function initializeMap() {
     hash: false,
     attributionControl: true,
     antialias: true,
+    showTileBoundaries: true,  // DEBUG: Show tile boundaries to debug LOD issues
   });
 
   // Initialize managers
@@ -98,24 +100,19 @@ export async function initializeMap() {
     connectDataProcessorWS();
   });
 
-  // Zoom events (using global channel) - throttled to avoid Qt bridge overflow
-  let zoomThrottle = null;
-  map.on('zoom', () => {
+  // Zoom events (using global channel)
+  // CHANGED: Using 'zoomend' instead of 'zoom' to reduce QWebChannel calls
+  // (zoomend fires ONCE after zoom completes, not every frame)
+  map.on('zoomend', () => {
     const zoom = Math.floor(map.getZoom());
     const fromUI = !mapAPI.shouldSkipZoomUpdate();
 
-    // Throttle zoom_bridge calls (max 1 per 100ms)
     if (fromUI && window.globalChannel && 
         window.globalChannel.objects.zoom_bridge) {
-      if (!zoomThrottle) {
-        zoomThrottle = setTimeout(() => {
-          try {
-            window.globalChannel.objects.zoom_bridge.notify_zoom(zoom);
-          } catch (e) {
-            logToPython(`[MAP] zoom_bridge error: ${e.message}, zoom=${zoom}`);
-          }
-          zoomThrottle = null;
-        }, 100);
+      try {
+        window.globalChannel.objects.zoom_bridge.notify_zoom(zoom);
+      } catch (e) {
+        logToPython(`[MAP] zoom_bridge error: ${e.message}, zoom=${zoom}`);
       }
     }
 

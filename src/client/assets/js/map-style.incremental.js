@@ -99,8 +99,8 @@ export function createMapStyle(tileUrl) {
   }
 
   const style = {
-    version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    version: MAP_CONFIG.style.version,
+    glyphs: MAP_CONFIG.style.glyphs,
     sources: {
       osm: {
         type: 'raster',
@@ -135,180 +135,172 @@ export function createMapStyle(tileUrl) {
         type: 'raster',
         source: 'osm',
       },
-      // LOD Layer 1: Motorways (zoom 0-9.99)
-      {
-        id: 'graph-highways',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 0,
-        maxzoom: 10,
-        filter: ['in', 'highway', 'motorway', 'motorway_link', 'trunk', 'trunk_link'],
-        paint: {
-          'line-color': '#1e40af',
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            0, 0.5,
-            9, 1.5,
-            10, 2
-          ]
-        },
-      },
-      // LOD Layer 2: Major roads (zoom 10-11.99)
-      {
-        id: 'graph-major',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 10,
-        maxzoom: 12,
-        filter: [
-          'in', 'highway',
-          'motorway', 'motorway_link',
-          'trunk', 'trunk_link',
-          'primary', 'primary_link'
-        ],
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'highway'],
-            'motorway', '#1e40af',
-            'motorway_link', '#1e40af',
-            'trunk', '#6200ffff',
-            'trunk_link', '#6200ffff',
-            'primary', '#9c00aaff',
-            'primary_link', '#9c00aaff',
-            '#353535ff'
-          ],
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            10, 1.5,
-            12, 3
-          ]
-        },
-      },
-      // LOD Layer 3: Arterial roads (zoom 12-13.99)
-      {
-        id: 'graph-arterial',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 12,
-        maxzoom: 14,
-        filter: [
-          'in', 'highway',
-          'motorway', 'motorway_link',
-          'trunk', 'trunk_link',
-          'primary', 'primary_link',
-          'secondary', 'secondary_link',
-          'tertiary', 'tertiary_link'
-        ],
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'highway'],
-            'motorway', '#1e40af',
-            'motorway_link', '#1e40af',
-            'trunk', '#6200ffff',
-            'trunk_link', '#6200ffff',
-            'primary', '#9c00aaff',
-            'primary_link', '#9c00aaff',
-            'secondary', '#ff5effff',
-            'secondary_link', '#ff5effff',
-            'tertiary', '#ff2e2eff',
-            'tertiary_link', '#ff2e2eff',
-            '#353535ff'
-          ],
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            12, 2,
-            14, 4
-          ]
-        },
-      },
-      // LOD Layer 4: All roads (zoom >= 14)
-      {
-        id: 'graph-all',
-        type: 'line',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 14,
-        paint: {
-          'line-color': [
-            'match',
-            ['get', 'highway'],
-            'motorway', '#1e40af',
-            'motorway_link', '#1e40af',
-            'trunk', '#6200ffff',
-            'trunk_link', '#6200ffff',
-            'primary', '#9c00aaff',
-            'primary_link', '#9c00aaff',
-            'secondary', '#ff5effff',
-            'secondary_link', '#ff5effff',
-            'tertiary', '#ff2e2eff',
-            'tertiary_link', '#ff2e2eff',
-            'residential', '#ff8635ff',
-            'living_street', '#ff8635ff',
-            'unclassified', '#5c5c5cff',
-            'service', '#008d0cff',
-            '#353535ff'
-          ],
-          'line-width': [
-            'interpolate', ['linear'], ['zoom'],
-            14, 1.5,
-            15, [
-              'match',
-              ['get', 'highway'],
-              'motorway', 8,
-              'motorway_link', 6,
-              'trunk', 7,
-              'trunk_link', 6,
-              'primary', 6,
-              'primary_link', 5,
-              'secondary', 5,
-              'secondary_link', 4,
-              'tertiary', 4,
-              'tertiary_link', 3,
-              'residential', 3,
-              'living_street', 2,
-              'unclassified', 2,
-              'service', 2,
-              2
-            ],
-            18, [
-              'match',
-              ['get', 'highway'],
-              'motorway', 12,
-              'motorway_link', 9,
-              'trunk', 10,
-              'trunk_link', 9,
-              'primary', 9,
-              'primary_link', 7,
-              'secondary', 7,
-              'secondary_link', 6,
-              'tertiary', 6,
-              'tertiary_link', 5,
-              'residential', 5,
-              'living_street', 3,
-              'unclassified', 3,
-              'service', 3,
-              3
+      // LOD Layer 1: Motorways (zoom 0-9.99) - FROM YAML CONFIG
+      (() => {
+        const lodLayers = Array.isArray(MAP_CONFIG.lod) ? MAP_CONFIG.lod : MAP_CONFIG.lod.layers;
+        const lod = lodLayers[0];  // highways
+        return {
+          id: `graph-${lod.name}`,
+          type: 'line',
+          source: 'graph-vector',
+          'source-layer': 'ways',
+          minzoom: lod.minzoom,
+          maxzoom: lod.maxzoom,
+          filter: ['in', 'highway', ...lod.highways],
+          paint: {
+            'line-color': MAP_CONFIG.layers.graph.colors['motorway'],
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              0, 0.5,
+              9, 1.5,
+              10, 2
             ]
-          ]
-        },
-      },
-      // MVT Labels: Arterial roads (zoom 12-13.99)
-      {
-        id: 'graph-labels-arterial',
-        type: 'symbol',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 12,
-        maxzoom: 14,
+          }
+        };
+      })(),
+      // LOD Layer 2: Major roads (zoom 10-11.99) - FROM YAML CONFIG
+      (() => {
+        const lodLayers = Array.isArray(MAP_CONFIG.lod) ? MAP_CONFIG.lod : MAP_CONFIG.lod.layers;
+        const lod = lodLayers[1];  // major_roads
+        const colors = MAP_CONFIG.layers.graph.colors;
+        
+        // Build match expression for line-color
+        const colorPairs = [];
+        for (const hw of lod.highways) {
+          if (colors[hw]) {
+            colorPairs.push(hw, colors[hw]);
+          }
+        }
+        
+        return {
+          id: `graph-${lod.name}`,
+          type: 'line',
+          source: 'graph-vector',
+          'source-layer': 'ways',
+          minzoom: lod.minzoom,
+          maxzoom: lod.maxzoom,
+          filter: ['in', 'highway', ...lod.highways],
+          paint: {
+            'line-color': ['match', ['get', 'highway'], ...colorPairs, '#353535ff'],
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              10, 1.5,
+              12, 3
+            ]
+          }
+        };
+      })(),
+      // LOD Layer 3: Arterial roads (zoom 12-13.99) - FROM YAML CONFIG
+      (() => {
+        const lodLayers = Array.isArray(MAP_CONFIG.lod) ? MAP_CONFIG.lod : MAP_CONFIG.lod.layers;
+        const lod = lodLayers[2];  // arterial_roads
+        const colors = MAP_CONFIG.layers.graph.colors;
+        
+        // Build match expression for line-color
+        const colorPairs = [];
+        for (const hw of lod.highways) {
+          if (colors[hw]) {
+            colorPairs.push(hw, colors[hw]);
+          }
+        }
+        
+        return {
+          id: `graph-${lod.name}`,
+          type: 'line',
+          source: 'graph-vector',
+          'source-layer': 'ways',
+          minzoom: lod.minzoom,
+          maxzoom: lod.maxzoom,
+          filter: ['in', 'highway', ...lod.highways],
+          paint: {
+            'line-color': ['match', ['get', 'highway'], ...colorPairs, '#353535ff'],
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              lod.minzoom, 2,
+              lod.maxzoom, 4
+            ]
+          }
+        };
+      })(),
+      // LOD Layer 4: All roads (zoom >= 14) - FROM YAML CONFIG (NO MAXZOOM!)
+      (() => {
+        const lodLayers = Array.isArray(MAP_CONFIG.lod) ? MAP_CONFIG.lod : MAP_CONFIG.lod.layers;
+        const lod = lodLayers[3];  // all_roads
+        const colors = MAP_CONFIG.layers.graph.colors;
+        const widths = MAP_CONFIG.layers.graph.baseWidth;  // baseWidth = rendering.widths object
+        
+        // Build match expression for line-color (ALL 14 types)
+        const colorPairs = [];
+        for (const hw of lod.highways) {
+          if (colors[hw]) {
+            colorPairs.push(hw, colors[hw]);
+          }
+        }
+        
+        // Build match expression for line-width at zoom 15
+        const width15Pairs = [];
+        for (const hw of lod.highways) {
+          if (widths[hw]) {
+            // Scale by factor (15 vs 18): zoom 15 uses ~2/3 of zoom 18 width
+            width15Pairs.push(hw, Math.round(widths[hw] * 0.67));
+          }
+        }
+        
+        // Build match expression for line-width at zoom 18
+        const width18Pairs = [];
+        for (const hw of lod.highways) {
+          if (widths[hw]) {
+            width18Pairs.push(hw, widths[hw]);
+          }
+        }
+        
+        return {
+          id: `graph-${lod.name}`,
+          type: 'line',
+          source: 'graph-vector',
+          'source-layer': 'ways',
+          minzoom: lod.minzoom,
+          maxzoom: lod.maxzoom,
+          filter: ['in', 'highway', ...lod.highways],
+          // NO MAXZOOM - renders to infinity!
+          paint: {
+            'line-color': ['match', ['get', 'highway'], ...colorPairs, '#353535ff'],
+            'line-width': [
+              'interpolate', ['linear'], ['zoom'],
+              lod.minzoom, 1.5,
+              15, ['match', ['get', 'highway'], ...width15Pairs, 2],
+              18, ['match', ['get', 'highway'], ...width18Pairs, 3]
+            ]
+          }
+        };
+      })(),
+      // MVT Labels: Arterial roads (FROM YAML)
+      (() => {
+        const lodLayers = Array.isArray(MAP_CONFIG.lod) ? MAP_CONFIG.lod : MAP_CONFIG.lod.layers;
+        const lod = lodLayers[2];  // arterial_roads
+        if (window.globalChannel?.objects?.logger_bridge) {
+          window.globalChannel.objects.logger_bridge.log_info(
+            `[incremental] arterial labels: lod.minzoom=${lod.minzoom}, lod.maxzoom=${lod.maxzoom}`
+          );
+        }
+        return {
+          id: `graph-${lod.name}-labels`,
+          type: 'symbol',
+          source: 'graph-vector',
+          'source-layer': 'ways',
+          minzoom: lod.minzoom,
+          maxzoom: lod.maxzoom,
         filter: [
           'all',
           ['has', 'name'],
-          ['in', 'highway', 'motorway', 'trunk', 'primary', 'secondary']
+          ['in', 'highway', 
+            'motorway', 'motorway_link', 
+            'trunk', 'trunk_link', 
+            'primary', 'primary_link', 
+            'secondary', 
+            'secondary_link', 
+            'tertiary', 'tertiary_link', 
+            'residential']
         ],
         layout: {
           'text-field': ['coalesce', ['get', 'name_ru'], ['get', 'name']],
@@ -320,14 +312,19 @@ export function createMapStyle(tileUrl) {
           'text-halo-color': '#ffffff',
           'text-halo-width': 2
         }
-      },
-      // MVT Labels: All roads (zoom >= 14)
-      {
-        id: 'graph-labels-all',
-        type: 'symbol',
-        source: 'graph-vector',
-        'source-layer': 'ways',
-        minzoom: 14,
+        };
+      })(),
+      // MVT Labels: All roads (FROM YAML)
+      (() => {
+        const lodLayers = Array.isArray(MAP_CONFIG.lod) ? MAP_CONFIG.lod : MAP_CONFIG.lod.layers;
+        const lod = lodLayers[3];  // all_roads
+        return {
+          id: `graph-${lod.name}-labels`,
+          type: 'symbol',
+          source: 'graph-vector',
+          'source-layer': 'ways',
+          minzoom: lod.minzoom,
+          maxzoom: lod.maxzoom,
         filter: ['has', 'name'],
         layout: {
           'text-field': ['coalesce', ['get', 'name_ru'], ['get', 'name']],
@@ -339,7 +336,8 @@ export function createMapStyle(tileUrl) {
           'text-halo-color': '#ffffff',
           'text-halo-width': 2
         }
-      },
+        };
+      })(),
       {
         id: 'routes',
         type: 'line',
@@ -422,11 +420,5 @@ export function createMapStyle(tileUrl) {
   };
   
   // DEBUG: Dump OLD style to JSON (save to .trash/)
-  if (window.globalChannel?.objects?.logger_bridge) {
-    const logger = window.globalChannel.objects.logger_bridge;
-    const fullDump = JSON.stringify(style, null, 2);
-    logger.log_info(`[OLD] FULL STYLE DUMP (${fullDump.length} chars): ${fullDump}`);
-  }
-  
   return style;
 }

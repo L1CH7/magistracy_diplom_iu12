@@ -1,6 +1,7 @@
 """Main entry point for Navigation MAS client."""
 import sys
 import os
+os.environ['QTWEBENGINE_REMOTE_DEBUGGING_PORT'] = '9222'  # remote debugging for web engine
 
 # Add parent to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -37,8 +38,7 @@ def main():
     
     # Изоляция от системной темы (не зависит от KDE/GNOME)
     os.environ["QT_QPA_PLATFORMTHEME"] = ""  # Disable platform theme
-    os.environ["QT_STYLE_OVERRIDE"] = "Fusion"  # Use Qt Fusion
-    # Remote debug: QTWEBENGINE_REMOTE_DEBUGGING_PORT=9222
+    os.environ["QT_STYLE_OVERRIDE"] = "Fusion"  # Use Qt's Fusion style
 
     app = QApplication(sys.argv)
     
