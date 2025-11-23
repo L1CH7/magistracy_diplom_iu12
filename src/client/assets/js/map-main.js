@@ -3,8 +3,7 @@
  */
 
 import { loadMapConfig, getMapConfig } from './map-config-loader.js';
-import { createMapStyle } from './map-style.new.FIXED2.js';  // INCREMENTAL: Partial YAML migration (STABLE)
-// import { createMapStyle } from './map-style.incremental.js';  // INCREMENTAL: Partial YAML migration (STABLE)
+import { createMapStyle } from './map-style.js';  
 import { PointsManager } from './points-manager.js';
 import { AgentAnimator } from './agent-animator.js';
 import { MapAPI } from './map-api.js';
