@@ -1,0 +1,12 @@
+FROM pgrouting/pgrouting:17-3.5-3.8
+
+# Копируем скрипт автоприменения миграций
+COPY docker/postgis-init.sh /usr/local/bin/apply-migrations.sh
+RUN chmod +x /usr/local/bin/apply-migrations.sh
+
+# Wrapper для запуска миграций после старта postgres
+COPY docker/postgis-entrypoint.sh /usr/local/bin/custom-entrypoint.sh
+RUN chmod +x /usr/local/bin/custom-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/custom-entrypoint.sh"]
+CMD ["postgres"]

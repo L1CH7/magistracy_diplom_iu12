@@ -349,11 +349,12 @@ class TileDownloadHandler:
                 "coordinates": node_coords
             }
             
-            # Parse oneway tag
+            # Parse oneway tag (keep as text for database)
             oneway_tag = tags.get("oneway")
             oneway = (
-                oneway_tag in ("yes", "1", "true") if oneway_tag
-                else False
+                oneway_tag
+                if oneway_tag in ("yes", "no", "-1", "1", "true", "false")
+                else None
             )
 
             # Collect data for batch insert
