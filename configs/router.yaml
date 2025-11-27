@@ -2,7 +2,36 @@
 # Configurable routing with pluggable algorithms
 
 # Algorithm selection: 'pgrouting' or 'astar'
-algorithm: astar  # Use custom A* + Yen implementation (src/routing/)
+algorithm: pgrouting  # Use pgRouting (recommended)
+
+# Database connection
+database:
+  host: localhost
+  port: 5432
+  name: osm
+  user: diplom
+  password: diplom
+
+# Graph builder configuration
+graph_builder:
+  # Default speeds by highway type (km/h)
+  default_speeds:
+    motorway: 110
+    motorway_link: 80
+    trunk: 100
+    trunk_link: 80
+    primary: 80
+    primary_link: 60
+    secondary: 80
+    secondary_link: 60
+    tertiary: 60
+    tertiary_link: 50
+    residential: 60
+    living_street: 20
+    unclassified: 50
+    service: 20
+    road: 50
+    track: 30
 
 # Routing parameters
 routing:

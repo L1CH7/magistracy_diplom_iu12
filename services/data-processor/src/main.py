@@ -27,6 +27,7 @@ from src.db.pool import DatabasePool
 from src.state.task_manager import TaskManager
 from src.handlers.tile_download import TileDownloadHandler
 from src.handlers.mvt import MVTHandler
+from src.graph import GraphBuilder
 from src.api import status, tiles, debug, websocket
 
 
@@ -70,17 +71,28 @@ async def lifespan(app: FastAPI):
     # 2. Task manager
     app.state.task_manager = TaskManager()
     
-    # 3. Handlers
+    # 3. GraphBuilder (initialize before handlers)
+    logger.info("Creating GraphBuilder...")
+    app.state.graph_builder = GraphBuilder(
+        db_pool=app.state.db.pool,
+        config={}
+    )
+    logger.info("Calling ensure_graph_exists...")
+    await app.state.graph_builder.ensure_graph_exists()
+    logger.info("Graph check completed")
+    
+    # 4. Handlers
     app.state.tile_handler = TileDownloadHandler(
         db=app.state.db,
         task_manager=app.state.task_manager,
         overpass_servers=config["overpass"]["servers"],
-        timeout=config["overpass"]["timeout"]
+        timeout=config["overpass"]["timeout"],
+        graph_builder=app.state.graph_builder
     )
     
     app.state.mvt_handler = MVTHandler(db=app.state.db)
     
-    # 4. Initialize API routers
+    # 5. Initialize API routers
     await status.init_status_api(
         app.state.db,
         app.state.task_manager
@@ -90,7 +102,7 @@ async def lifespan(app: FastAPI):
         app.state.mvt_handler
     )
     
-    # 5. Recovery mechanism (find stuck tiles)
+    # 6. Recovery mechanism (find stuck tiles)
     await recover_failed_downloads(app.state.db, app.state.task_manager)
     
     logger.success("Data-processor initialized successfully")

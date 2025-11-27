@@ -27,12 +27,14 @@ class TileDownloadHandler:
         db: DatabasePool,
         task_manager: TaskManager,
         overpass_servers: List[str],
-        timeout: int = 300
+        timeout: int = 300,
+        graph_builder=None
     ):
         self.db = db
         self.task_manager = task_manager
         self.overpass_servers = overpass_servers
         self.timeout = timeout
+        self.graph_builder = graph_builder
         self._server_failures = {server: 0 for server in overpass_servers}
     
     async def download_tile(
@@ -130,6 +132,21 @@ class TileDownloadHandler:
             total_saved = (
                 saved_ways + saved_barriers + saved_restrictions
             )
+            
+            # Update graph (90%)
+            if self.graph_builder and saved_ways > 0:
+                self.task_manager.update_progress(
+                    task_id,
+                    90.0,
+                    TaskPhase.SAVING,
+                    f"Updating routing graph for {saved_ways} ways"
+                )
+                
+                way_ids = [w.get("id") for w in ways]
+                await self.graph_builder.update_graph_for_ways(
+                    way_ids,
+                    bbox=bbox
+                )
             
             # Broadcast WebSocket event: ways updated
             await self._broadcast_ways_updated()
