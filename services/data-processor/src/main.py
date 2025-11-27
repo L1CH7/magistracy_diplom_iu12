@@ -27,7 +27,6 @@ from src.db.pool import DatabasePool
 from src.state.task_manager import TaskManager
 from src.handlers.tile_download import TileDownloadHandler
 from src.handlers.mvt import MVTHandler
-from src.graph import GraphBuilder
 from src.api import status, tiles, debug, websocket
 
 
@@ -71,23 +70,12 @@ async def lifespan(app: FastAPI):
     # 2. Task manager
     app.state.task_manager = TaskManager()
     
-    # 3. GraphBuilder (initialize before handlers)
-    logger.info("Creating GraphBuilder...")
-    app.state.graph_builder = GraphBuilder(
-        db_pool=app.state.db.pool,
-        config={}
-    )
-    logger.info("Calling ensure_graph_exists...")
-    await app.state.graph_builder.ensure_graph_exists()
-    logger.info("Graph check completed")
-    
-    # 4. Handlers
+    # 3. Handlers
     app.state.tile_handler = TileDownloadHandler(
         db=app.state.db,
         task_manager=app.state.task_manager,
         overpass_servers=config["overpass"]["servers"],
-        timeout=config["overpass"]["timeout"],
-        graph_builder=app.state.graph_builder
+        timeout=config["overpass"]["timeout"]
     )
     
     app.state.mvt_handler = MVTHandler(db=app.state.db)

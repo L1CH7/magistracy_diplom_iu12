@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements
+COPY services/router/requirements.txt .
+
+# Install dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-compile -r requirements.txt
+
+# Copy source code
+COPY services/router/src/ ./src/
+
+# Copy shared utils
+COPY src/utils ./src/utils/
+
+# Expose port
+EXPOSE 8006
+
+# Run service
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8006"]

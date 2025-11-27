@@ -95,23 +95,23 @@ services:
       - router
     restart: unless-stopped
   
-  # Router Service - расчёт K-маршрутов с diversity
+  # Router Service - routing graph management and routing API
   router:
     build:
       context: .
-      dockerfile: services/router/Dockerfile
+      dockerfile: Dockerfile.router
       cache_from:
         - diplom-router:latest
     image: diplom-router:latest
     container_name: diplom-router
     ports:
-      - "8003:8003"
+      - "8006:8006"
     environment:
-      POSTGRES_HOST: postgis
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: osm
-      POSTGRES_USER: diplom
-      POSTGRES_PASSWORD: diplom_pass
+      DB_HOST: postgis
+      DB_PORT: 5432
+      DB_NAME: osm
+      DB_USER: diplom
+      DB_PASSWORD: diplom_pass
     volumes:
       - ./logs/router:/app/logs
       - ./configs:/app/configs:ro
@@ -127,7 +127,7 @@ services:
           path: ./services/router/src
           target: /app/src
         - action: rebuild
-          path: ./services/router/Dockerfile
+          path: ./Dockerfile.router
   
   # Traffic Manager Service - мониторинг нагрузки, кэш в Redis
   traffic-manager:
