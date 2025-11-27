@@ -29,4 +29,4 @@ moscow_mkad:
   description: "Moscow MKAD +5km"
 
 # Active bbox for initial load
-default: moscow_mkad
+default: moscow_small

@@ -2,7 +2,7 @@
 services:
   # PostgreSQL + PostGIS для хранения графа дорог
   postgis:
-    image: postgis/postgis:16-3.4
+    image: pgrouting/pgrouting:17-3.5-3.8
     container_name: diplom-postgis
     environment:
       POSTGRES_DB: osm

@@ -187,8 +187,8 @@ class GraphBuilder:
                 )
                 INSERT INTO graphs.edges (
                     osm_way_id,
-                    start_node_id,
-                    end_node_id,
+                    source,
+                    target,
                     geometry,
                     highway_type,
                     name,
@@ -225,7 +225,7 @@ class GraphBuilder:
                 LEFT JOIN graphs.nodes ns ON ns.osm_node_id = abs(hashtext(ST_AsText(ST_StartPoint(w.geom))))::BIGINT
                 LEFT JOIN graphs.nodes ne ON ne.osm_node_id = abs(hashtext(ST_AsText(ST_EndPoint(w.geom))))::BIGINT
                 WHERE ns.id IS NOT NULL AND ne.id IS NOT NULL
-                ON CONFLICT (osm_way_id, start_node_id, end_node_id) DO NOTHING
+                ON CONFLICT (osm_way_id, source, target) DO NOTHING
             """
             
             await conn.execute(query)
@@ -346,7 +346,7 @@ class GraphBuilder:
         """Update edges for given ways"""
         query = f"""
             INSERT INTO graphs.edges (
-                osm_way_id, start_node_id, end_node_id, geometry,
+                osm_way_id, source, target, geometry,
                 highway_type, name, lanes, speed_limit_kmh, oneway,
                 access_type, is_restricted, base_capacity
             )
@@ -377,7 +377,7 @@ class GraphBuilder:
               AND w.highway IS NOT NULL
               AND ns.id IS NOT NULL
               AND ne.id IS NOT NULL
-            ON CONFLICT (osm_way_id, start_node_id, end_node_id) DO UPDATE SET
+            ON CONFLICT (osm_way_id, source, target) DO UPDATE SET
                 geometry = EXCLUDED.geometry,
                 highway_type = EXCLUDED.highway_type,
                 name = EXCLUDED.name,
