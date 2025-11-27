@@ -1,0 +1,181 @@
+# Router Service Configuration
+# Configurable routing with pluggable algorithms
+
+# Algorithm selection: 'pgrouting' or 'astar'
+algorithm: astar  # Use custom A* + Yen implementation (src/routing/)
+
+# Routing parameters
+routing:
+  # Number of alternative routes
+  default_k: 3
+  max_k: 10
+  
+  # Diversity enforcement
+  diversity:
+    # Shared edges penalty multiplier (1.0 = no penalty)
+    penalty_factor: 1.5
+    
+    # Minimum diversity threshold (0.0-1.0)
+    # 0.0 = identical routes OK, 1.0 = fully different
+    threshold: 0.3
+    
+    # Similarity filtering (75% shared edges = too similar)
+    similarity_threshold: 0.75
+
+  # Point snapping
+  snap:
+    # Number of nearest nodes to consider
+    k_nearest: 5
+    
+    # Maximum snap distance (meters)
+    max_distance_m: 100.0
+
+# Turn penalties (two-level system)
+turn_penalties:
+  enabled: true
+  
+  # Level 1: Routing cost (affects pathfinding)
+  routing:
+    # Straight (0-30°)
+    straight: 0.0  # seconds
+    
+    # Slight turn (30-60°)
+    slight: 2.5
+    
+    # Medium turn (60-120°)
+    medium: 7.5
+    
+    # Sharp turn (120-150°)
+    sharp: 15.0
+    
+    # U-turn (150-180°)
+    uturn: 20.0
+    
+    # U-turn on one-way (penalty or forbid)
+    uturn_oneway: inf  # infinity = forbidden
+  
+  # Level 2: Agent physics (affects simulation movement)
+  # Applied during agent deceleration/acceleration
+  physics:
+    max_acceleration: 2.0  # m/s²
+    max_deceleration: 3.0  # m/s²
+    
+    # Speed reduction factor for turns
+    turn_speed_factors:
+      straight: 1.0    # no reduction
+      slight: 0.9      # 10% reduction
+      medium: 0.7      # 30% reduction
+      sharp: 0.5       # 50% reduction
+      uturn: 0.3       # 70% reduction
+
+# Speed limits
+speed_limits:
+  # Use database values (edge.speed_limit_kmh)
+  use_db: true
+  
+  # Country-specific defaults (when DB value missing)
+  country_defaults:
+    RU:  # Russia
+      motorway: 110  # km/h
+      trunk: 90
+      primary: 90
+      secondary: 60
+      tertiary: 60
+      residential: 40
+      service: 20
+      living_street: 20
+    
+    DE:  # Germany
+      motorway: 130  # no limit, but 130 recommended
+      trunk: 100
+      primary: 100
+      secondary: 80
+      tertiary: 70
+      residential: 30
+      service: 20
+      living_street: 10
+  
+  # Default country if not specified
+  default_country: RU
+
+# Agent behavior modes
+agent_modes:
+  # Normal driving
+  normal:
+    speed_multiplier: 1.0      # 100% of speed limit
+    risk_tolerance: 0.3        # conservative
+    turn_aggressiveness: 0.5   # moderate
+    
+  # Hurry / urgent
+  hurry:
+    speed_multiplier: 1.2      # 120% of speed limit
+    risk_tolerance: 0.7        # aggressive
+    turn_aggressiveness: 0.8   # fast turns
+    
+  # Cautious / defensive
+  cautious:
+    speed_multiplier: 0.8      # 80% of speed limit
+    risk_tolerance: 0.1        # very conservative
+    turn_aggressiveness: 0.3   # slow turns
+  
+  # Emergency vehicle (ambulance, fire, police)
+  emergency:
+    speed_multiplier: 1.5      # 150% of speed limit
+    risk_tolerance: 1.0        # maximum
+    turn_aggressiveness: 1.0   # maximum
+    ignore_congestion: true    # bypass traffic
+    priority: 100              # highest priority
+
+# Priority levels
+priority:
+  # Priority >= emergency_threshold ignores congestion
+  emergency_threshold: 20
+  
+  # Normal traffic priority
+  default: 0
+  
+  # Priority ranges
+  levels:
+    low: 0
+    normal: 5
+    high: 10
+    urgent: 15
+    emergency: 20
+
+# Performance tuning
+performance:
+  # Route caching
+  cache:
+    enabled: true
+    ttl_seconds: 300  # 5 minutes
+    max_entries: 1000
+  
+  # Database connection pool
+  db_pool:
+    min_size: 2
+    max_size: 10
+    timeout_seconds: 5
+
+# Algorithm-specific settings
+algorithms:
+  # pgRouting configuration
+  pgrouting:
+    # Use pgRouting Yen algorithm via SQL function
+    function: graphs.get_k_routes_with_diversity
+    
+    # Turn restrictions table
+    turn_restrictions_table: graphs.turn_restrictions
+  
+  # A* + Yen configuration  
+  astar:
+    # Heuristic function: 'haversine' or 'euclidean'
+    heuristic: haversine
+    
+    # Use turn penalties in A*
+    use_turn_penalties: true
+    
+    # A* optimization
+    max_iterations: 100000  # prevent infinite loops
+    
+    # Yen's algorithm optimization
+    edge_removal_optimization: false  # TODO: implement

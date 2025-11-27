@@ -7,9 +7,12 @@ COPY services/router/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-compile -r requirements.txt
 
-# Копируем исходники
-COPY services/router/src/ ./src/
+# Копируем весь проект (нужен для импортов src/routing/, services/router/)
+COPY . .
+
+# Создаём директорию для логов
+RUN mkdir -p logs
 
 EXPOSE 8003
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "services.router.src.main:app", "--host", "0.0.0.0", "--port", "8003"]

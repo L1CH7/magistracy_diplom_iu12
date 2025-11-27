@@ -1,73 +1,78 @@
 """
-Router Manager - K-shortest paths calculation.
+Router Manager - K-shortest paths calculation with pluggable algorithms.
 
-Uses pgRouting (Yen's algorithm) + diversity penalties.
+Supports:
+- A* + Yen (custom Python, src/routing/)
+- pgRouting (SQL-based, future)
 """
 
-import asyncpg
-import asyncio
-import os
+import yaml
+from pathlib import Path
 from loguru import logger
-from typing import List, Dict
+from typing import List
+
+from .engine import RouteEngine, Route
+from .astar_engine import AStarEngine
 
 
 class RouterManager:
     """
-    Calculate K alternative routes with diversity.
+    Calculate K alternative routes using pluggable engines.
     
     Design:
-    - Uses pgRouting's pgr_ksp (Yen's algorithm)
-    - Applies progressive penalties to shared edges
+    - Loads config from configs/router.yaml
+    - Selects engine: AStarEngine or PgRoutingEngine (future)
     - Two-level turn penalties (routing cost + agent physics)
     - Priority handling (emergency ignores congestion)
+    - Agent modes (normal, hurry, cautious, emergency)
     """
     
-    def __init__(self):
-        # Database connection
-        self.db_pool: asyncpg.Pool = None
+    def __init__(self, config_path: str = "configs/router.yaml"):
+        """
+        Initialize router with config.
         
-        # Config from environment
-        self.db_host = os.getenv("POSTGRES_HOST", "localhost")
-        self.db_port = int(os.getenv("POSTGRES_PORT", "5432"))
-        self.db_name = os.getenv("POSTGRES_DB", "osm")
-        self.db_user = os.getenv("POSTGRES_USER", "postgres")
-        self.db_password = os.getenv("POSTGRES_PASSWORD", "postgres")
+        Args:
+            config_path: Path to router.yaml config
+        """
+        # Load config
+        self.config = self._load_config(config_path)
         
-        logger.info("RouterManager initialized")
+        # Select engine based on config
+        algorithm = self.config.get("algorithm", "astar")
+        
+        if algorithm == "astar":
+            self.engine: RouteEngine = AStarEngine(self.config)
+        else:
+            raise ValueError(f"Unknown algorithm: {algorithm}")
+        
+        logger.info(
+            "RouterManager initialized",
+            algorithm=algorithm
+        )
+    
+    def _load_config(self, config_path: str) -> dict:
+        """Load YAML config."""
+        import yaml
+        
+        full_path = Path(config_path)
+        if not full_path.is_absolute():
+            # Relative to project root
+            project_root = Path(__file__).parent.parent.parent.parent
+            full_path = project_root / config_path
+        
+        with open(full_path) as f:
+            return yaml.safe_load(f)
+        
+        logger.success(f"Config loaded: {config_path}")
     
     async def initialize(self):
-        """Initialize router (setup DB pool with retries)."""
-        max_retries = 10
-        retry_delay = 2
-        
-        for attempt in range(max_retries):
-            try:
-                self.db_pool = await asyncpg.create_pool(
-                    host=self.db_host,
-                    port=self.db_port,
-                    database=self.db_name,
-                    user=self.db_user,
-                    password=self.db_password,
-                    min_size=2,
-                    max_size=10,
-                    timeout=5
-                )
-                
-                logger.success("Router initialized (DB pool ready)")
-                return
-            except Exception as e:
-                logger.warning(f"DB connection attempt {attempt + 1}/{max_retries} failed: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
-                else:
-                    logger.error("Failed to connect to database after all retries")
-                    raise
+        """Initialize router engine."""
+        await self.engine.initialize()
+        logger.success("Router initialized")
     
     async def shutdown(self):
-        """Shutdown router."""
-        if self.db_pool:
-            await self.db_pool.close()
-        
+        """Shutdown router engine."""
+        await self.engine.shutdown()
         logger.info("Router shutdown complete")
     
     async def calculate_routes(
@@ -77,113 +82,31 @@ class RouterManager:
         end_lat: float,
         end_lon: float,
         k: int = 3,
-        penalty_factor: float = 1.5,
-        diversity_threshold: float = 0.3,
-        priority: int = 0,
-        agent_type: str = "car_normal"
-    ) -> List[Dict]:
+        agent_mode: str = "normal",
+        priority: int = 0
+    ) -> List[Route]:
         """
-        Calculate K alternative routes.
+        Calculate K alternative routes using selected engine.
         
-        Algorithm:
-        1. Find nearest nodes (start/end)
-        2. Call pgRouting k-shortest paths
-        3. Apply diversity penalties (progressive)
-        4. Filter by diversity_threshold
-        5. Return routes with metadata
+        Args:
+            start_lat, start_lon: Start coordinates
+            end_lat, end_lon: End coordinates
+            k: Number of routes
+            agent_mode: Agent behavior mode (normal, hurry, etc)
+            priority: Agent priority (0-100, >=20 emergency)
+        
+        Returns:
+            List of Route objects
         """
-        async with self.db_pool.acquire() as conn:
-            # Step 1: Find nearest nodes
-            start_node = await self._find_nearest_node(
-                conn, start_lat, start_lon
-            )
-            end_node = await self._find_nearest_node(
-                conn, end_lat, end_lon
-            )
-            
-            logger.info(
-                f"Routing: node {start_node} → {end_node}, k={k}"
-            )
-            
-            # Step 2: Call pgRouting with diversity
-            routes = await self._calculate_k_routes_with_diversity(
-                conn,
-                start_node,
-                end_node,
-                k,
-                penalty_factor,
-                diversity_threshold,
-                priority
-            )
-            
-            return routes
-    
-    async def _find_nearest_node(
-        self,
-        conn: asyncpg.Connection,
-        lat: float,
-        lon: float
-    ) -> int:
-        """Find nearest graph node to coordinates."""
-        query = """
-        SELECT node_id
-        FROM graphs.nodes
-        ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
-        LIMIT 1
-        """
-        
-        row = await conn.fetchrow(query, lon, lat)
-        
-        if not row:
-            raise ValueError(f"No nodes found near ({lat}, {lon})")
-        
-        return row["node_id"]
-    
-    async def _calculate_k_routes_with_diversity(
-        self,
-        conn: asyncpg.Connection,
-        start_node: int,
-        end_node: int,
-        k: int,
-        penalty_factor: float,
-        diversity_threshold: float,
-        priority: int
-    ) -> List[Dict]:
-        """
-        Calculate K routes with diversity penalties.
-        
-        Uses graphs.get_k_routes_with_diversity() SQL function.
-        (Will create in Phase 4 migration)
-        """
-        query = """
-        SELECT *
-        FROM graphs.get_k_routes_with_diversity(
-            $1, $2, $3, $4, $5, $6
+        # Use engine to calculate routes
+        routes = await self.engine.calculate_routes(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+            k=k,
+            agent_mode=agent_mode,
+            priority=priority
         )
-        """
-        
-        rows = await conn.fetch(
-            query,
-            start_node,
-            end_node,
-            k,
-            penalty_factor,
-            diversity_threshold,
-            priority
-        )
-        
-        # Parse routes
-        routes = []
-        for row in rows:
-            routes.append({
-                "route_id": row["route_id"],
-                "segments": row["segments"],  # JSONB array
-                "total_distance_m": row["total_distance_m"],
-                "estimated_time_sec": row["estimated_time_sec"],
-                "diversity_score": row["diversity_score"],
-                "edge_ids": row["edge_ids"]
-            })
-        
-        logger.info(f"Found {len(routes)} routes")
         
         return routes

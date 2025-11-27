@@ -11,7 +11,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY services/data-processor/src/ ./src/
 
 # Копируем общие утилиты (osm_overpass, graph_builder, etc)
-COPY src/data ./src/data/
 COPY src/utils ./src/utils/
 
 EXPOSE 8005

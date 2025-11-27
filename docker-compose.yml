@@ -200,9 +200,6 @@ services:
           path: ./services/data-processor/src
           target: /app/src
         - action: sync
-          path: ./src/data
-          target: /app/src/data
-        - action: sync
           path: ./src/utils
           target: /app/src/utils
         - action: rebuild

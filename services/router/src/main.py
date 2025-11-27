@@ -1,11 +1,12 @@
 """
-Router Service - K-shortest paths with diversity penalties.
+Router Service - K-shortest paths with pluggable algorithms.
 
 Responsibilities:
-- Calculate K alternative routes using pgRouting
+- Calculate K alternative routes (A* or pgRouting)
 - Apply diversity penalties (shared edges penalty)
 - Turn penalties (two-level: routing + agent physics)
 - Priority handling (emergency agents ignore congestion)
+- Agent modes (normal, hurry, cautious, emergency)
 """
 
 import sys
@@ -16,11 +17,26 @@ from fastapi import FastAPI, HTTPException
 from loguru import logger
 
 
+# Configure logging to file
+logger.remove()  # Remove default handler
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>"
+)
+logger.add(
+    "logs/router.log",
+    rotation="10 MB",
+    retention="7 days",
+    level="DEBUG",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function} - {message}"
+)
+
+
 from .manager import RouterManager  # noqa: E402
 from .models import (  # noqa: E402
     RouteRequest,
-    RouteResponse,
-    RouteSegment
+    RouteResponse
 )
 
 
@@ -35,8 +51,8 @@ async def lifespan(app: FastAPI):
     
     logger.info("Starting Router Service...")
     
-    # Initialize router
-    router_manager = RouterManager()
+    # Initialize router with config
+    router_manager = RouterManager(config_path="configs/router.yaml")
     await router_manager.initialize()
     
     logger.success("Router Service ready")
@@ -51,8 +67,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Router Service",
-    description="K-shortest paths with diversity",
-    version="1.0.0",
+    description="K-shortest paths routing (A* or pgRouting)",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -62,7 +78,8 @@ async def health():
     """Health check."""
     return {
         "status": "healthy",
-        "service": "router"
+        "service": "router",
+        "algorithm": router_manager.config.get("algorithm", "unknown")
     }
 
 
@@ -71,15 +88,14 @@ async def calculate_routes(request: RouteRequest):
     """
     Calculate K alternative routes.
     
-    Uses pgRouting's Yen algorithm (k-shortest paths).
-    Applies diversity penalties to force different paths.
+    Supports pluggable algorithms (A*, pgRouting).
+    Applies diversity penalties and turn penalties.
     
     Parameters:
     - start_lat, start_lon: Start point
     - end_lat, end_lon: End point
     - k: Number of routes (default 3)
-    - penalty_factor: Shared edges penalty (default 1.5)
-    - diversity_threshold: Min diversity (default 0.3)
+    - agent_type: Agent mode (normal, hurry, cautious, emergency)
     - priority: Agent priority (>=20 ignores congestion)
     """
     routes = await router_manager.calculate_routes(
@@ -88,10 +104,8 @@ async def calculate_routes(request: RouteRequest):
         end_lat=request.end_lat,
         end_lon=request.end_lon,
         k=request.k,
-        penalty_factor=request.penalty_factor,
-        diversity_threshold=request.diversity_threshold,
-        priority=request.priority,
-        agent_type=request.agent_type
+        agent_mode=request.agent_type,
+        priority=request.priority
     )
     
     return RouteResponse(routes=routes)

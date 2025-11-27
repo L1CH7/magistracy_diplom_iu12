@@ -13,13 +13,15 @@ class OSMQueries:
     
     BATCH_INSERT_WAYS = """
         INSERT INTO osm.ways (
-            osm_id, geom, geom_3857, tags, highway, name, lanes, maxspeed
+            osm_id, geom, geom_3857, tags, highway, name, lanes, maxspeed,
+            oneway, access, motor_vehicle, service
         ) VALUES (
             $1,
             ST_GeomFromGeoJSON($2),
             ST_Transform(ST_GeomFromGeoJSON($2), 3857),
             $3::jsonb,
-            $4, $5, $6::integer, $7
+            $4, $5, $6::integer, $7,
+            $8, $9, $10, $11
         )
         ON CONFLICT (osm_id) DO UPDATE SET
             geom = EXCLUDED.geom,
@@ -28,7 +30,11 @@ class OSMQueries:
             highway = EXCLUDED.highway,
             name = EXCLUDED.name,
             lanes = EXCLUDED.lanes,
-            maxspeed = EXCLUDED.maxspeed
+            maxspeed = EXCLUDED.maxspeed,
+            oneway = EXCLUDED.oneway,
+            access = EXCLUDED.access,
+            motor_vehicle = EXCLUDED.motor_vehicle,
+            service = EXCLUDED.service
     """
     
     COUNT_WAYS_IN_BBOX = """

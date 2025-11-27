@@ -62,11 +62,13 @@ health:
 	@curl -f http://localhost:8004/health 2>/dev/null && echo "✓ Traffic Manager OK" || echo "✗ Traffic Manager FAIL"
 	@curl -f http://localhost:8005/health 2>/dev/null && echo "✓ Data Processor OK" || echo "✗ Data Processor FAIL"
 
-# Миграции
+# Миграции (применяет ВСЕ .sql файлы в migrations/ по порядку)
 migrate:
 	@echo "Применение миграций..."
-	docker compose exec postgis psql -U diplom -d osm -f /docker-entrypoint-initdb.d/010_simulation_functions.sql
-	docker compose exec postgis psql -U diplom -d osm -f /docker-entrypoint-initdb.d/011_router_functions.sql
+	@for file in $$(ls migrations/*.sql | sort); do \
+		echo "Применяю $$file..."; \
+		docker compose exec -T postgis psql -U diplom -d osm < $$file || echo "ERROR: $$file failed (возможно уже применена)"; \
+	done
 	@echo "Миграции применены"
 
 # GUI - сборка venv и запуск
