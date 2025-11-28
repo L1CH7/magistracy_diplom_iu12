@@ -1,0 +1,51 @@
+# Traffic Configuration
+# Configuration for capacity calculations and speed rules
+
+# ==================== Vehicle Physics ====================
+vehicle_physics:
+  length_auto_m: 5.0          # Average vehicle length (meters)
+  safe_distance_s: 3.0        # Safe time distance between vehicles (seconds)
+  conversion_factor: 0.2777   # km/h -> m/s conversion (1000/3600)
+
+# ==================== Speed Rules (Regional) ====================
+speed_rules:
+  current_region: "RU"        # Active profile
+  profiles:
+    RU:
+      tolerance_kmh: 19       # Unstamped speed: maxspeed + 19 km/h
+      min_speed_kmh: 5.0      # Minimum speed in heavy congestion
+    BY:
+      tolerance_kmh: 9        # Belarus: +9 km/h
+      min_speed_kmh: 5.0
+    EU:
+      tolerance_kmh: 0        # EU: strict limits
+      min_speed_kmh: 10.0
+
+# ==================== Default Speeds (by highway type) ====================
+# Used when OSM maxspeed tag is missing
+# Priority: OSM tag > config override > default_speeds
+default_speeds:
+  motorway: 110
+  motorway_link: 80
+  trunk: 100
+  trunk_link: 70
+  primary: 90
+  primary_link: 60
+  secondary: 80
+  secondary_link: 50
+  tertiary: 60
+  tertiary_link: 40
+  residential: 60
+  living_street: 20
+  service: 20
+  unclassified: 50
+  road: 50
+  track: 30
+
+# ==================== BPR Function Parameters ====================
+# Bureau of Public Roads congestion function
+bpr_function:
+  alpha: 0.15    # Calibration parameter (default 0.15)
+  beta: 4.0      # Power parameter (default 4.0)
+  # Formula: t = t0 * (1 + alpha * (flow/capacity)^beta)
+  # Simplified in our case: speed = unstamped_speed * (1 - (load/capacity)^2)

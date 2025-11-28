@@ -557,16 +557,16 @@ class TileDownloadHandler:
             await conn.executemany(
                 """
                 INSERT INTO osm.turn_restrictions (
-                    osm_id, restriction_type, from_way,
-                    via_node, via_way, to_way, tags
+                    osm_relation_id, restriction_type, from_way_id,
+                    via_node_id, via_way_id, to_way_id, tags
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (osm_id) DO UPDATE SET
+                ON CONFLICT (osm_relation_id) DO UPDATE SET
                     restriction_type = EXCLUDED.restriction_type,
-                    from_way = EXCLUDED.from_way,
-                    via_node = EXCLUDED.via_node,
-                    via_way = EXCLUDED.via_way,
-                    to_way = EXCLUDED.to_way,
+                    from_way_id = EXCLUDED.from_way_id,
+                    via_node_id = EXCLUDED.via_node_id,
+                    via_way_id = EXCLUDED.via_way_id,
+                    to_way_id = EXCLUDED.to_way_id,
                     tags = EXCLUDED.tags
                 """,
                 batch_data
