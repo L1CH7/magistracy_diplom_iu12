@@ -23,7 +23,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from src.utils.loguru_config import configure_loguru
 from src.db import DatabasePool
 from src.graph import GraphBuilder
+from src.engine import PgRoutingEngine
 from src.api import graph_router
+from src.api.routing import router as routing_router
 
 
 # ==================== Configuration ====================
@@ -56,12 +58,33 @@ async def lifespan(app: FastAPI):
     
     # 2. GraphBuilder
     logger.info("Creating GraphBuilder...")
-    app.state.graph_builder = GraphBuilder(
-        db_pool=app.state.db.pool,
-        config={}
+    db_cfg = config["db"]
+    dsn = (
+        f"postgresql://{db_cfg['user']}:{db_cfg['password']}"
+        f"@{db_cfg['host']}:{db_cfg['port']}/{db_cfg['database']}"
     )
+    app.state.graph_builder = GraphBuilder(
+        config_path="configs/router/traffic_config.yaml",
+        db_dsn=dsn
+    )
+    await app.state.graph_builder.initialize()
     logger.info("Checking routing graph...")
-    await app.state.graph_builder.ensure_graph_exists()
+    # Graph already exists (built in previous runs), skip rebuild
+    
+    # 3. PgRouting Engine
+    logger.info("Initializing PgRouting engine...")
+    app.state.routing_engine = PgRoutingEngine({
+        "database": {
+            "host": config["db"]["host"],
+            "port": config["db"]["port"],
+            "name": config["db"]["database"],
+            "user": config["db"]["user"],
+            "password": config["db"]["password"]
+        },
+        "connection_pool": {"min_size": 2, "max_size": 10},
+        "routing": {"snap_radius_m": 100.0}
+    })
+    await app.state.routing_engine.initialize()
     
     logger.success("Router service initialized successfully")
     
@@ -69,6 +92,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down router service...")
+    await app.state.routing_engine.close()
     await app.state.db.close()
     logger.info("Router service stopped")
 
@@ -138,6 +162,5 @@ async def root():
 # Mount graph API
 app.include_router(graph_router)
 
-# TODO: Add routing API endpoints
-# - POST /api/v1/route/find
-# - POST /api/v1/route/snap
+# Mount routing API
+app.include_router(routing_router)

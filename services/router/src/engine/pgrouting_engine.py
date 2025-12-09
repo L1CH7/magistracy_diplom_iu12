@@ -184,25 +184,30 @@ class PgRoutingEngine(RoutingEngine):
         
         async with self.db_pool.acquire() as conn:
             query = """
-                WITH ksp_raw AS (
-                    SELECT 
-                        path_id,
-                        array_agg(edge ORDER BY seq) FILTER (WHERE edge > 0) as edges,
-                        max(agg_cost) as cost
-                    FROM pgr_KSP(
-                        'SELECT id, source, target, cost, reverse_cost FROM graphs.edges',
-                        $1, $2, $3,
-                        directed := true
-                    )
-                    GROUP BY path_id
-                    ORDER BY cost
+                SELECT
+                    path_id,
+                    array_agg(edge ORDER BY seq) FILTER (WHERE edge > 0)
+                      as edges,
+                    max(agg_cost) as cost
+                FROM pgr_KSP(
+                    'SELECT id, source, target, cost, reverse_cost
+                     FROM graphs.edges',
+                    $1::bigint, $2::bigint, $3::integer,
+                    directed := true
                 )
-                SELECT path_id, edges, cost FROM ksp_raw
+                GROUP BY path_id
+                ORDER BY cost
             """
-            
+
             try:
-                results = await conn.fetch(query, start_node, end_node, fetch_k)
-                
+                results = await conn.fetch(
+                    query, start_node, end_node, fetch_k
+                )
+                logger.debug(
+                    f"pgr_KSP returned {len(results)} paths "
+                    f"(fetch_k={fetch_k})"
+                )
+
                 if not results:
                     raise RouteNotFoundError(
                         f"No routes found from node {start_node} to node {end_node}"
@@ -277,13 +282,23 @@ class PgRoutingEngine(RoutingEngine):
             # Check diversity with each already selected route
             is_diverse = True
             for selected in diverse_routes:
-                overlap = self._calculate_edge_overlap(route.edge_ids, selected.edge_ids)
-                if overlap > 0.4:  # More than 40% overlap = not diverse
+                overlap = self._calculate_edge_overlap(
+                    route.edge_ids, selected.edge_ids
+                )
+                # 65% overlap threshold (35% unique edges minimum)
+                if overlap > 0.65:
                     is_diverse = False
+                    logger.debug(
+                        f"Route rejected: overlap {overlap:.2f} > 0.6"
+                    )
                     break
             
             if is_diverse:
                 diverse_routes.append(route)
+                logger.debug(
+                    f"Route accepted: {len(route.edge_ids)} edges, "
+                    f"cost {route.total_cost:.1f}s"
+                )
         
         return diverse_routes
     
@@ -328,19 +343,20 @@ class PgRoutingEngine(RoutingEngine):
         
         async with self.db_pool.acquire() as conn:
             query = """
-                SELECT 
+                SELECT
                     e.id as edge_id,
                     e.length_m,
-                    ST_LineLocatePoint(e.geometry, u.user_point) as position_frac,
+                    ST_LineLocatePoint(e.geom, u.user_point) as position_frac,
                     ST_Distance(
-                        ST_Transform(e.geometry, 3857), 
+                        ST_Transform(e.geom, 3857),
                         ST_Transform(u.user_point, 3857)
                     ) as distance_m
                 FROM graphs.edges e,
-                     (SELECT ST_SetSRID(ST_MakePoint($2, $1), 4326) as user_point) u
+                     (SELECT ST_SetSRID(ST_MakePoint($2, $1), 4326)
+                      as user_point) u
                 WHERE ST_DWithin(
-                    ST_Transform(e.geometry, 3857), 
-                    ST_Transform(u.user_point, 3857), 
+                    ST_Transform(e.geom, 3857),
+                    ST_Transform(u.user_point, 3857),
                     $3
                 )
                 ORDER BY distance_m
@@ -360,6 +376,72 @@ class PgRoutingEngine(RoutingEngine):
             
             logger.debug(
                 "No edge found within {:.0f}m of ({:.6f}, {:.6f})",
+                radius, lat, lon
+            )
+            return None
+    
+    async def snap_to_node(
+        self,
+        lat: float,
+        lon: float,
+        snap_radius_m: Optional[float] = None
+    ) -> Optional[Tuple[int, float]]:
+        """
+        Map GPS coordinates to nearest graph node.
+
+        Args:
+            lat: Latitude (WGS84)
+            lon: Longitude (WGS84)
+            snap_radius_m: Search radius in meters (default from config)
+
+        Returns:
+            Tuple of (node_id, distance_m) or None if no node within radius
+        """
+        if not self.db_pool:
+            raise RuntimeError("PgRoutingEngine not initialized")
+
+        radius = (
+            snap_radius_m if snap_radius_m is not None
+            else self.snap_radius_m
+        )
+
+        async with self.db_pool.acquire() as conn:
+            query = """
+                SELECT
+                    n.id as node_id,
+                    ST_Distance(
+                        ST_Transform(n.geom, 3857),
+                        ST_Transform(
+                            ST_SetSRID(ST_MakePoint($2, $1), 4326),
+                            3857
+                        )
+                    ) as distance_m
+                FROM graphs.nodes n
+                WHERE ST_DWithin(
+                    ST_Transform(n.geom, 3857),
+                    ST_Transform(
+                        ST_SetSRID(ST_MakePoint($2, $1), 4326),
+                        3857
+                    ),
+                    $3
+                )
+                ORDER BY distance_m
+                LIMIT 1
+            """
+
+            result = await conn.fetchrow(query, lat, lon, radius)
+
+            if result:
+                node_id = result['node_id']
+                distance = result['distance_m']
+                logger.debug(
+                    "Snapped ({:.6f}, {:.6f}) to node {} (dist {:.1f}m)",
+                    lat, lon, node_id, distance
+                )
+                return (node_id, distance)
+
+            logger.debug(
+                "No node found within {:.0f}m of ({:.6f}, {:.6f})",
                 radius, lat, lon
             )
             return None

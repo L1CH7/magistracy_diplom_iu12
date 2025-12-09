@@ -62,7 +62,8 @@ def main():
     app.setPalette(palette)
     
     # Server URL from environment or default (localhost для локального запуска)
-    server_url = os.getenv("SERVER_URL", "http://localhost:8000")
+    # server_url = os.getenv("SERVER_URL", "http://localhost:8000")
+    server_url = "http://localhost:8002"
     
     # Create and show main window
     window = MainWindow(server_url)

@@ -43,11 +43,11 @@ class CoordinatorAPIClient:
     ) -> List[Dict]:
         """
         Calculate K alternative routes.
-        
+
         Returns: List of routes with segments, distance, time.
         """
         url = f"{self.base_url}/api/v1/routes/calculate"
-        
+
         payload = {
             "start_lat": start_lat,
             "start_lon": start_lon,
@@ -57,10 +57,10 @@ class CoordinatorAPIClient:
             "priority": priority,
             "agent_type": agent_type
         }
-        
+
         response = await self.client.post(url, json=payload)
         response.raise_for_status()
-        
+
         data = response.json()
         return data["routes"]
     

@@ -9,6 +9,7 @@ Manages:
 """
 
 import asyncio
+import os
 import time
 from typing import List, Dict, Optional, Callable
 
@@ -82,28 +83,75 @@ class CoordinatorManager:
     ) -> List[Dict]:
         """
         Calculate K alternative routes.
-        
+
         Uses pgRouting with diversity penalties.
         Priority >= 20: ignores congestion.
         """
-        # TODO: Call Router Service
-        # For now, placeholder
         logger.info(
             f"Calculating {k} routes: "
             f"({start_lat},{start_lon}) → ({end_lat},{end_lon}), "
             f"priority={priority}"
         )
-        
-        # Mock response (will implement in Phase 4)
-        return [
-            {
-                "route_id": 1,
-                "segments": [],
-                "total_distance_m": 5000.0,
-                "estimated_time_sec": 300.0,
-                "diversity_score": 1.0
-            }
-        ]
+
+        # Call Router Service
+        router_url = os.getenv("ROUTER_URL", "http://router:8006")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{router_url}/api/v1/route/find",
+                    json={
+                        "points": [
+                            {"lat": start_lat, "lon": start_lon},
+                            {"lat": end_lat, "lon": end_lon}
+                        ],
+                        "k": k,
+                        "snap_to_edge": True,
+                        "use_diversity": True
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+            # Convert router format → coordinator format
+            routes = []
+            for route in data.get("routes", []):
+                # Convert EdgeGeometry → RouteSegment
+                segments = []
+                for edge in route["edges"]:
+                    # Calculate speed_limit from cost and length
+                    # cost_sec = length_m / (speed_kmh / 3.6)
+                    # => speed_kmh = (length_m / cost_sec) * 3.6
+                    if edge["cost_sec"] > 0:
+                        speed_kmh = (edge["length_m"] / edge["cost_sec"]) * 3.6
+                    else:
+                        speed_kmh = 50.0
+                    
+                    segments.append({
+                        "edge_id": edge["edge_id"],
+                        "length_m": edge["length_m"],
+                        "speed_limit_kmh": int(speed_kmh),
+                        "estimated_time_sec": edge["cost_sec"],
+                        "geometry": edge.get("geometry")
+                    })
+                
+                routes.append({
+                    "route_id": route["route_id"],
+                    "segments": segments,
+                    "total_distance_m": route["total_distance_m"],
+                    "estimated_time_sec": route["total_cost_sec"],
+                    "diversity_score": 1.0  # TODO: calculate from overlap
+                })
+
+            return routes
+        except httpx.HTTPStatusError as e:
+            # Router returned error (e.g., no route found)
+            logger.error(f"Router error: {e.response.status_code}")
+            # Re-raise with router's error message
+            try:
+                error_detail = e.response.json().get("detail", str(e))
+            except Exception:
+                error_detail = str(e)
+            raise RuntimeError(f"Routing failed: {error_detail}") from e
     
     async def create_agent(
         self,

@@ -10,6 +10,7 @@ Endpoints:
 
 import asyncio
 import gzip
+import math
 from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import Response as FastAPIResponse
 from loguru import logger
@@ -28,6 +29,76 @@ async def init_tiles_api(
     """Initialize tiles API with handlers."""
     router.tile_handler = tile_handler
     router.mvt_handler = mvt_handler
+
+
+def tile_zxy_to_bbox(z: int, x: int, y: int) -> tuple:
+    """
+    Convert MVT tile coordinates (z/x/y) to geographic bbox.
+    
+    Uses Web Mercator projection formulas.
+    
+    Args:
+        z: Zoom level
+        x: Tile X coordinate
+        y: Tile Y coordinate
+    
+    Returns:
+        (west, south, east, north) in WGS84 degrees
+    """
+    n = 2.0 ** z
+    
+    # West longitude
+    west = x / n * 360.0 - 180.0
+    
+    # East longitude
+    east = (x + 1) / n * 360.0 - 180.0
+    
+    # North latitude
+    lat_rad_north = math.atan(math.sinh(math.pi * (1 - 2 * y / n)))
+    north = math.degrees(lat_rad_north)
+    
+    # South latitude
+    lat_rad_south = math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n)))
+    south = math.degrees(lat_rad_south)
+    
+    return (west, south, east, north)
+
+
+async def _check_tile_data_exists(
+    bbox: tuple
+) -> bool:
+    """
+    Check if OSM data exists for given bbox in osm.cached_tiles.
+    
+    Queries database to verify if area has been downloaded.
+    
+    Args:
+        bbox: (west, south, east, north) in WGS84 degrees
+    
+    Returns:
+        True if data downloaded (status='complete'), False otherwise
+    """
+    west, south, east, north = bbox
+    
+    # Get database pool from router
+    db = router.tile_handler.db
+    
+    async with db.acquire() as conn:
+        # Check if bbox intersects any complete cached tiles
+        query = """
+            SELECT EXISTS(
+                SELECT 1
+                FROM osm.cached_tiles
+                WHERE download_status = 'complete'
+                  AND ST_Intersects(
+                      bbox,
+                      ST_MakeEnvelope($1, $2, $3, $4, 4326)
+                  )
+            )
+        """
+        
+        result = await conn.fetchval(query, west, south, east, north)
+        return result
 
 
 def _clip_bbox_to_default(
@@ -229,7 +300,15 @@ async def redownload_bbox(
 @router.get("/{z}/{x}/{y}.mvt")
 async def get_mvt_tile(z: int, x: int, y: int):
     """
-    Get Mapbox Vector Tile.
+    Get Mapbox Vector Tile with auto-download.
+    
+    Workflow:
+    1. Convert z/x/y to geographic bbox
+    2. Check if OSM data exists in osm.cached_tiles
+    3. If no data:
+       - Check if bbox within default_bbox → 202 + trigger download
+       - If outside default_bbox → 204 (no content)
+    4. If data exists → generate and return MVT tile
     
     Args:
         z: Zoom level
@@ -237,7 +316,11 @@ async def get_mvt_tile(z: int, x: int, y: int):
         y: Tile Y coordinate
     
     Returns:
-        MVT protobuf data
+        - 200: MVT protobuf data (gzipped)
+        - 202: Accepted (download started)
+        - 204: No content (tile outside default_bbox or empty)
+        - 400: Invalid coordinates
+        - 500: Internal error
     """
     # Validate tile coordinates
     if z < 0 or z > 18:
@@ -248,10 +331,62 @@ async def get_mvt_tile(z: int, x: int, y: int):
         raise HTTPException(status_code=400, detail="Invalid tile coords")
     
     try:
+        # Convert tile coords to geographic bbox
+        tile_bbox = tile_zxy_to_bbox(z, x, y)
+        west, south, east, north = tile_bbox
+        
+        # Check if OSM data exists for this tile
+        data_exists = await _check_tile_data_exists(tile_bbox)
+        
+        if not data_exists:
+            # No data - check if within default_bbox and trigger download
+            logger.info(
+                f"MVT tile [{z}/{x}/{y}] no data, checking default_bbox"
+            )
+            
+            try:
+                # Try to clip to default_bbox
+                clip_result = _clip_bbox_to_default(west, south, east, north)
+                clipped_bbox = clip_result["clipped_bbox"]
+                
+                # Start background download (same as POST /download)
+                tile_key = (clipped_bbox[0], clipped_bbox[1])
+                asyncio.create_task(
+                    router.tile_handler.download_tile(tile_key, clipped_bbox)
+                )
+                
+                logger.info(
+                    f"MVT tile [{z}/{x}/{y}] download started: "
+                    f"bbox={clipped_bbox}"
+                )
+                
+                # Return 202 Accepted
+                return Response(
+                    status_code=202,
+                    content=b"",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Download-Status": "started"
+                    }
+                )
+                
+            except HTTPException as clip_error:
+                # Tile outside default_bbox → 204 No Content
+                logger.debug(
+                    f"MVT tile [{z}/{x}/{y}] outside default_bbox: "
+                    f"{clip_error.detail}"
+                )
+                return FastAPIResponse(
+                    content=b"",
+                    status_code=204,
+                    headers={"Cache-Control": "public, max-age=3600"}
+                )
+        
+        # Data exists - generate MVT tile
         mvt_data = await router.mvt_handler.generate_tile(z, x, y)
         
         if not mvt_data:
-            # 204 No Content - valid but empty tile
+            # Data exists but tile empty (no ways in this exact tile)
             return FastAPIResponse(
                 content=b"",
                 status_code=204,
@@ -271,6 +406,8 @@ async def get_mvt_tile(z: int, x: int, y: int):
             }
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"MVT tile [{z}/{x}/{y}] failed: {e}")
         raise HTTPException(

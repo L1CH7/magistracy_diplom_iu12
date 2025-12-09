@@ -16,6 +16,7 @@ class RouteSegment(BaseModel):
     length_m: float
     speed_limit_kmh: int
     estimated_time_sec: float
+    geometry: Optional[dict] = None  # GeoJSON LineString (optional)
 
 
 class Route(BaseModel):

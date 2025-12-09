@@ -366,20 +366,60 @@ class MainWindowHandlers:
         # Call API (TODO: use api_client)
         import requests
         try:
-            response = requests.post(
-                f"{self.server_url}/routes",
-                json={
-                    "points": points_list,
-                    "k": k,
-                    "snap_k": 5
-                },
-                timeout=30
-            )
+            # For 2-point route
+            if len(points_list) == 2:
+                response = requests.post(
+                    f"{self.server_url}/api/v1/routes/calculate",
+                    json={
+                        "start_lat": points_list[0]["lat"],
+                        "start_lon": points_list[0]["lon"],
+                        "end_lat": points_list[1]["lat"],
+                        "end_lon": points_list[1]["lon"],
+                        "k": k,
+                        "priority": 0,
+                        "agent_type": "car_normal"
+                    },
+                    timeout=30
+                )
+            else:
+                # Multi-point routing not yet implemented
+                log.error("multi_point_routing_not_supported")
+                return
             response.raise_for_status()
             data = response.json()
             
-            routes = data.get("routes", [])
-            log.info("routes_received", count=len(routes))
+            raw_routes = data.get("routes", [])
+            log.info("routes_received", count=len(raw_routes))
+            
+            # Convert coordinator format → UI format
+            routes = []
+            for route in raw_routes:
+                # Extract edge IDs from segments
+                edge_ids = [seg["edge_id"] for seg in route["segments"]]
+                
+                # Build LineString geometry from segment geometries
+                geometry_coords = []
+                for seg in route["segments"]:
+                    seg_geom = seg.get("geometry")
+                    if seg_geom and seg_geom.get("type") == "LineString":
+                        coords = seg_geom["coordinates"]
+                        # Append coords, avoiding duplicates at boundaries
+                        if not geometry_coords:
+                            geometry_coords.extend(coords)
+                        else:
+                            # Skip first point if it matches last point
+                            if coords[0] == geometry_coords[-1]:
+                                geometry_coords.extend(coords[1:])
+                            else:
+                                geometry_coords.extend(coords)
+                
+                routes.append({
+                    "id": route["route_id"],
+                    "edges": edge_ids,
+                    "total_distance_m": route["total_distance_m"],
+                    "total_time_sec": route["estimated_time_sec"],
+                    "geometry": geometry_coords
+                })
             
             # Display in route panel
             self.sidebar.route_panel.display_routes(routes)

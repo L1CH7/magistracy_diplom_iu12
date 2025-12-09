@@ -85,7 +85,7 @@ services:
       - "8002:8002"
     environment:
       SIMULATION_URL: http://simulation:8001
-      ROUTER_URL: http://router:8003
+      ROUTER_URL: http://router:8006
       TRAFFIC_URL: http://traffic-manager:8004
     volumes:
       - ./logs/coordinator:/app/logs

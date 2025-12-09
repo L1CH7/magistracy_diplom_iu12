@@ -149,18 +149,22 @@ class RouteFetchWorker(QThread):
     def run(self):
         """Execute the route fetch request in background thread."""
         try:
-            url = f"{self.server_url}/route/calculate"
-            
+            url = f"{self.server_url}/api/v1/route/find"
+
+            points = [
+                {"lat": wp[0], "lon": wp[1]} for wp in self.waypoints
+            ]
+
             response = requests.post(
                 url,
-                json={"waypoints": self.waypoints},
+                json={"points": points, "k": 3},
                 timeout=60
             )
             response.raise_for_status()
-            
+
             if self._is_cancelled:
                 return
-            
+
             data = response.json()
             self.finished.emit(data)
         
