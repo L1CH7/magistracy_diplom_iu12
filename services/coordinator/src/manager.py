@@ -106,7 +106,7 @@ class CoordinatorManager:
                         ],
                         "k": k,
                         "snap_to_edge": True,
-                        "use_diversity": True
+                        "use_diversity": False
                     }
                 )
                 response.raise_for_status()

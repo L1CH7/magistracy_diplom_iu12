@@ -82,11 +82,13 @@ async def calculate_routes(request: CalculateRoutesRequest):
     Uses pgRouting for graph search.
     Applies diversity_threshold to find different paths.
     """
+    waypoints = request.get_waypoints()
+    
     routes = await coordinator_manager.calculate_routes(
-        start_lat=request.start_lat,
-        start_lon=request.start_lon,
-        end_lat=request.end_lat,
-        end_lon=request.end_lon,
+        start_lat=waypoints[0][0],
+        start_lon=waypoints[0][1],
+        end_lat=waypoints[-1][0],
+        end_lon=waypoints[-1][1],
         k=request.k,
         priority=request.priority,
         agent_type=request.agent_type

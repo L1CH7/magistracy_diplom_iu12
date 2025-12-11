@@ -33,15 +33,29 @@ class Route(BaseModel):
 
 class CalculateRoutesRequest(BaseModel):
     """Request to calculate K alternative routes."""
-    start_lat: float
-    start_lon: float
-    end_lat: float
-    end_lon: float
+    # Support both formats: waypoints OR start/end coordinates
+    waypoints: Optional[List[List[float]]] = Field(
+        None,
+        description="List of [lat, lon] waypoints"
+    )
+    start_lat: Optional[float] = None
+    start_lon: Optional[float] = None
+    end_lat: Optional[float] = None
+    end_lon: Optional[float] = None
     k: int = Field(3, description="Number of alternative routes")
     priority: int = Field(
         0, description="Agent priority (0=normal, 20=emergency)"
     )
     agent_type: str = Field("car_normal", description="Agent type")
+
+    def get_waypoints(self) -> List[List[float]]:
+        """Convert to waypoints format."""
+        if self.waypoints:
+            return self.waypoints
+        if self.start_lat and self.end_lat:
+            return [[self.start_lat, self.start_lon],
+                    [self.end_lat, self.end_lon]]
+        raise ValueError("Either waypoints or start/end coords required")
 
 
 class CalculateRoutesResponse(BaseModel):

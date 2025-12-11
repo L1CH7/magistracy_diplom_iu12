@@ -17,10 +17,16 @@ class Point(BaseModel):
 
 class RouteRequest(BaseModel):
     """Request for k-shortest routes between points"""
-    points: List[Point] = Field(..., min_items=2, description="Waypoints (origin, destination, optional via points)")
-    k: int = Field(1, ge=1, le=10, description="Number of alternative routes to find")
-    snap_to_edge: bool = Field(True, description="Auto-snap points to nearest road edges")
-    use_diversity: bool = Field(True, description="Apply diversity filter to k routes (unique paths)")
+    points: List[Point] = Field(
+        ..., min_items=2,
+        description="Waypoints (origin, destination, optional via points)"
+    )
+    k: int = Field(1, ge=1, le=10, description="Number of routes")
+    snap_to_edge: bool = Field(True, description="Auto-snap to roads")
+    use_diversity: bool = Field(
+        False,
+        description="Apply diversity filter (False = return all k routes)"
+    )
 
 
 class EdgeGeometry(BaseModel):
@@ -100,30 +106,42 @@ async def find_routes(
                     )
                 edge_id, position_m = result
 
-                # Get edge source/target nodes and choose nearest
+                # Get edge info and choose appropriate node
                 async with request.app.state.db.pool.acquire() as conn:
                     edge_info = await conn.fetchrow(
                         """
-                        SELECT source, target, length_m
+                        SELECT 
+                            source, 
+                            target, 
+                            length_m,
+                            cost,
+                            reverse_cost,
+                            oneway
                         FROM graphs.edges
                         WHERE id = $1
                         """,
                         edge_id
                     )
 
-                # Choose nearest node: source if pos < half, else target
-                if position_m < edge_info['length_m'] / 2:
-                    node_id = edge_info['source']
+                # Choose node based on direction
+                # For routing: always choose node that allows path continuation
+                if edge_info['oneway']:
+                    if edge_info['cost'] > 0:
+                        # Forward only: always use source
+                        # (routing needs to enter edge from beginning)
+                        node_id = edge_info['source']
+                    else:
+                        # Backward only: always use target  
+                        # (routing needs to enter from end)
+                        node_id = edge_info['target']
                 else:
-                    node_id = edge_info['target']
+                    # Bidirectional: choose nearest end
+                    node_id = (edge_info['source']
+                               if position_m < edge_info['length_m'] / 2
+                               else edge_info['target'])
 
                 snapped_nodes.append(node_id)
                 snapped_info.append((edge_id, position_m))
-                logger.debug(
-                    f"Snapped ({point.lat}, {point.lon}) -> "
-                    f"edge {edge_id} pos {position_m:.1f}m → "
-                    f"node {node_id}"
-                )
         else:
             # Points must be node IDs (for testing/debugging)
             snapped_nodes = [int(p.lat) for p in body.points]  # Hack: lat=node_id
@@ -182,7 +200,8 @@ async def find_routes(
         for idx, route in enumerate(all_routes):
             edge_geometries = await _fetch_edge_geometries(
                 request.app.state.db,
-                route.edge_ids
+                route.edge_ids,
+                route.node_sequence
             )
             
             route_responses.append(RouteResponse(
@@ -223,17 +242,22 @@ async def find_routes(
 
 async def _fetch_edge_geometries(
     db_pool,
-    edge_ids: List[int]
+    edge_ids: List[int],
+    node_sequence: Optional[List[int]] = None
 ) -> List[EdgeGeometry]:
     """
     Fetch full edge geometries with properties for rendering.
+    Reverses geometry if edge traversed backward.
 
     Args:
         db_pool: Database connection pool
-        edge_ids: List of edge IDs
+        edge_ids: List of edge IDs in traversal order
+        node_sequence: Node IDs in traversal order (from pgr_dijkstra/pgr_KSP)
+                       Format: [node0, node1, node2, ...] where edge[i] connects
+                       node[i] to node[i+1]
 
     Returns:
-        List of EdgeGeometry with GeoJSON geometries
+        List of EdgeGeometry with correctly oriented GeoJSON geometries
     """
     import json
 
@@ -241,6 +265,8 @@ async def _fetch_edge_geometries(
         query = """
             SELECT
                 id,
+                source,
+                target,
                 ST_AsGeoJSON(geom) as geometry,
                 highway,
                 name,
@@ -252,18 +278,50 @@ async def _fetch_edge_geometries(
         """
 
         rows = await conn.fetch(query, edge_ids)
-
-        return [
-            EdgeGeometry(
+        
+        result = []
+        for idx, row in enumerate(rows):
+            geom = json.loads(row['geometry'])
+            
+            # Determine if edge traversed backward
+            # node_sequence: [n0, n1, n2, ...], edge_ids: [e0, e1, ...]
+            # edge e0 connects n0→n1, e1 connects n1→n2, etc.
+            should_reverse = False
+            if node_sequence and len(node_sequence) > idx + 1:
+                from_node = node_sequence[idx]
+                to_node = node_sequence[idx + 1]
+                edge_source = row['source']
+                edge_target = row['target']
+                
+                # Check if edge orientation matches traversal direction
+                if edge_source == from_node and edge_target == to_node:
+                    # Forward: source→target matches path
+                    should_reverse = False
+                elif edge_target == from_node and edge_source == to_node:
+                    # Backward: target→source matches path
+                    should_reverse = True
+                else:
+                    # Mismatch - log warning but don't reverse
+                    logger.warning(
+                        f"Edge {row['id']} topology mismatch: "
+                        f"edge ({edge_source}→{edge_target}) vs "
+                        f"path ({from_node}→{to_node})"
+                    )
+            
+            # Reverse coordinates if needed
+            if should_reverse and geom.get('type') == 'LineString':
+                geom['coordinates'] = list(reversed(geom['coordinates']))
+            
+            result.append(EdgeGeometry(
                 edge_id=row['id'],
-                geometry=json.loads(row['geometry']),
+                geometry=geom,
                 highway=row['highway'],
                 name=row['name'],
                 length_m=row['length_m'],
                 cost_sec=row['cost']
-            )
-            for row in rows
-        ]
+            ))
+        
+        return result
 
 
 @router.get("/snap")

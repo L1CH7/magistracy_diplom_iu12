@@ -188,6 +188,7 @@ class PgRoutingEngine(RoutingEngine):
                     path_id,
                     array_agg(edge ORDER BY seq) FILTER (WHERE edge > 0)
                       as edges,
+                    array_agg(node ORDER BY seq) as nodes,
                     max(agg_cost) as cost
                 FROM pgr_KSP(
                     'SELECT id, source, target, cost, reverse_cost
@@ -217,6 +218,7 @@ class PgRoutingEngine(RoutingEngine):
                 routes = []
                 for row in results:
                     edge_ids = list(row['edges'])
+                    node_sequence = list(row['nodes'])
                     total_cost = float(row['cost'])
                     
                     # Get distance
@@ -230,7 +232,8 @@ class PgRoutingEngine(RoutingEngine):
                         edge_ids=edge_ids,
                         total_cost=total_cost,
                         total_distance_m=total_distance,
-                        algorithm=RoutingAlgorithm.PGROUTING.value
+                        algorithm=RoutingAlgorithm.PGROUTING.value,
+                        node_sequence=node_sequence
                     ))
                 
                 # Apply diversity filtering if requested

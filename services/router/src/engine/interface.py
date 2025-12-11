@@ -24,6 +24,7 @@ class Route:
     total_cost: float  # in seconds
     total_distance_m: float
     algorithm: str
+    node_sequence: Optional[List[int]] = None  # Node IDs in traversal order
     
     def __post_init__(self):
         if not self.edge_ids:
@@ -38,7 +39,8 @@ class Route:
             'edge_ids': self.edge_ids,
             'total_cost': round(self.total_cost, 2),
             'total_distance_m': round(self.total_distance_m, 2),
-            'algorithm': self.algorithm
+            'algorithm': self.algorithm,
+            'node_sequence': self.node_sequence
         }
 
 
