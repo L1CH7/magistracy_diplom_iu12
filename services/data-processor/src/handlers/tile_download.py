@@ -539,6 +539,15 @@ class TileDownloadHandler:
                 elif role == "to" and mtype == "way":
                     to_way = ref
             
+            # Skip invalid restrictions (missing required fields)
+            if not from_way or not to_way or (not via_node and not via_way):
+                logger.warning(
+                    f"Skipping invalid restriction {osm_id}: "
+                    f"from={from_way}, to={to_way}, "
+                    f"via_node={via_node}, via_way={via_way}"
+                )
+                continue
+            
             batch_data.append((
                 osm_id,
                 restriction_type,

@@ -10,16 +10,12 @@ GraphBuilder: построение графа маршрутизации из OS
 """
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+from loguru import logger
 
 import asyncpg
 import yaml
-
-
-logger = logging.getLogger(__name__)
-
 
 class GraphBuilder:
     """
@@ -320,7 +316,7 @@ class GraphBuilder:
                         id, geom,
                         ST_LineLocatePoint($1, geom) as fraction
                     FROM graphs.nodes
-                    WHERE ST_DWithin(geom, $1, 0.00002)  -- ~2m tolerance
+                    WHERE ST_DWithin(geom, $1, 0.000045)
                     ORDER BY ST_LineLocatePoint($1, geom)
                 """, way_geom)
                 

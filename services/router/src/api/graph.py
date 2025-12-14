@@ -50,8 +50,7 @@ async def rebuild_graph(request: Request):
     try:
         graph_builder = request.app.state.graph_builder
         
-        async with request.app.state.db.acquire() as conn:
-            await graph_builder._build_full_graph(conn)
+        await graph_builder.build_graph()
         
         logger.info("Graph rebuilt successfully")
         

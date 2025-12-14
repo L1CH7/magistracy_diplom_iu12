@@ -17,7 +17,7 @@ moscow_small:
   description: "Small Moscow region (quick testing)"
 
 moscow_center:
-  coords: [37.4, 55.5, 37.9, 55.9]
+  coords: [37.525864,55.699647,37.720184,55.795491]
   description: "Moscow city center"
 
 moscow_medium:
@@ -29,4 +29,4 @@ moscow_mkad:
   description: "Moscow MKAD +5km"
 
 # Active bbox for initial load
-default: moscow_small
+default: moscow_center
