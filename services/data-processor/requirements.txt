@@ -5,6 +5,7 @@ httpx==0.26.0
 pydantic==2.5.3
 pydantic-settings==2.1.0
 loguru==0.7.2
+pyyaml-include>=2.0
 pytest==7.4.4
 pytest-asyncio==0.23.3
 

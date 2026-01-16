@@ -1,97 +1,166 @@
 """
-Router Service - K-shortest paths with diversity penalties.
+Router Service - manages routing graph and provides routing API.
 
 Responsibilities:
-- Calculate K alternative routes using pgRouting
-- Apply diversity penalties (shared edges penalty)
-- Turn penalties (two-level: routing + agent physics)
-- Priority handling (emergency agents ignore congestion)
+- Build and maintain routing graph (graphs.*)
+- Provide routing API (pgr_dijkstra, pgr_KSP)
+- Snap points to roads
+- Update graph when OSM data changes
 """
 
 import sys
+import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from .manager import RouterManager  # noqa: E402
-from .models import (  # noqa: E402
-    RouteRequest,
-    RouteResponse,
-    RouteSegment
-)
+from services.common.utils.loguru_config import configure_loguru
+from src.db import DatabasePool
+from src.graph import GraphBuilder
+from src.engine import PgRoutingEngine
+from src.api import graph_router
+from src.api.routing import router as routing_router
 
 
-# Global manager
-router_manager: RouterManager = None
+# ==================== Configuration ====================
 
+def load_config() -> dict:
+    """Load configuration from environment"""
+    return {
+        "db": {
+            "host": os.getenv("DB_HOST", "postgis"),
+            "port": int(os.getenv("DB_PORT", "5432")),
+            "database": os.getenv("DB_NAME", "osm"),
+            "user": os.getenv("DB_USER", "diplom"),
+            "password": os.getenv("DB_PASSWORD", "diplom_pass"),
+        }
+    }
+
+
+# ==================== Application Lifecycle ====================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown logic."""
-    global router_manager
+    """Application startup and shutdown"""
+    config = load_config()
     
-    logger.info("Starting Router Service...")
+    logger.info("Initializing router service...")
     
-    # Initialize router
-    router_manager = RouterManager()
-    await router_manager.initialize()
+    # 1. Database pool
+    app.state.db = DatabasePool(**config["db"])
+    await app.state.db.connect()
     
-    logger.success("Router Service ready")
+    # 2. GraphBuilder
+    logger.info("Creating GraphBuilder...")
+    db_cfg = config["db"]
+    dsn = (
+        f"postgresql://{db_cfg['user']}:{db_cfg['password']}"
+        f"@{db_cfg['host']}:{db_cfg['port']}/{db_cfg['database']}"
+    )
+    app.state.graph_builder = GraphBuilder(
+        config_path="configs/router/traffic_config.yaml",
+        db_dsn=dsn
+    )
+    await app.state.graph_builder.initialize()
+    logger.info("Checking routing graph...")
+    # Graph already exists (built in previous runs), skip rebuild
+    
+    # 3. PgRouting Engine
+    logger.info("Initializing PgRouting engine...")
+    app.state.routing_engine = PgRoutingEngine({
+        "database": {
+            "host": config["db"]["host"],
+            "port": config["db"]["port"],
+            "name": config["db"]["database"],
+            "user": config["db"]["user"],
+            "password": config["db"]["password"]
+        },
+        "connection_pool": {"min_size": 2, "max_size": 10},
+        "routing": {"snap_radius_m": 100.0}
+    })
+    await app.state.routing_engine.initialize()
+    
+    logger.success("Router service initialized successfully")
     
     yield
     
     # Shutdown
-    logger.info("Shutting down Router Service...")
-    await router_manager.shutdown()
-    logger.success("Router Service stopped")
+    logger.info("Shutting down router service...")
+    await app.state.routing_engine.close()
+    await app.state.db.close()
+    logger.info("Router service stopped")
 
+
+# ==================== FastAPI App ====================
+
+configure_loguru(service_name="router")
 
 app = FastAPI(
     title="Router Service",
-    description="K-shortest paths with diversity",
+    description="Routing graph management and routing API",
     version="1.0.0",
     lifespan=lifespan
 )
 
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+
+# ==================== Health Check ====================
 
 @app.get("/health")
-async def health():
-    """Health check."""
+async def health_check():
+    """Service health check"""
+    try:
+        async with app.state.db.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        
+        return {
+            "status": "healthy",
+            "service": "router",
+            "database": "connected"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "service": "router",
+            "database": "disconnected",
+            "error": str(e)
+        }
+
+
+# ==================== Root ====================
+
+@app.get("/")
+async def root():
+    """Service info"""
     return {
-        "status": "healthy",
-        "service": "router"
+        "service": "router",
+        "version": "1.0.0",
+        "description": "Routing graph management and routing API",
+        "endpoints": {
+            "health": "/health",
+            "graph_update": "POST /api/v1/graph/update"
+        }
     }
 
 
-@app.post("/api/v1/routes", response_model=RouteResponse)
-async def calculate_routes(request: RouteRequest):
-    """
-    Calculate K alternative routes.
-    
-    Uses pgRouting's Yen algorithm (k-shortest paths).
-    Applies diversity penalties to force different paths.
-    
-    Parameters:
-    - start_lat, start_lon: Start point
-    - end_lat, end_lon: End point
-    - k: Number of routes (default 3)
-    - penalty_factor: Shared edges penalty (default 1.5)
-    - diversity_threshold: Min diversity (default 0.3)
-    - priority: Agent priority (>=20 ignores congestion)
-    """
-    routes = await router_manager.calculate_routes(
-        start_lat=request.start_lat,
-        start_lon=request.start_lon,
-        end_lat=request.end_lat,
-        end_lon=request.end_lon,
-        k=request.k,
-        penalty_factor=request.penalty_factor,
-        diversity_threshold=request.diversity_threshold,
-        priority=request.priority,
-        agent_type=request.agent_type
-    )
-    
-    return RouteResponse(routes=routes)
+# ==================== API Routes ====================
+
+# Mount graph API
+app.include_router(graph_router)
+
+# Mount routing API
+app.include_router(routing_router)

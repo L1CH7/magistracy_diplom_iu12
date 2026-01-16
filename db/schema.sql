@@ -2,6 +2,7 @@
 -- Three separate schemas for clear separation and future scalability
 
 CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS pgrouting;
 
 -- ===========================================================================
 -- SCHEMA 1: tiles - raster map tile caching
@@ -81,6 +82,11 @@ CREATE TABLE IF NOT EXISTS osm.ways (
     name VARCHAR(255),
     lanes INTEGER,
     maxspeed VARCHAR(20),
+    geom_3857 GEOMETRY(LINESTRING, 3857),
+    oneway VARCHAR(20),
+    access VARCHAR(100),
+    motor_vehicle VARCHAR(20),
+    service VARCHAR(50),
     region VARCHAR(100) DEFAULT 'world',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -94,6 +100,65 @@ CREATE TABLE IF NOT EXISTS osm.nodes (
     region VARCHAR(100) DEFAULT 'world',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Barriers (gates, bollards, etc.)
+CREATE TABLE IF NOT EXISTS osm.barriers (
+    id BIGSERIAL PRIMARY KEY,
+    osm_id BIGINT UNIQUE,
+    geom GEOMETRY(POINT, 4326) NOT NULL,
+    barrier_type VARCHAR(50),
+    name VARCHAR(255),
+    access VARCHAR(50),
+    motor_vehicle VARCHAR(20),
+    tags JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Turn Restrictions
+CREATE TABLE IF NOT EXISTS osm.turn_restrictions (
+    id BIGSERIAL PRIMARY KEY,
+    osm_relation_id BIGINT UNIQUE,
+    restriction_type VARCHAR(50),
+    from_way_id BIGINT,
+    via_node_id BIGINT,
+    via_way_id BIGINT,
+    to_way_id BIGINT,
+    tags JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_osm_barriers_geom ON osm.barriers USING GIST(geom);
+CREATE INDEX idx_osm_barriers_type ON osm.barriers(barrier_type);
+CREATE INDEX idx_osm_restrictions_from ON osm.turn_restrictions(from_way_id);
+CREATE INDEX idx_osm_restrictions_via_node ON osm.turn_restrictions(via_node_id);
+CREATE INDEX idx_osm_restrictions_via_way ON osm.turn_restrictions(via_way_id);
+
+-- Barriers (gates, bollards, etc.)
+CREATE TABLE IF NOT EXISTS osm.barriers (
+    id BIGSERIAL PRIMARY KEY,
+    osm_id BIGINT UNIQUE,
+    geom GEOMETRY(POINT, 4326) NOT NULL,
+    barrier_type VARCHAR(50),
+    name VARCHAR(255),
+    access VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Turn Restrictions
+CREATE TABLE IF NOT EXISTS osm.turn_restrictions (
+    id BIGSERIAL PRIMARY KEY,
+    osm_id BIGINT UNIQUE,
+    restriction_type VARCHAR(50),
+    from_way BIGINT,
+    via_node BIGINT,
+    to_way BIGINT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_osm_barriers_geom ON osm.barriers USING GIST(geom);
+CREATE INDEX idx_osm_barriers_type ON osm.barriers(barrier_type);
+CREATE INDEX idx_osm_restrictions_from ON osm.turn_restrictions(from_way);
+CREATE INDEX idx_osm_restrictions_via ON osm.turn_restrictions(via_node);
 
 -- Regions tracking (which areas are cached)
 CREATE TABLE IF NOT EXISTS osm.regions (
@@ -119,7 +184,12 @@ CREATE TABLE IF NOT EXISTS osm.cached_tiles (
     total_ways INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    access_count INTEGER DEFAULT 0
+    access_count INTEGER DEFAULT 0,
+    last_download_attempt TIMESTAMP,
+    download_error TEXT,
+    download_status TEXT DEFAULT 'pending',
+    download_attempts INTEGER DEFAULT 0,
+    downloaded_at TIMESTAMP
 );
 
 -- Spatial indexes (GIST for geometry queries)

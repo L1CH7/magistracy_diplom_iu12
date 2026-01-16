@@ -20,7 +20,7 @@ from loguru import logger
 # Add project root to path (need src.* imports)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from src.utils.loguru_config import configure_loguru
+from services.common.utils.loguru_config import configure_loguru
 
 # Import components
 from src.db.pool import DatabasePool
@@ -137,7 +137,7 @@ async def recover_failed_downloads(
 # ==================== FastAPI App ====================
 
 # Configure logging
-configure_loguru()
+configure_loguru(service_name="data-processor")
 
 # Create app
 app = FastAPI(

@@ -1,97 +1,91 @@
-# Makefile для управления проектом
+.PHONY: all build up down logs restart clean prune shell-gateway shell-router shell-data help gui
 
-.PHONY: help build build-% build-gui up up-% down restart logs logs-% ps health migrate gui clean
+# Default target
+all: help
 
-help:
-	@echo "Доступные команды:"
-	@echo "  make build        - Сборка всех контейнеров"
-	@echo "  make build-%      - Сборка конкретного контейнера (make build-simulation)"
-	@echo "  make build-gui    - Создать .venv.gui для GUI (Python 3.13 compatible)"
-	@echo "  make up           - Запуск всех сервисов"
-	@echo "  make up-%         - Запуск конкретного сервиса"
-	@echo "  make down         - Остановка всех сервисов"
-	@echo "  make restart      - Рестарт всех сервисов"
-	@echo "  make logs         - Просмотр логов всех сервисов"
-	@echo "  make logs-%       - Логи конкретного сервиса (make logs-simulation)"
-	@echo "  make ps           - Статус контейнеров"
-	@echo "  make health       - Проверка health всех сервисов"
-	@echo "  make migrate      - Применить миграции БД"
-	@echo "  make gui          - Запуск GUI локально (использует .venv.gui)"
-	@echo "  make clean        - Удалить все контейнеры и volumes"
-	@echo "  make clean-db     - Полная очистка БД (ways + cached_tiles)"
-
-# Сборка с кэшем и параллелизацией
+# Build all services with parallel execution
 build:
-	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 docker compose build --parallel
+	docker-compose build --parallel
 
+# Build specific service
 build-%:
-	DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 docker compose build $*
+	docker-compose build $*
 
-# Запуск сервисов
+# Start services in detached mode (recreates containers if config changed)
 up:
-	docker compose up -d
+	docker-compose up -d --remove-orphans
 
+# Start specific service
 up-%:
-	docker compose up -d $*
+	docker-compose up -d $*
 
-# Остановка
+# Stop all services
 down:
-	docker compose down
+	docker-compose down
 
-# Рестарт
-restart:
-	docker compose restart
+# Stop and remove volumes
+down-v:
+	docker-compose down -v
 
-# Логи
+# Show logs for all services
 logs:
-	docker compose logs --tail=100 -f
+	docker-compose logs -f
 
+# Show logs for specific service
 logs-%:
-	docker compose logs --tail=100 -f $*
+	docker-compose logs -f $*
 
-# Статус
-ps:
-	docker compose ps
+# Restart all services
+restart: down up
 
-# Health check
-health:
-	@echo "Проверка health endpoints..."
-	@curl -f http://localhost:8001/health 2>/dev/null && echo "✓ Simulation OK" || echo "✗ Simulation FAIL"
-	@curl -f http://localhost:8002/health 2>/dev/null && echo "✓ Coordinator OK" || echo "✗ Coordinator FAIL"
-	@curl -f http://localhost:8003/health 2>/dev/null && echo "✓ Router OK" || echo "✗ Router FAIL"
-	@curl -f http://localhost:8004/health 2>/dev/null && echo "✓ Traffic Manager OK" || echo "✗ Traffic Manager FAIL"
-	@curl -f http://localhost:8005/health 2>/dev/null && echo "✓ Data Processor OK" || echo "✗ Data Processor FAIL"
+# Restart specific service
+restart-%:
+	docker-compose restart $*
 
-# Миграции
-migrate:
-	@echo "Применение миграций..."
-	docker compose exec postgis psql -U diplom -d osm -f /docker-entrypoint-initdb.d/010_simulation_functions.sql
-	docker compose exec postgis psql -U diplom -d osm -f /docker-entrypoint-initdb.d/011_router_functions.sql
-	@echo "Миграции применены"
-
-# GUI - сборка venv и запуск
-build-gui:
-	@echo "Создание .venv.gui..."
-	python3 -m venv .venv.gui
-	.venv.gui/bin/pip install --upgrade pip
-	.venv.gui/bin/pip install -r gui-requirements.txt
-	@echo "✓ GUI venv готов (.venv.gui)"
-
-gui:
-	@echo "Запуск GUI с .venv.gui..."
-	.venv.gui/bin/python -B -u src/client/main.py
-
-# Очистка
-clean:
-	docker compose down -v
+# Clean up docker resources (prune stopped containers and unused images)
+prune:
 	docker system prune -f
 
-# Полная очистка БД (OSM данных)
-clean-db:
-	@echo "Очистка osm.ways и osm.cached_tiles..."
-	docker compose exec postgis psql -U diplom -d osm -c "TRUNCATE TABLE osm.ways CASCADE"
-	docker compose exec postgis psql -U diplom -d osm -c "TRUNCATE TABLE osm.cached_tiles CASCADE"
-	@echo "✓ БД очищена (ways + cached_tiles)"
-	@echo "Перезапуск data-processor для сброса кеша..."
-	docker compose restart data-processor
-	@echo "✓ Готово"
+# Open shell in gateway
+shell-gateway:
+	docker-compose exec gateway /bin/bash
+
+# Open shell in router
+shell-router:
+	docker-compose exec router /bin/bash
+
+# Open shell in data-processor
+shell-data:
+	docker-compose exec data-processor /bin/bash
+
+# Build Qt Client (Create venv and install deps)
+build-gui:
+	@echo "Setting up Qt Client environment..."
+	cd services/qt-client && python3 -m venv .venv && \
+	. .venv/bin/activate && \
+	pip install --upgrade pip && \
+	pip install -r requirements.txt
+
+# Run the Qt Client
+gui:
+	@echo "Starting Qt Client..."
+	PYTHONPATH=. services/qt-client/.venv/bin/python services/qt-client/main.py
+
+# Clean up docker resources
+clean:
+	docker-compose down -v
+	rm -rf services/web-client/dist
+	rm -rf services/web-client/node_modules
+
+# Help command to list targets
+help:
+	@echo "Available commands:"
+	@echo "  make build          - Build all services in parallel"
+	@echo "  make up             - Start all services in background"
+	@echo "  make down           - Stop all services"
+	@echo "  make logs           - Follow logs of all services"
+	@echo "  make logs-<service> - Follow logs of specific service (e.g. make logs-router)"
+	@echo "  make restart        - Restart all services"
+	@echo "  make shell-<service>- Open bash shell in service container"
+	@echo "  make gui            - Run local Qt client"
+	@echo "  make clean          - Deep clean (remove volumes, orphans)"

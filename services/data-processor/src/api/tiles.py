@@ -53,7 +53,7 @@ def _clip_bbox_to_default(
         HTTPException: If no intersection or invalid config
     """
     from fastapi import HTTPException
-    from src.utils.config_loader import config_loader
+    from services.common.utils.config_loader import config_loader
     
     # Load default_bbox from bboxes.yaml
     bboxes_config = config_loader.load('data-processor/bboxes.yaml')

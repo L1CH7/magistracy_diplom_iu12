@@ -1,0 +1,7 @@
+PyQt5
+PyQtWebEngine
+loguru
+pyyaml
+pydantic
+requests
+pyyaml-include
