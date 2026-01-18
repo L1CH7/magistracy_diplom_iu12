@@ -46,7 +46,7 @@ class MainWindowUI:
         header_layout.addWidget(self.sidebar_close_btn)
         
         # Title label (takes remaining space, same height)
-        self.title_label = QLabel("Navigation")
+        self.title_label = QLabel(self.tr("Navigation"))
         self.title_label.setFixedHeight(header_height)
         self.title_label.setStyleSheet(
             "font-weight: bold; font-size: 16px; color: #1f2937; "

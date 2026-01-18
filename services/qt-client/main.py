@@ -62,11 +62,33 @@ def main():
     palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
     app.setPalette(palette)
     
-    # Server URL from environment or default (localhost для локального запуска)
-    server_url = os.getenv("SERVER_URL", "http://localhost:8000")
-    
+    import argparse
+    parser = argparse.ArgumentParser(description="Navigation MAS Client")
+    parser.add_argument("--config-dir", type=str, help="Path to configuration directory")
+    args = parser.parse_args()
+
     # Create and show main window
-    window = MainWindow(server_url)
+    # Gateway URL resolution using config_loader for consistency
+    gateway_url = os.getenv("GATEWAY_URL")
+    
+    if not gateway_url:
+        try:
+            # Now we can use the loader which respects the updated root
+            from services.common.config import config_loader
+            net_config = config_loader.load('client/network.yaml')
+            gateway_url = net_config.get('gateway', {}).get('url')
+        except Exception as e:
+            # Fallback if file not found or load fails
+            print(f"Warning: Could not load network config via loader: {e}")
+            pass
+            
+    if not gateway_url:
+        gateway_url = "http://localhost:8000"
+        print("Using default Gateway URL: http://localhost:8000 (Warning: Config not found)")
+    else:
+        print(f"Using Gateway URL: {gateway_url}")
+    
+    window = MainWindow(gateway_url)
     window.show()
     
     sys.exit(app.exec_())

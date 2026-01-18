@@ -62,7 +62,7 @@ class PointsPanel(QWidget):
         
         if not points:
             # Show empty state
-            empty = QLabel("No points selected")
+            empty = QLabel(self.tr("No points selected"))
             empty.setStyleSheet("color: #9ca3af; font-style: italic;")
             self.main_layout.addWidget(empty)
             self.point_widgets.append(empty)

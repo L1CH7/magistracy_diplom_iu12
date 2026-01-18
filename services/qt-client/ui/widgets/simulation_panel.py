@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import pyqtSignal, Qt
 
 from loguru import logger as log
-from services.common.utils.config_loader import config_loader
+from services.common.config import config_loader
 
 
 class SimulationPanel(QWidget):
@@ -59,12 +59,12 @@ class SimulationPanel(QWidget):
         layout.setSpacing(10)
 
         # Simulation controls group
-        sim_group = QGroupBox("Simulation Controls")
+        sim_group = QGroupBox(self.tr("Simulation Controls"))
         sim_layout = QVBoxLayout(sim_group)
 
         # Simulation speed control
         speed_layout = QHBoxLayout()
-        speed_layout.addWidget(QLabel("Sim Speed (x):"))
+        speed_layout.addWidget(QLabel(self.tr("Sim Speed (x):")))
         
         self.sim_speed_spinbox = QDoubleSpinBox()
         self.sim_speed_spinbox.setRange(
@@ -87,7 +87,7 @@ class SimulationPanel(QWidget):
 
         # FPS control
         fps_layout = QHBoxLayout()
-        fps_layout.addWidget(QLabel("FPS:"))
+        fps_layout.addWidget(QLabel(self.tr("FPS:")))
         
         self.fps_spinbox = QSpinBox()
         self.fps_spinbox.setRange(
@@ -103,17 +103,17 @@ class SimulationPanel(QWidget):
         layout.addWidget(sim_group)
 
         # Agent control group
-        agent_group = QGroupBox("Agent Control")
+        agent_group = QGroupBox(self.tr("Agent Control"))
         agent_layout = QVBoxLayout(agent_group)
 
         # Agent buttons row 1
         btn_row1 = QHBoxLayout()
         
-        self.start_btn = QPushButton("Start Agent")
+        self.start_btn = QPushButton(self.tr("Start Agent"))
         self.start_btn.clicked.connect(self._on_start_clicked)
         btn_row1.addWidget(self.start_btn)
         
-        self.stop_btn = QPushButton("Stop")
+        self.stop_btn = QPushButton(self.tr("Stop"))
         self.stop_btn.clicked.connect(self._on_stop_clicked)
         self.stop_btn.setEnabled(False)
         btn_row1.addWidget(self.stop_btn)
@@ -123,12 +123,12 @@ class SimulationPanel(QWidget):
         # Agent buttons row 2
         btn_row2 = QHBoxLayout()
         
-        self.restart_btn = QPushButton("Restart")
+        self.restart_btn = QPushButton(self.tr("Restart"))
         self.restart_btn.clicked.connect(self._on_restart_clicked)
         self.restart_btn.setEnabled(False)
         btn_row2.addWidget(self.restart_btn)
         
-        self.delete_btn = QPushButton("Delete Agent")
+        self.delete_btn = QPushButton(self.tr("Delete Agent"))
         self.delete_btn.clicked.connect(self._on_delete_clicked)
         self.delete_btn.setEnabled(False)
         btn_row2.addWidget(self.delete_btn)
@@ -138,24 +138,24 @@ class SimulationPanel(QWidget):
         layout.addWidget(agent_group)
 
         # Route management group
-        route_group = QGroupBox("Route Management")
+        route_group = QGroupBox(self.tr("Route Management"))
         route_layout = QVBoxLayout(route_group)
 
-        self.clear_routes_btn = QPushButton("Clear Routes")
+        self.clear_routes_btn = QPushButton(self.tr("Clear Routes"))
         self.clear_routes_btn.clicked.connect(self._on_clear_routes_clicked)
         route_layout.addWidget(self.clear_routes_btn)
 
-        self.clear_points_btn = QPushButton("Clear All Points")
+        self.clear_points_btn = QPushButton(self.tr("Clear All Points"))
         self.clear_points_btn.clicked.connect(self._on_clear_points_clicked)
         route_layout.addWidget(self.clear_points_btn)
 
         layout.addWidget(route_group)
 
         # Agent status group
-        status_group = QGroupBox("Agent Status")
+        status_group = QGroupBox(self.tr("Agent Status"))
         status_layout = QVBoxLayout(status_group)
 
-        self.status_label = QLabel("No active agent")
+        self.status_label = QLabel(self.tr("No active agent"))
         self.status_label.setWordWrap(True)
         self.status_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         status_layout.addWidget(self.status_label)
@@ -225,15 +225,15 @@ class SimulationPanel(QWidget):
         eta_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
         # Format status text (no emojis)
-        status_text = f"State: {state}\n"
-        status_text += f"Speed: {speed_kmh:.1f} km/h\n"
-        status_text += f"ETA: {eta_str}"
+        status_text = self.tr("State:") + f" {state}\n"
+        status_text += self.tr("Speed:") + f" {speed_kmh:.1f} km/h\n"
+        status_text += self.tr("ETA:") + f" {eta_str}"
 
         self.status_label.setText(status_text)
 
     def clear_agent_status(self):
         """Clear agent status display."""
-        self.status_label.setText("No active agent")
+        self.status_label.setText(self.tr("No active agent"))
 
     def set_agent_active(self, active: bool):
         """

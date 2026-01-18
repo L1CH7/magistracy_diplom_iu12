@@ -16,7 +16,7 @@ from handlers.config_bridge import ConfigBridge
 from models.points_presenter import PointsPresenter
 from ui.main_window_handlers import MainWindowHandlers
 from ui.main_window_ui import MainWindowUI
-from services.common.utils.config_loader import config_loader
+from services.common.config import config_loader
 from loguru import logger as log
 
 # Logging is configured in loguru_config.py on import
@@ -70,15 +70,50 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self._start_assets_httpd()
         
         # Setup window
-        self.setWindowTitle("Navigation MAS — Fullscreen Map")
+        self.setWindowTitle(self.tr("Navigation MAS — Fullscreen Map"))
         self.setGeometry(0, 0, 1400, 900)
-        self.showMaximized()
+        # Setup translation
+        self._setup_translation()
         
         # Setup UI
         self._setup_ui()
         
         # Setup keyboard shortcuts
         self._setup_shortcuts()
+        
+        self.showMaximized()
+    
+    def _setup_translation(self):
+        """Load translations based on config."""
+        from PyQt5.QtCore import QTranslator, QLocale
+        from PyQt5.QtWidgets import QApplication
+        
+        # Get language from config (default to system)
+        # Get language from config (default to system)
+        lang = "en"  # Default
+        try:
+            from services.common.config import config_loader
+            c = config_loader.load('client/gui.yaml')
+            lang = c.get('language', 'en')
+        except Exception as e:
+            log.warning(f"Failed to load gui config for translation: {e}")
+            
+        log.info(f"Loading translation for language: {lang}")
+        
+        self.translator = QTranslator()
+        # Assume translations are in 'translations' dir relative to qt-client root
+        # We can find qt-client root relative to this file: ui/../translations
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        qm_path = os.path.join(base_dir, 'translations', f'app_{lang}.qm')
+        
+        if os.path.exists(qm_path):
+            if self.translator.load(qm_path):
+                QApplication.instance().installTranslator(self.translator)
+                log.info(f"Loaded translation file: {qm_path}")
+            else:
+                log.error(f"Failed to load translation file: {qm_path}")
+        else:
+             log.warning(f"Translation file not found: {qm_path} (Using default/English)")
     
     def _start_assets_httpd(self) -> None:
         """Start HTTP server for map.html assets."""

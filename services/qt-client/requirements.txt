@@ -1,7 +1,9 @@
+loguru
+pydantic
+pydantic-settings
 PyQt5
 PyQtWebEngine
-loguru
 pyyaml
-pydantic
-requests
 pyyaml-include
+qt5-tools
+requests

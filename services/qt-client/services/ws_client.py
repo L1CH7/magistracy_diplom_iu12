@@ -22,15 +22,23 @@ class CoordinatorWSClient:
         await client.connect()
     """
     
-    def __init__(self, url: str):
-        self.url = url
+    def __init__(self, gateway_url: str):
+        # Convert HTTP/HTTPS to WS/WSS
+        if gateway_url.startswith("https"):
+            ws_base = gateway_url.replace("https", "wss")
+        elif gateway_url.startswith("http"):
+            ws_base = gateway_url.replace("http", "ws")
+        else:
+            ws_base = f"ws://{gateway_url}"
+            
+        self.url = f"{ws_base}/ws/positions"
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.connected = False
         
         # Callback for position updates
         self.on_positions: Optional[Callable] = None
         
-        logger.info(f"CoordinatorWSClient created: {url}")
+        logger.info(f"CoordinatorWSClient created: {self.url} (from {gateway_url})")
     
     async def connect(self):
         """Connect to Coordinator WebSocket."""

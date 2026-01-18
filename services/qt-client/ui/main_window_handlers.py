@@ -368,7 +368,7 @@ class MainWindowHandlers:
         try:
             if len(points_list) >= 2:
                 response = requests.post(
-                    f"{self.server_url}/routing/find",
+                    f"{self.gateway_url}/routing/find",
                     json={
                         "points": points_list,
                         "k": k,
@@ -494,7 +494,7 @@ class MainWindowHandlers:
             import requests
             try:
                 response = requests.post(
-                    f"{self.server_url}/sim/agent/{self.sim_agent_id}/consider_route",
+                    f"{self.gateway_url}/sim/agent/{self.sim_agent_id}/consider_route",
                     params={"route_id": route_id},
                     timeout=2
                 )
@@ -518,7 +518,7 @@ class MainWindowHandlers:
         import requests
         try:
             requests.post(
-                f"{self.server_url}/routes/clear_cache",
+                f"{self.gateway_url}/routes/clear_cache",
                 timeout=5
             )
             log.info("route_cache_cleared_on_server")
@@ -649,7 +649,7 @@ class MainWindowHandlers:
             if self.sim_agent_id is not None:
                 # Agent exists - restart with selected route
                 response = requests.post(
-                    f"{self.server_url}/sim/agent/{self.sim_agent_id}/restart",
+                    f"{self.gateway_url}/sim/agent/{self.sim_agent_id}/restart",
                     json={
                         "route_id": route_id,
                         "sim_speed": sim_speed
@@ -662,7 +662,7 @@ class MainWindowHandlers:
             else:
                 # No agent - create new one
                 response = requests.post(
-                    f"{self.server_url}/sim/agent/start",
+                    f"{self.gateway_url}/sim/agent/start",
                     json={
                         "route_id": route_id,
                         "sim_speed": sim_speed
@@ -702,7 +702,7 @@ class MainWindowHandlers:
         import requests
         try:
             response = requests.post(
-                f"{self.server_url}/sim/agent/{self.sim_agent_id}/stop",
+                f"{self.gateway_url}/sim/agent/{self.sim_agent_id}/stop",
                 timeout=5
             )
             response.raise_for_status()
@@ -757,7 +757,7 @@ class MainWindowHandlers:
         import requests
         try:
             response = requests.post(
-                f"{self.server_url}/sim/agent/{self.sim_agent_id}/restart",
+                f"{self.gateway_url}/sim/agent/{self.sim_agent_id}/restart",
                 json={
                     "route_id": route_id,
                     "sim_speed": sim_speed
@@ -987,7 +987,7 @@ class MainWindowHandlers:
         
         IMPORTANT: Ignores route changes and agent restarts
         """
-        from services.common.utils.config_loader import config_loader
+        from services.common.config import config_loader
         import math
         
         config = config_loader.load('client/simulation.yaml')
@@ -1150,7 +1150,7 @@ class MainWindowHandlers:
             )
             
             # Teleportation detection
-            from services.common.utils.config_loader import config_loader
+            from services.common.config import config_loader
             sim_config = config_loader.load('client/simulation.yaml')
             if sim_config['teleport_detection']['enabled']:
                 distance_delta_m = data.get('distance_delta_m', 0.0)

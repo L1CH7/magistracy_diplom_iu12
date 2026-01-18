@@ -21,11 +21,11 @@ class CoordinatorAPIClient:
         routes = await client.calculate_routes(55.7558, 37.6173, ...)
     """
     
-    def __init__(self, base_url: str = "http://localhost:8002"):
-        self.base_url = base_url
+    def __init__(self, gateway_url: str = "http://localhost:8000"):
+        self.base_url = gateway_url
         self.client = httpx.AsyncClient(timeout=30.0)
         
-        logger.info(f"CoordinatorAPIClient created: {base_url}")
+        logger.info(f"CoordinatorAPIClient created: {gateway_url}")
     
     async def close(self):
         """Close HTTP client."""
@@ -46,7 +46,8 @@ class CoordinatorAPIClient:
 
         Returns: List of routes with segments, distance, time.
         """
-        url = f"{self.base_url}/api/v1/routes/calculate"
+        # Gateway path
+        url = f"{self.base_url}/routing/find"
 
         payload = {
             "start_lat": start_lat,

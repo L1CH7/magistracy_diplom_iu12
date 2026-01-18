@@ -1,7 +1,7 @@
 """Config bridge for JS-to-Python config access via QWebChannel."""
 import json
 from PyQt5.QtCore import QObject, pyqtSlot
-from services.common.utils.config_loader import config_loader
+from services.common.config import config_loader
 from loguru import logger as log
 
 

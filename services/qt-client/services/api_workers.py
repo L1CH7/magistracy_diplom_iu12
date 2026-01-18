@@ -3,7 +3,7 @@ import json
 import requests
 from PyQt5.QtCore import QThread, pyqtSignal
 from loguru import logger as log
-from services.common.utils.config_loader import config_loader
+from services.common.config import config_loader
 
 
 class GraphFetchWorker(QThread):

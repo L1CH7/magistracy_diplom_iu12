@@ -83,7 +83,7 @@ class SelectedPointsWidget(QFrame):
         
         # Если нет точек - показываем placeholder
         if not self.points:
-            label = QLabel("No points selected\n(Ctrl+1/2/3 to add)")
+            label = QLabel(self.tr("No points selected\n(Ctrl+1/2/3 to add)"))
             label.setAlignment(Qt.AlignCenter)
             label.setStyleSheet(
                 "color: #9ca3af; font-style: italic; padding: 20px;"
@@ -158,11 +158,11 @@ class SelectedPointsWidget(QFrame):
         
         # 2. Point type label
         if is_first:
-            type_label = QLabel("From")
+            type_label = QLabel(self.tr("From"))
         elif is_last:
-            type_label = QLabel("To")
+            type_label = QLabel(self.tr("To"))
         else:
-            type_label = QLabel("Via")
+            type_label = QLabel(self.tr("Via"))
         
         type_label.setStyleSheet(
             "font-size: 11px; color: #374151; min-width: 24px;"

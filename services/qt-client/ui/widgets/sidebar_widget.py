@@ -27,14 +27,14 @@ class SidebarWidget(QFrame):
         self.simulation_panel = SimulationPanel()
         sidebar_layout.addWidget(self.simulation_panel)
 
-        self.points_section = CollapsibleSection("Selected Points")
+        self.points_section = CollapsibleSection(self.tr("Selected Points"))
         self.selected_points_widget = SelectedPointsWidget()
         self.points_section.add_widget(self.selected_points_widget)
         sidebar_layout.addWidget(self.points_section)
 
         sidebar_layout.addStretch()
         
-        self.quit_btn = QPushButton("Quit (ESC)")
+        self.quit_btn = QPushButton(self.tr("Quit (ESC)"))
         self.quit_btn.setStyleSheet(
             "QPushButton { background-color: #ef4444; color: white; "
             "border: none; border-radius: 6px; padding: 8px; "

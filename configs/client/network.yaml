@@ -1,0 +1,9 @@
+# Client Network Configuration
+
+gateway:
+  # Base URL for the Gateway service
+  # Can be overridden by GATEWAY_URL environment variable
+  url: "http://localhost:8000"
+
+  # Timeout for HTTP requests in seconds
+  timeout: 30

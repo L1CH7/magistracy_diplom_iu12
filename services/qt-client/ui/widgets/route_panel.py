@@ -43,12 +43,12 @@ class RoutePanel(QWidget):
         layout.setSpacing(12)
 
         # === K ROUTES SELECTOR ===
-        k_group = QGroupBox("Route Options")
+        k_group = QGroupBox(self.tr("Route Options"))
         k_layout = QVBoxLayout(k_group)
 
         # K routes spinbox
         k_row = QHBoxLayout()
-        k_row.addWidget(QLabel("Number of routes:"))
+        k_row.addWidget(QLabel(self.tr("Number of routes:")))
 
         self.k_spinbox = QSpinBox()
         self.k_spinbox.setRange(1, 10)
@@ -60,7 +60,7 @@ class RoutePanel(QWidget):
         k_layout.addLayout(k_row)
 
         # Get Routes button
-        self.get_routes_btn = QPushButton("Get Routes")
+        self.get_routes_btn = QPushButton(self.tr("Get Routes"))
         self.get_routes_btn.setStyleSheet(
             "QPushButton { "
             "background-color: #10b981; "
@@ -88,11 +88,11 @@ class RoutePanel(QWidget):
         layout.addWidget(k_group)
 
         # === ROUTES LIST ===
-        routes_group = QGroupBox("Found Routes")
+        routes_group = QGroupBox(self.tr("Found Routes"))
         routes_layout = QVBoxLayout(routes_group)
 
         # Status label
-        self.status_label = QLabel("No routes found yet")
+        self.status_label = QLabel(self.tr("No routes found yet"))
         self.status_label.setStyleSheet(
             "color: #6b7280; font-style: italic; padding: 8px;"
         )
@@ -176,7 +176,7 @@ class RoutePanel(QWidget):
         self.routes_list.clear()
 
         if not routes:
-            self.status_label.setText("No routes found")
+            self.status_label.setText(self.tr("No routes found"))
             self.status_label.show()
             self.routes_list.hide()
             return
@@ -205,9 +205,9 @@ class RoutePanel(QWidget):
                 time_str = f"{minutes} min {seconds} sec"
 
             # Create item text
-            item_text = f"Route {route_id + 1}\n"
-            item_text += f"Dist: {distance_str}  Time: {time_str}\n"
-            item_text += f"Edges: {num_edges}"
+            item_text = self.tr("Route") + f" {route_id + 1}\n"
+            item_text += self.tr("Dist:") + f" {distance_str}  " + self.tr("Time:") + f" {time_str}\n"
+            item_text += self.tr("Edges:") + f" {num_edges}"
 
             # Create list item
             item = QListWidgetItem(item_text)
@@ -231,7 +231,7 @@ class RoutePanel(QWidget):
         self.routes_list.clear()
         self.routes_data = []
         self.selected_route_id = None  # Reset selection
-        self.status_label.setText("No routes found yet")
+        self.status_label.setText(self.tr("No routes found yet"))
         self.status_label.show()
         self.routes_list.hide()
         log.debug("Routes cleared")
@@ -249,7 +249,7 @@ class RoutePanel(QWidget):
         """
         if loading:
             self.get_routes_btn.setEnabled(False)
-            self.get_routes_btn.setText("Loading...")
+            self.get_routes_btn.setText(self.tr("Loading..."))
         else:
             self.get_routes_btn.setEnabled(True)
-            self.get_routes_btn.setText("Get Routes")
+            self.get_routes_btn.setText(self.tr("Get Routes"))

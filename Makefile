@@ -58,24 +58,29 @@ shell-router:
 shell-data:
 	docker-compose exec data-processor /bin/bash
 
-# Build Qt Client (Create venv and install deps)
-build-gui:
-	@echo "Setting up Qt Client environment..."
-	cd services/qt-client && python3 -m venv .venv && \
-	. .venv/bin/activate && \
-	pip install --upgrade pip && \
-	pip install -r requirements.txt
+# ==============================================================================
+# GUI Client Targets
+# ==============================================================================
 
-# Run the Qt Client
+# Сборка: Установка -> Генерация .ts -> Компиляция .qm
+build-gui:
+	$(MAKE) -C services/qt-client install translate compile
+
+# Запуск приложения
 gui:
-	@echo "Starting Qt Client..."
-	PYTHONPATH=. services/qt-client/.venv/bin/python services/qt-client/main.py
+	$(MAKE) -C services/qt-client run
+
+# Полная пересборка с нуля (удаление venv и кэшей)
+build-clean-gui:
+	$(MAKE) -C services/qt-client clean
+	$(MAKE) build-gui
 
 # Clean up docker resources
 clean:
 	docker-compose down -v
 	rm -rf services/web-client/dist
 	rm -rf services/web-client/node_modules
+	$(MAKE) -C services/qt-client clean
 
 # Help command to list targets
 help:
