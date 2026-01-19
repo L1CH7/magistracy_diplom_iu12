@@ -19,9 +19,9 @@ class GraphFetchWorker(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, server_url: str, bbox: list):
+    def __init__(self, gateway_url: str, bbox: list):
         super().__init__()
-        self.server_url = server_url
+        self.gateway_url = gateway_url
         self.bbox = bbox
         self._is_cancelled = False
         # Use config timeout (600s for large bbox)
@@ -35,7 +35,7 @@ class GraphFetchWorker(QThread):
     def run(self):
         """Execute the graph fetch request in background thread."""
         try:
-            url = f"{self.server_url}/osm/fetch_road_graph"
+            url = f"{self.gateway_url}/osm/fetch_road_graph"
             
             log.info(
                 f"GraphWorker: starting request to {url}, "
@@ -136,9 +136,9 @@ class RouteFetchWorker(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, server_url: str, waypoints: list):
+    def __init__(self, gateway_url: str, waypoints: list):
         super().__init__()
-        self.server_url = server_url
+        self.gateway_url = gateway_url
         self.waypoints = waypoints
         self._is_cancelled = False
     
@@ -149,15 +149,15 @@ class RouteFetchWorker(QThread):
     def run(self):
         """Execute the route fetch request in background thread."""
         try:
-            url = f"{self.server_url}/api/v1/route/find"
+            url = f"{self.gateway_url}/routing/calculate"
 
-            points = [
+            waypoints = [
                 {"lat": wp[0], "lon": wp[1]} for wp in self.waypoints
             ]
 
             response = requests.post(
                 url,
-                json={"points": points, "k": 3},
+                json={"waypoints": waypoints, "priority": 0},
                 timeout=60
             )
             response.raise_for_status()
@@ -176,3 +176,54 @@ class RouteFetchWorker(QThread):
             self.error.emit(f"HTTP error: {e}")
         except Exception as e:
             self.error.emit(f"Error: {str(e)}")
+
+
+import asyncio
+from .ws_client import DataSocketClient
+
+class DataSocketWorker(QThread):
+    """
+    Worker thread for Data WebSocket.
+    Runs asyncio loop for WebSocket client.
+    """
+    message_received = pyqtSignal(dict)
+    connected = pyqtSignal()
+    disconnected = pyqtSignal()
+    
+    def __init__(self, gateway_url: str):
+        super().__init__()
+        self.gateway_url = gateway_url
+        self.client = None
+        self._loop = None
+        
+    def run(self):
+        """Run the WebSocket client."""
+        # Create new event loop for this thread
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        
+        self.client = DataSocketClient(self.gateway_url)
+        # Bridge callback to Qt signal (safe across threads?)
+        # emit() is thread-safe in PyQt
+        self.client.on_message = self.message_received.emit
+        
+        try:
+            self.connected.emit()
+            # connect() runs until connection closes
+            self._loop.run_until_complete(self.client.connect())
+        except Exception as e:
+            log.error(f"DataSocketWorker error: {e}")
+        finally:
+            self.disconnected.emit()
+            self._loop.close()
+            
+    def stop(self):
+        """Stop the worker."""
+        if self._loop and self.client and self.client.connected:
+            # Schedule disconnect in the loop
+            asyncio.run_coroutine_threadsafe(
+                self.client.disconnect(), 
+                self._loop
+            )
+        # Wait for thread to finish
+        self.wait(2000)

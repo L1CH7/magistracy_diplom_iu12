@@ -26,13 +26,13 @@ from loguru import logger as log
 class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
     """Main application window: fullscreen map + overlay sidebar."""
 
-    def __init__(self, server_url: str = "http://server:8000"):
+    def __init__(self, gateway_url: str = "http://server:8000"):
         """Initialize main window."""
         super().__init__()
         
-        log.info("navigation_mas_starting", server_url=server_url)
+        log.info("navigation_mas_starting", gateway_url=gateway_url)
         
-        self.server_url = server_url
+        self.gateway_url = gateway_url
         self.sidebar_visible = True
         self._zoom_slider_dragging = False
         
@@ -51,12 +51,12 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         # Config bridge - exposes GUI config to JS
         gui_config = config_loader.load('client/gui.yaml')
         
-        # Inject server_url into config for JS (so it knows where to connect)
-        gui_config['apiBaseUrl'] = self.server_url
+        # Inject gateway_url into config for JS (so it knows where to connect)
+        gui_config['apiBaseUrl'] = self.gateway_url
         
         self.config_bridge = ConfigBridge(gui_config)
         debug_enabled = gui_config.get('debug', {}).get('enabled', False)
-        log.info(f"gui_config_loaded debug_enabled={debug_enabled} apiBaseUrl={self.server_url}")
+        log.info(f"gui_config_loaded debug_enabled={debug_enabled} apiBaseUrl={self.gateway_url}")
         
         # Points presenter: single source of truth for points with styling
         self.points_presenter = PointsPresenter()
@@ -81,7 +81,33 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         # Setup keyboard shortcuts
         self._setup_shortcuts()
         
+        # Setup Data Socket Worker for real-time updates
+        from api.api_workers import DataSocketWorker
+        self.data_msg_worker = DataSocketWorker(self.gateway_url)
+        self.data_msg_worker.message_received.connect(self._on_data_message)
+        self.data_msg_worker.start()
+        
         self.showMaximized()
+        
+    def closeEvent(self, event):
+        """Handle window close."""
+        if hasattr(self, 'data_msg_worker'):
+            self.data_msg_worker.stop()
+        super().closeEvent(event)
+        
+    def _on_data_message(self, data: dict):
+        """Handle data updates from WebSocket."""
+        msg_type = data.get("type")
+        
+        if msg_type == "tile_downloaded":
+             log.info("Tile downloaded notification received, reloading map layers")
+             # Reload layers
+             js_code = "if (window.app && window.app.refreshTiles) { window.app.refreshTiles(); }"
+             self.map_widget.page().runJavaScript(js_code)
+             
+        elif msg_type == "task_updated":
+             # Maybe update status bar
+             pass
     
     def _setup_translation(self):
         """Load translations based on config."""
@@ -261,7 +287,7 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
     def _auto_load_graph(self) -> None:
         """Automatically load graph from server on startup."""
         from config import DataConfig
-        from services.api_workers import GraphFetchWorker
+        from api.api_workers import GraphFetchWorker
         
         log.info("auto_loading_graph")
         
@@ -269,7 +295,7 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         bbox = DataConfig.DEFAULT_TEST_BBOX
         
         # Create background worker
-        self._graph_worker = GraphFetchWorker(self.server_url, bbox)
+        self._graph_worker = GraphFetchWorker(self.gateway_url, bbox)
         self._graph_worker.finished.connect(self._on_auto_graph_loaded)
         self._graph_worker.error.connect(
             lambda err: log.error("auto_graph_load_failed", error=err)

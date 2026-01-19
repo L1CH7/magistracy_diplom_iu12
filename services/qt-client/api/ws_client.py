@@ -12,13 +12,15 @@ import websockets
 from loguru import logger
 
 
-class CoordinatorWSClient:
+class DataSocketClient:
     """
-    WebSocket client for Coordinator Service.
+    WebSocket client for Data Processor updates.
+    
+    Receives real-time notifications about tile downloads.
     
     Usage:
-        client = CoordinatorWSClient("ws://localhost:8002/ws/positions")
-        client.on_positions = lambda data: print(data)
+        client = DataSocketClient("ws://localhost:8000")
+        client.on_message = lambda data: print(data)
         await client.connect()
     """
     
@@ -31,47 +33,51 @@ class CoordinatorWSClient:
         else:
             ws_base = f"ws://{gateway_url}"
             
-        self.url = f"{ws_base}/ws/positions"
+        self.url = f"{ws_base}/ws/data_updates"
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.connected = False
         
-        # Callback for position updates
-        self.on_positions: Optional[Callable] = None
+        # Callback for updates
+        self.on_message: Optional[Callable] = None
         
-        logger.info(f"CoordinatorWSClient created: {self.url} (from {gateway_url})")
+        logger.info(f"DataSocketClient created: {self.url}")
     
     async def connect(self):
-        """Connect to Coordinator WebSocket."""
+        """Connect to Data Processor WebSocket."""
         try:
             self.ws = await websockets.connect(self.url)
             self.connected = True
             
-            logger.success(f"Connected to Coordinator: {self.url}")
+            logger.success(f"Connected to Data Socket: {self.url}")
             
             # Start receiving loop
-            asyncio.create_task(self._receive_loop())
+            await self._receive_loop()
             
         except Exception as e:
             logger.error(f"WebSocket connection failed: {e}")
-            raise
+            # Don't raise, just log - we might retry
+            self.connected = False
+            raise e
     
     async def disconnect(self):
-        """Disconnect from Coordinator."""
+        """Disconnect from Data Processor."""
         if self.ws:
             await self.ws.close()
             self.connected = False
             
-            logger.info("Disconnected from Coordinator")
+            logger.info("Disconnected from Data Socket")
     
     async def _receive_loop(self):
-        """Receive position updates."""
+        """Receive updates."""
         try:
             async for message in self.ws:
-                data = json.loads(message)
-                
-                # Call callback
-                if self.on_positions:
-                    self.on_positions(data)
+                try:
+                    data = json.loads(message)
+                    # Call callback
+                    if self.on_message:
+                        self.on_message(data)
+                except json.JSONDecodeError:
+                    logger.warning(f"Received non-JSON message: {message}")
                 
         except websockets.exceptions.ConnectionClosed:
             logger.warning("WebSocket connection closed")

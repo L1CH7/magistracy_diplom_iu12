@@ -7,3 +7,4 @@ pyyaml
 pyyaml-include
 qt5-tools
 requests
+websockets

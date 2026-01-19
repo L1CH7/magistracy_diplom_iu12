@@ -54,4 +54,8 @@ class ConfigBridge(QObject):
                 # Fallback to empty config
                 self._map_config = {"lod": {"layers": []}, "rendering": {}}
         
+        # Inject apiBaseUrl from GUI config (passed via constructor)
+        if 'apiBaseUrl' in self._config:
+            self._map_config['apiBaseUrl'] = self._config['apiBaseUrl']
+            
         return json.dumps(self._map_config)
