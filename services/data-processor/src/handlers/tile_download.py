@@ -11,13 +11,14 @@ Responsibilities:
 import json
 import aiohttp
 import asyncio
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Set
 from loguru import logger
+import time
 
 from ..db.pool import DatabasePool
 from ..db.queries import OSMQueries, format_tile_key
 from ..state.task_manager import TaskManager, TaskPhase
-
+from .utils import split_bbox
 
 class TileDownloadHandler:
     """Handles tile download operations."""
@@ -27,94 +28,218 @@ class TileDownloadHandler:
         db: DatabasePool,
         task_manager: TaskManager,
         overpass_servers: List[str],
-        timeout: int = 300
+        timeout: int = 300,
+        tile_size: float = 0.05,
+        cpu_cores: int = 0
     ):
         self.db = db
         self.task_manager = task_manager
         self.overpass_servers = overpass_servers
         self.timeout = timeout
+        self.tile_size = tile_size
         self._server_failures = {server: 0 for server in overpass_servers}
-    
+        
+        # Concurrency control
+        # If cpu_cores is 0, use reasonable default for network I/O (e.g., 5-10) 
+        # since overpass servers have rate limits.
+        # For data processing logic, it might be CPU bound, but here acts as download throttle.
+        limit = cpu_cores if cpu_cores > 0 else 5
+        self.semaphore = asyncio.Semaphore(limit)
+        
+        # Task cancellation
+        self._active_tasks: Set[asyncio.Task] = set()
+        self._cancel_requested = False
+
+    async def cancel_all_downloads(self):
+        """Cancel all active download tasks."""
+        self._cancel_requested = True
+        logger.warning(f"Cancelling {len(self._active_tasks)} active download tasks...")
+        
+        for task in self._active_tasks:
+            task.cancel()
+            
+        if self._active_tasks:
+            await asyncio.gather(*self._active_tasks, return_exceptions=True)
+            
+        self._active_tasks.clear()
+        self._cancel_requested = False
+        logger.info("All downloads cancelled.")
+
+    async def download_area(
+        self,
+        bbox: Tuple[float, float, float, float],
+        overwrite: bool = True
+    ) -> dict:
+        """
+        Download all tiles within the bbox.
+        
+        Args:
+            bbox: (west, south, east, north)
+            overwrite: If True, redownload existing tiles.
+        """
+        west, south, east, north = bbox
+        
+        # 1. Split area into tiles
+        tiles = list(split_bbox(west, south, east, north, self.tile_size))
+        total_tiles = len(tiles)
+        
+        if total_tiles == 0:
+            return {"status": "empty", "message": "No tiles in area"}
+            
+        logger.info(f"Starting area download: {total_tiles} tiles in bbox {bbox}")
+        
+        # 2. Track overall progress
+        group_task_id = self.task_manager.create_task(
+            "area_download",
+            items_total=total_tiles
+        )
+        
+        processed_count = 0
+        success_count = 0
+        failed_count = 0
+        
+        async def process_tile(tile_bbox):
+            nonlocal processed_count, success_count, failed_count
+            
+            # Check for cancellation
+            if self._cancel_requested:
+                return
+
+            try:
+                # Use standard tile key relative to tile grid (approximate for logging)
+                msg = await self.download_tile(tile_bbox, overwrite=overwrite)
+                if msg["status"] == "complete":
+                    success_count += 1
+                else:
+                    failed_count += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Tile processing failed: {e}")
+            finally:
+                processed_count += 1
+                # Log progress every 5%
+                if total_tiles > 20 and processed_count % (total_tiles // 20) == 0:
+                     percent = (processed_count / total_tiles) * 100
+                     logger.info(f"Area download progress: {processed_count}/{total_tiles} tiles ({percent:.1f}%)")
+                     self.task_manager.update_progress(
+                         group_task_id,
+                         percent,
+                         TaskPhase.DOWNLOADING,
+                         f"Processed {processed_count}/{total_tiles} tiles"
+                     )
+
+        # 3. Create tasks
+        to_run = []
+        for t_bbox in tiles:
+           to_run.append(process_tile(t_bbox))
+           
+        # 4. Run with concurrency limit
+        # We need to wrap each in semaphore
+        async def sem_task(coro):
+            async with self.semaphore:
+                task = asyncio.create_task(coro)
+                self._active_tasks.add(task)
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass # Handled in cancel_all
+                finally:
+                    self._active_tasks.discard(task)
+
+        tasks = [sem_task(t) for t in to_run]
+        
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            logger.warning("Area download cancelled")
+            self.task_manager.mark_failed(group_task_id, "Cancelled by user")
+            return {"status": "cancelled"}
+            
+        self.task_manager.mark_complete(
+            group_task_id,
+            f"Completed: {success_count} success, {failed_count} failed"
+        )
+        
+        return {
+            "status": "complete",
+            "total": total_tiles,
+            "success": success_count,
+            "failed": failed_count
+        }
+
     async def download_tile(
         self,
-        tile_key: Tuple[float, float],
-        bbox: Tuple[float, float, float, float]
+        bbox: Tuple[float, float, float, float],
+        overwrite: bool = True
     ) -> dict:
         """
         Download and save single tile.
         
         Args:
-            tile_key: (lon, lat) tile identifier
+            tile_key: (lon, lat) tile identifier (derived from bbox)
             bbox: (west, south, east, north) bounding box
-        
-        Returns:
-            {"status": "complete"|"failed", "ways_count": int}
         """
-        tile_str = format_tile_key(*tile_key)
+        # tile_key for DB is based on the south-west corner
+        tile_key_tuple = (bbox[0], bbox[1])
+        tile_str = format_tile_key(*tile_key_tuple)
         
-        # Create task for tracking
-        task_id = self.task_manager.create_task(
+        # Check if exists (unless overwrite)
+        # Check if exists (unless overwrite)
+        if not overwrite:
+            try:
+                # Check status in DB
+                async with self.db.acquire() as conn:
+                    status = await conn.fetchval(
+                        "SELECT download_status FROM osm.cached_tiles WHERE tile_key = $1",
+                        tile_str
+                    )
+                    if status == "complete":
+                        logger.trace(f"Tile {tile_str} exists and complete, skipping.")
+                        return {"status": "skipped", "message": "Already exists"}
+            except Exception as e:
+                logger.warning(f"Failed to check tile status for {tile_str}: {e}")
+                # Proceed to download if check fails
+                pass
+
+        download_task_id = self.task_manager.create_task(
             "tile_download",
             tile_key=tile_str
         )
         
         try:
-            # Mark as downloading in DB (insert if not exists)
+            # Mark as downloading
             await self._insert_or_update_tile(
-                tile_str, bbox, "downloading", 0, ""  # Empty string not None
+                tile_str, bbox, "downloading", 0, ""
             )
             
-            # Download OSM data
-            self.task_manager.update_progress(
-                task_id,
-                10.0,
-                TaskPhase.DOWNLOADING,
-                f"Downloading OSM data for {tile_str}"
-            )
-            
+            # Download
             osm_data = await self._download_osm_data(bbox)
             
-            # Extract ways
+            # Extract
             elements = osm_data.get("elements", [])
             ways = [e for e in elements if e.get("type") == "way"]
             total_ways = len(ways)
             
-            logger.info(
-                f"Tile [{tile_str}] downloaded {total_ways} ways"
-            )
-            
-            # Save to database
-            self.task_manager.update_progress(
-                task_id,
-                50.0,
-                TaskPhase.SAVING,
-                f"Saving {total_ways} ways",
-                items_total=total_ways
-            )
-            
+            # Save
             saved_count = await self._save_ways_to_db(
                 ways,
                 elements,
-                task_id,
+                download_task_id,
                 total_ways
             )
             
-            # Broadcast WebSocket event: ways updated
-            await self._broadcast_ways_updated()
-            
-            # Mark as complete
+            # Update status
             await self._update_tile_status(
-                tile_str, "complete", saved_count, ""  # Empty string not None
+                tile_str, "complete", saved_count, ""
             )
             
-            self.task_manager.mark_complete(
-                task_id,
-                f"Tile {tile_str} downloaded: {saved_count} ways"
-            )
-            
-            logger.success(
-                f"Tile [{tile_str}] completed: {saved_count} ways"
-            )
+            # Broadcast
+            await self._broadcast_ways_updated()
+
+            self.task_manager.mark_complete(download_task_id, f"Saved {saved_count} ways")
+            logger.trace(f"Tile [{tile_str}] completed. Ways: {saved_count}")
             
             return {
                 "status": "complete",
@@ -128,8 +253,7 @@ class TileDownloadHandler:
             await self._update_tile_status(
                 tile_str, "failed", 0, error_msg
             )
-            
-            self.task_manager.mark_failed(task_id, error_msg)
+            self.task_manager.mark_failed(download_task_id, error_msg)
             
             return {
                 "status": "failed",
@@ -152,14 +276,30 @@ class TileDownloadHandler:
         west, south, east, north = bbox
         
         # Build Overpass QL query (same as old osm_loader.py)
+        # Build Overpass QL query
         query = f"""
         [out:json][timeout:{self.timeout}];
         (
-          way["highway"]({south},{west},{north},{east});
+          // 1. Graph edge filtering by whitelist
+          way["highway"~"^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|residential|living_street|unclassified|service|road|track|bus_guideway|escape)$"]({south},{west},{north},{east});
+          
+          // 2. Turn Restrictions extraction
+          relation["type"="restriction"]({south},{west},{north},{east});
+          
+          // 3. Point barriers extraction (Traffic Calming / Barriers)
+          node["barrier"~"gate|boom|bollard|block|wall|lift_gate|sliding_gate"]({south},{west},{north},{east});
+          
+          // 4. Access restrictions extraction
+          way["access"="private"]({south},{west},{north},{east});
+          way["access"="no"]({south},{west},{north},{east});
+          way["motor_vehicle"="no"]({south},{west},{north},{east});
+          way["service"="driveway"]({south},{west},{north},{east});
         );
-        out body;
-        >;
-        out skel qt;
+        
+        // Output phase:
+        out body;  // Metadata (ID and tags)
+        >;         // Recurse down
+        out skel qt; // Skeleton geometry
         """
         
         # Try servers in order of least failures
@@ -172,12 +312,24 @@ class TileDownloadHandler:
         
         for server in sorted_servers:
             try:
+                # Use asyncio.sleep to be nice to servers if we had failures?
+                # For now just go.
+                headers = {
+                    "User-Agent": "DiplomDataProcessor/1.0 (bmstu-student-project; contact: admin@example.com)",
+                    "Accept-Encoding": "gzip"
+                }
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                         f"{server}/api/interpreter",
                         data={"data": query},
+                        headers=headers,
                         timeout=aiohttp.ClientTimeout(total=self.timeout)
                     ) as response:
+                        if response.status == 429: # Too many requests
+                             logger.warning(f"Overpass {server} 429 Too Many Requests, backing off...")
+                             await asyncio.sleep(5) 
+                             raise Exception("Too many requests")
+
                         response.raise_for_status()
                         data = await response.json()
                         
@@ -189,9 +341,9 @@ class TileDownloadHandler:
             except Exception as e:
                 last_error = e
                 self._server_failures[server] += 1
-                logger.warning(
-                    f"Overpass server {server} failed: {e}"
-                )
+                # logger.warning(
+                #    f"Overpass server {server} failed: {e}"
+                # )
                 continue
         
         # All servers failed
@@ -218,8 +370,6 @@ class TileDownloadHandler:
         Returns:
             Number of ways saved
         """
-        import time
-        
         start_time = time.time()
         batch_data = []
         saved_count = 0
@@ -231,16 +381,7 @@ class TileDownloadHandler:
             if e.get("type") == "node"
         }
         
-        # Debug: check node_map size
-        nodes_with_coords = sum(
-            1 for n in node_map.values()
-            if n.get("lat") and n.get("lon")
-        )
-        logger.debug(
-            f"Node lookup: {len(node_map)} total nodes, "
-            f"{nodes_with_coords} with coordinates"
-        )
-        
+        # Drivable road types
         # Drivable road types
         drivable_types = {
             'motorway', 'motorway_link',
@@ -249,39 +390,23 @@ class TileDownloadHandler:
             'secondary', 'secondary_link',
             'tertiary', 'tertiary_link',
             'unclassified', 'residential',
-            'living_street', 'service'
-        }
-        
-        # Debug: collect highway types and filter reasons
-        highway_types = {}
-        filter_stats = {
-            "total": 0,
-            "passed_highway": 0,
-            "no_nodes": 0,
-            "no_coords": 0,
-            "success": 0
+            'living_street', 'service',
+            'road', 'track',
+            'bus_guideway', 'escape'
         }
         
         for idx, way in enumerate(ways, start=1):
-            filter_stats["total"] += 1
-            
             osm_id = way.get("id")
             tags = way.get("tags", {})
             highway = tags.get("highway")
-            
-            # Debug: count highway types
-            highway_types[highway] = highway_types.get(highway, 0) + 1
             
             # Filter: only drivable roads
             if highway not in drivable_types:
                 continue
             
-            filter_stats["passed_highway"] += 1
-            
             # Build LineString from nodes
             nodes = way.get("nodes", [])
             if len(nodes) < 2:
-                filter_stats["no_nodes"] += 1
                 continue
             
             # Get node coordinates
@@ -292,10 +417,7 @@ class TileDownloadHandler:
                     node_coords.append([node["lon"], node["lat"]])
             
             if len(node_coords) < 2:
-                filter_stats["no_coords"] += 1
                 continue
-            
-            filter_stats["success"] += 1
             
             # Build geometry as LineString
             geom_json = {
@@ -317,26 +439,6 @@ class TileDownloadHandler:
             ))
             
             saved_count += 1
-            
-            # Progress update every 10%
-            if idx % max(1, total_ways // 10) == 0:
-                progress = 50.0 + (idx / total_ways) * 50.0
-                self.task_manager.update_progress(
-                    task_id,
-                    progress,
-                    items_processed=idx
-                )
-        
-        # Debug: log highway type distribution and filter stats
-        logger.debug(
-            f"Highway types in downloaded data: {highway_types}"
-        )
-        logger.debug(
-            f"Filter stats: {filter_stats}"
-        )
-        logger.debug(
-            f"Final result: {saved_count}/{total_ways} ways passed all filters"
-        )
         
         # Batch insert
         if batch_data:
@@ -345,11 +447,6 @@ class TileDownloadHandler:
                     OSMQueries.BATCH_INSERT_WAYS,
                     batch_data
                 )
-        
-        insert_time = time.time() - start_time
-        logger.success(
-            f"Batch inserted {len(batch_data)} ways in {insert_time:.2f}s"
-        )
         
         return saved_count
     
@@ -372,9 +469,6 @@ class TileDownloadHandler:
                     status,
                     ways_count,
                     west, south, east, north
-                )
-                logger.info(
-                    f"Tile [{tile_key}] metadata: {status}, {ways_count} ways"
                 )
         except Exception as e:
             logger.error(
@@ -399,9 +493,6 @@ class TileDownloadHandler:
                     ways_count,
                     error_message or ""  # Never pass None
                 )
-                logger.info(
-                    f"Tile [{tile_key}] → {status}"
-                )
         except Exception as e:
             logger.error(
                 f"Failed to update tile {tile_key}: {e}"
@@ -409,19 +500,21 @@ class TileDownloadHandler:
             raise
     
     async def _broadcast_ways_updated(self) -> None:
-        """Broadcast WebSocket event: ways updated."""
+        """Broadcast WebSocket event: ways updated and tiles invalidated."""
         try:
-            # Query current way count
-            async with self.db.acquire() as conn:
-                count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM osm.ways"
-                )
+            # Broadcast that tiles should be refreshed (new data available)
+            from src.api.websocket import broadcast_tiles_invalidated, broadcast_ways_updated
+            await broadcast_tiles_invalidated()
             
-            # Broadcast to all connected WebSocket clients
-            from src.api.websocket import broadcast_ways_updated
+            # Also broadcast count for statistics
+            # We can optimize this by not counting every time if needed, 
+            # but for now let's be accurate.
+            async with self.db.acquire() as conn:
+                count = await conn.fetchval("SELECT COUNT(*) FROM osm.ways")
             await broadcast_ways_updated(count)
             
-            logger.info(f"Broadcasted ways_updated: {count} ways")
+            logger.trace(f"Broadcasted update: tiles invalidated, ways={count}")
             
         except Exception as e:
             logger.error(f"Failed to broadcast ways_updated: {e}")
+

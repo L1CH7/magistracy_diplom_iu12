@@ -53,7 +53,7 @@ def _clip_bbox_to_default(
         HTTPException: If no intersection or invalid config
     """
     from fastapi import HTTPException
-    from services.common.utils.config_loader import config_loader
+    from services.common.config import config_loader
     
     # Load default_bbox from bboxes.yaml
     bboxes_config = config_loader.load('data-processor/bboxes.yaml')
@@ -104,48 +104,61 @@ def _clip_bbox_to_default(
 
 
 @router.post("/download")
-async def download_tile(lon: float, lat: float, bbox_size: float = 0.2):
+@router.post("/download/")
+async def download_tile(
+    lon: float = None, 
+    lat: float = None, 
+    bbox_size: float = 0.2,
+    bbox: str = None # Format: "west,south,east,north"
+):
     """
-    Start tile download in background.
+    Start tile/area download in background.
     
-    CLIPS requested bbox to default_bbox from bboxes.yaml config.
-    Only downloads intersection (requested ∩ default_bbox).
+    If no arguments provided, downloads default_bbox.
+    If arguments provided, clips to default_bbox.
     
     Args:
-        lon: Tile longitude (SW corner)
-        lat: Tile latitude (SW corner)
-        bbox_size: Tile size in degrees (default 0.2)
-    
-    Returns:
-        {"status": "started", "tile_key": "...", "bbox": {...}, "clipped": bool}
+        lon: Tile longitude (SW corner) - Optional
+        lat: Tile latitude (SW corner) - Optional
+        bbox_size: Size in degrees - Optional
+        bbox: "west,south,east,north" string - Optional
     """
-    # Compute initial bbox
-    west, south = lon, lat
-    east, north = lon + bbox_size, lat + bbox_size
+    # Determine requested bbox
+    if bbox:
+        try:
+            west, south, east, north = map(float, bbox.split(','))
+        except ValueError:
+             raise HTTPException(status_code=400, detail="Invalid bbox format. Use 'west,south,east,north'")
+    elif lon is not None and lat is not None:
+        west, south = lon, lat
+        east, north = lon + bbox_size, lat + bbox_size
+    else:
+        # No args = use full default_bbox
+        # We can pass very large bbox that covers everything, clip will handle it.
+        west, south, east, north = -180, -90, 180, 90 
     
     # Clip to default_bbox
     clip_result = _clip_bbox_to_default(west, south, east, north)
     clipped_bbox = clip_result["clipped_bbox"]
     was_clipped = clip_result["was_clipped"]
     
-    # Use clipped bbox for download
-    tile_key = (clipped_bbox[0], clipped_bbox[1])
-    
     # Start download in background
+    # Note: We don't await the whole download here, just the start
+    # But download_area is async and runs potentially long.
+    # We should wrap it in create_task.
     asyncio.create_task(
-        router.tile_handler.download_tile(tile_key, clipped_bbox)
+        router.tile_handler.download_area(clipped_bbox, overwrite=True)
     )
     
     result = {
         "status": "started",
-        "tile_key": f"{clipped_bbox[0]:.2f}_{clipped_bbox[1]:.2f}",
         "bbox": {
             "west": clipped_bbox[0],
             "south": clipped_bbox[1],
             "east": clipped_bbox[2],
             "north": clipped_bbox[3]
         },
-        "clipped": was_clipped
+        "message": "Download started in background"
     }
     
     if was_clipped:
@@ -155,7 +168,7 @@ async def download_tile(lon: float, lat: float, bbox_size: float = 0.2):
             "east": east,
             "north": north
         }
-        result["message"] = (
+        result["clip_info"] = (
             f"Bbox clipped to {clip_result['default_bbox_name']} "
             f"{clip_result['default_coords']}"
         )
@@ -163,67 +176,11 @@ async def download_tile(lon: float, lat: float, bbox_size: float = 0.2):
     return result
 
 
-@router.post("/redownload")
-async def redownload_bbox(
-    west: float,
-    south: float,
-    east: float,
-    north: float
-):
-    """
-    Force redownload of specific bbox area.
-    
-    CLIPS requested bbox to default_bbox from bboxes.yaml config.
-    Only downloads intersection (requested ∩ default_bbox).
-    
-    Uses same _clip_bbox_to_default() logic as /download endpoint.
-    
-    Args:
-        west: Western longitude boundary
-        south: Southern latitude boundary
-        east: Eastern longitude boundary
-        north: Northern latitude boundary
-    
-    Returns:
-        {"status": "redownload_started", "bbox": {...}, "clipped": bool}
-    """
-    # Clip to default_bbox (same logic as /download)
-    clip_result = _clip_bbox_to_default(west, south, east, north)
-    clipped_bbox = clip_result["clipped_bbox"]
-    was_clipped = clip_result["was_clipped"]
-    
-    # Use clipped bbox for download
-    tile_key = (clipped_bbox[0], clipped_bbox[1])
-    
-    # Запускаем загрузку (same as /download)
-    asyncio.create_task(
-        router.tile_handler.download_tile(tile_key, clipped_bbox)
-    )
-    
-    result = {
-        "status": "redownload_started",
-        "bbox": {
-            "west": clipped_bbox[0],
-            "south": clipped_bbox[1],
-            "east": clipped_bbox[2],
-            "north": clipped_bbox[3]
-        },
-        "clipped": was_clipped
-    }
-    
-    if was_clipped:
-        result["original_bbox"] = {
-            "west": west,
-            "south": south,
-            "east": east,
-            "north": north
-        }
-        result["message"] = (
-            f"Bbox clipped to {clip_result['default_bbox_name']} "
-            f"{clip_result['default_coords']}"
-        )
-    
-    return result
+@router.post("/download/stop")
+async def stop_downloads():
+    """Stop all active downloads."""
+    await router.tile_handler.cancel_all_downloads()
+    return {"status": "stopped", "message": "All download tasks cancelled"}
 
 
 @router.get("/{z}/{x}/{y}.mvt")
@@ -231,13 +188,7 @@ async def get_mvt_tile(z: int, x: int, y: int):
     """
     Get Mapbox Vector Tile.
     
-    Args:
-        z: Zoom level
-        x: Tile X coordinate
-        y: Tile Y coordinate
-    
-    Returns:
-        MVT protobuf data
+    If tile missing but in default_bbox, triggers download.
     """
     # Validate tile coordinates
     if z < 0 or z > 18:
@@ -247,15 +198,55 @@ async def get_mvt_tile(z: int, x: int, y: int):
     if x < 0 or x >= max_tile or y < 0 or y >= max_tile:
         raise HTTPException(status_code=400, detail="Invalid tile coords")
     
+    # 1. Check intersection with default_bbox
+    # We need tile_to_bbox and crop_default_bbox
+    from ..handlers.utils import tile_to_bbox, crop_default_bbox
+    
+    tile_bbox = tile_to_bbox(z, x, y)
+    clip_result = crop_default_bbox(*tile_bbox)
+    
+    if not clip_result["is_valid"]:
+        # Tile is completely outside default_bbox
+        return FastAPIResponse(status_code=204)
+
     try:
         mvt_data = await router.mvt_handler.generate_tile(z, x, y)
         
-        if not mvt_data:
-            # 204 No Content - valid but empty tile
+        if not mvt_data or len(mvt_data) < 100:
+            # Check if we already have this area downloaded (valid empty tile)
+            try:
+                w, s, e, n = tile_bbox
+                async with router.tile_handler.db.acquire() as conn:
+                    is_covered = await conn.fetchval("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM osm.cached_tiles 
+                            WHERE download_status = 'complete'
+                            AND ST_Covers(bbox, ST_MakeEnvelope($1, $2, $3, $4, 4326))
+                        )
+                    """, w, s, e, n)
+                    
+                    if is_covered:
+                        # It's a valid empty area (e.g., forest/water without roads)
+                        return FastAPIResponse(
+                            content=b"",
+                            # user logs showed 200 OK for empty tiles in some cases.
+                            status_code=200,
+                            headers={"Cache-Control": "public, max-age=3600"}
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to check coverage: {e}")
+
+            # Data missing -> 202 Accepted + Trigger Download
+            target_bbox = clip_result["clipped_bbox"] # Should be tile_bbox clipped to default
+            
+            asyncio.create_task(
+                router.tile_handler.download_area(target_bbox, overwrite=False)
+            )
+            
             return FastAPIResponse(
+                status_code=202,
                 content=b"",
-                status_code=204,
-                headers={"Cache-Control": "public, max-age=3600"}
+                headers={"Retry-After": "5"}
             )
         
         # Compress MVT data with gzip

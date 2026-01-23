@@ -25,6 +25,7 @@ async def init_status_api(db: DatabasePool, task_manager: TaskManager):
 
 
 @router.get("/status")
+@router.get("/status/")
 async def get_system_status():
     """
     Get real-time system status.

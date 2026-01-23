@@ -31,26 +31,9 @@ from src.api import status, tiles, debug, websocket
 
 
 # ==================== Configuration ====================
+# Using services.common.config.Settings
+from services.common.config import load_settings, Settings
 
-def load_config() -> dict:
-    """Load configuration from environment."""
-    return {
-        "db": {
-            "host": os.getenv("DB_HOST", "postgis"),
-            "port": int(os.getenv("DB_PORT", "5432")),
-            "database": os.getenv("DB_NAME", "osm"),
-            "user": os.getenv("DB_USER", "diplom"),
-            "password": os.getenv("DB_PASSWORD", "diplom_pass"),
-        },
-        "overpass": {
-            "servers": [
-                "https://overpass-api.de",
-                "https://overpass.kumi.systems",
-                "https://overpass.openstreetmap.ru"
-            ],
-            "timeout": 300
-        }
-    }
 
 
 # ==================== Application Lifecycle ====================
@@ -58,13 +41,66 @@ def load_config() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
-    config = load_config()
-    
     # Initialize components
     logger.info("Initializing data-processor components...")
     
+    settings = load_settings()
+    
+    # Load specialized configs
+    from services.common.config import config_loader
+    try:
+        overpass_config = config_loader.load('data-processor/overpass.yaml')
+    except Exception as e:
+        logger.warning(f"Failed to load overpass.yaml: {e}. Using defaults.")
+        overpass_config = {}
+
+    # Settings from Env > Config File
+    # If Env var set (Settings), usage is ambiguous if default is hardcoded in Settings.
+    # Logic: Use Settings if non-default (meaning set by Env), else check Config File, else Default.
+    # Since Settings are Pydantic with defaults, hard to know if user set them or default.
+    # Generally Env > File > Default.
+    # But here simple approach: Use Settings values (which come from Env or Defaults).
+    # IF we want file to be source of domain config logic:
+    
+    tile_size = settings.data_processor_config.tile_size
+    cpu_cores = settings.data_processor_config.cpu_cores
+    
+    # Check overpass.yaml for tile_size if setting is default (0.05) or maybe we prefer file?
+    # User said "add them to config".
+    # Let's override if file has them and Env didn't change (how to check? hard).
+    # Let's prefer Env (Settings) but if they are defaults, maybe use file?
+    # Actually, let's just use values from overpass.yaml if present, as that's the domain config.
+    # Env vars usually override everything.
+    # Use: Env > File > Default
+    
+    # If Env var NOT present, Settings has default.
+    # If File present, it has distinct value.
+    # We will assume Settings.tile_size is valid source. 
+    # BUT, if we want to respect the file edits I just made:
+    
+    file_tile_size = overpass_config.get('tile_size') or overpass_config.get('tile_size_degrees')
+    if file_tile_size is not None:
+        # If settings is default, maybe use file? 
+        # Safer: Just use file value if loaded, assuming Envs are for infrastructure mainly.
+        # OR: overwrite settings with file value? context-dependent.
+        # Given user request "add to config file", I will prioritize file config for these domain params.
+        tile_size = float(file_tile_size)
+
+    file_cpu_cores = overpass_config.get('cpu_cores')
+    if file_cpu_cores is not None:
+         cpu_cores = int(file_cpu_cores)
+         
+    from services.common.utils.loguru_config import setup_uvicorn_logging
+    setup_uvicorn_logging()
+         
     # 1. Database pool
-    app.state.db = DatabasePool(**config["db"])
+    app.state.db = DatabasePool(
+        host=settings.db.host,
+        port=settings.db.port,
+        database=settings.db.name,
+        user=settings.db.user,
+        password=settings.db.password
+    )
     await app.state.db.connect()
     
     # 2. Task manager
@@ -74,8 +110,10 @@ async def lifespan(app: FastAPI):
     app.state.tile_handler = TileDownloadHandler(
         db=app.state.db,
         task_manager=app.state.task_manager,
-        overpass_servers=config["overpass"]["servers"],
-        timeout=config["overpass"]["timeout"]
+        overpass_servers=overpass_config.get("primary_servers", []) + overpass_config.get("fallback_servers", []),
+        timeout=overpass_config.get("timeout", 300),
+        tile_size=tile_size,
+        cpu_cores=cpu_cores
     )
     
     app.state.mvt_handler = MVTHandler(db=app.state.db)
@@ -137,7 +175,7 @@ async def recover_failed_downloads(
 # ==================== FastAPI App ====================
 
 # Configure logging
-configure_loguru(service_name="data-processor")
+configure_loguru(service_name="data-processor", log_level="TRACE")
 
 # Create app
 app = FastAPI(

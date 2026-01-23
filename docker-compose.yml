@@ -20,11 +20,13 @@ services:
       postgis:
         condition: service_healthy
     environment:
-      - DB_HOST=postgis
-      - DB_PORT=5432
-      - DB_NAME=nav_mas
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
+      - APP__DB__HOST=postgis
+      - APP__DB__PORT=5432
+      - APP__DB__NAME=nav_mas
+      - APP__DB__USER=postgres
+      - APP__DB__PASSWORD=postgres
+      - APP__SERVICES__ROUTER__URL=http://router:8000
+      - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
     volumes:
       - ./configs:/app/configs
 
@@ -32,15 +34,31 @@ services:
     build:
       context: .
       dockerfile: services/router/Dockerfile
+    ports:
+      - "8006:8000"
     depends_on:
       postgis:
         condition: service_healthy
     environment:
+      - APP__DB__HOST=postgis
+      - APP__DB__PORT=5432
+      - APP__DB__NAME=nav_mas
+      - APP__DB__USER=postgres
+      - APP__DB__PASSWORD=postgres
+      - APP__SERVICES__ROUTER__URL=http://router:8000
+      - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
+      # Legacy for backward compatibility if needed, though router uses Settings now
       - DB_HOST=postgis
       - DB_PORT=5432
       - DB_NAME=nav_mas
       - DB_USER=postgres
       - DB_PASSWORD=postgres
+      # PostGISManager specific
+      - POSTGRES_HOST=postgis
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=nav_mas
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - ./configs:/app/configs
 
