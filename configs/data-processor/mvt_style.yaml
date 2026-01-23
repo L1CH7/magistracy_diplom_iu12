@@ -1,0 +1,51 @@
+
+lod:
+  # Zoom level thresholds for highway types
+  # Format: min_zoom: [list, of, visible, types]
+  # If request zoom < min_zoom (and >= previous tier), these types are shown.
+  # Higher zoom levels automatically inherit and expand? 
+  # Actually, easier to define "At zoom Z, show these types".
+  # If a zoom is not listed, find the closest lower defined zoom.
+
+  # Zoom 0-4: Only major motorways (World view)
+  0: 
+    - motorway
+    - trunk
+    - motorway_link
+    - trunk_link
+
+  # Zoom 5-9: Add Primary roads (Region view)
+  5:
+    - motorway
+    - trunk
+    - primary
+    - motorway_link
+    - trunk_link
+    - primary_link
+
+  # Zoom 10-12: Add Secondary roads (City view)
+  10:
+    - motorway
+    - trunk
+    - primary
+    - secondary
+    - motorway_link
+    - trunk_link
+    - primary_link
+    - secondary_link
+
+  # Zoom 13: Add Tertiary (District view)
+  13:
+    - motorway
+    - trunk
+    - primary
+    - secondary
+    - tertiary
+    - motorway_link
+    - trunk_link
+    - primary_link
+    - secondary_link
+    - tertiary_link
+
+  # Zoom 14+: All (block level) - Handled by code (passing everything or wildcard)
+  14: ["*"] 

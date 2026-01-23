@@ -145,13 +145,14 @@ class OSMQueries:
             WHERE 
                 geom_3857 && ST_TileEnvelope($1, $2, $3)
                 AND highway IS NOT NULL
-                -- Filter by zoom level
+                -- Dynamic LOD Filter
+                -- $4 contains the array of allowed highway types for this zoom
+                -- If $4 is NULL or empty, it might mean "show nothing" or "show all"?
+                -- Logic: If 'ALL' is in the array, show everything.
+                -- Otherwise, filter by array.
                 AND (
-                    $1 >= 14 
-                    OR highway IN (
-                        'motorway', 'trunk', 'primary', 
-                        'motorway_link', 'trunk_link', 'primary_link'
-                    )
+                    'ALL' = ANY($4::text[])
+                    OR highway = ANY($4::text[])
                 )
         ) AS tile
         WHERE geom IS NOT NULL
