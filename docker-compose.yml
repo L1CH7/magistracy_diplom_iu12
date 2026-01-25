@@ -6,11 +6,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATA_PROCESSOR_URL=http://data-processor:8000
-      - ROUTER_URL=http://router:8000
+      - APP__SERVICES__ROUTER__URL=http://router:8000
+      - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
     depends_on:
       - data-processor
       - router
+    volumes:
+      - ./configs:/app/configs
 
   data-processor:
     build:

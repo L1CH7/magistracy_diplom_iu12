@@ -1,0 +1,29 @@
+# Route Registry
+# Defines the specific API paths that map to internal services.
+# The Gateway combines this logic with the URL/Port config from Environment Variables.
+
+routes:
+  # Data Processor: Tile Service
+  - path: "/tiles" 
+    service: "data_processor" # Maps to settings.services.data_processor
+    internal_prefix: "/api/v1/tiles"
+
+  # Data Processor: Status
+  - path: "/status"
+    service: "data_processor"
+    internal_prefix: "/api/v1/status"
+
+  # Data Processor: Debug/Raw Info
+  - path: "/debug"
+    service: "data_processor"
+    internal_prefix: "/api/v1/debug"
+
+  # Router: Route Calculation
+  - path: "/routing"
+    service: "router" # Maps to settings.services.router
+    internal_prefix: "/api/v1/routing"
+
+  # Router: Graph Management
+  - path: "/graph"
+    service: "router"
+    internal_prefix: "/api/v1/graph"
