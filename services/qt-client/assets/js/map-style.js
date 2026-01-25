@@ -28,36 +28,18 @@ function generateLodLayers(lodConfig, colors, widths) {
 
     const colorExpression = ['match', ['get', 'highway'], ...colorPairs, '#353535ff'];
 
-    // Build line-width with proper scaling for each zoom range
+    // Build line-width based on LOD base_width
     let widthExpression;
-    const midZoom = Math.floor((minzoom + maxzoom) / 2);
+    const baseWidth = lod.base_width || 1.0;
 
-    if (maxzoom - minzoom <= 3) {
-      // Short range: simple 2-point interpolation
-      widthExpression = [
-        'interpolate', ['linear'], ['zoom'],
-        minzoom, 2,
-        maxzoom, 4
-      ];
-    } else {
-      // Longer range: use 3-point interpolation with match expressions
-      const widthMidPairs = [];
-      const widthMaxPairs = [];
-
-      for (const hw of highways) {
-        if (widths[hw]) {
-          widthMidPairs.push(hw, Math.round(widths[hw] * 0.5));
-          widthMaxPairs.push(hw, widths[hw]);
-        }
-      }
-
-      widthExpression = [
-        'interpolate', ['linear'], ['zoom'],
-        minzoom, 2,
-        midZoom, widthMidPairs.length > 0 ? ['match', ['get', 'highway'], ...widthMidPairs, 3] : 3,
-        maxzoom, widthMaxPairs.length > 0 ? ['match', ['get', 'highway'], ...widthMaxPairs, 5] : 5
-      ];
-    }
+    // Smooth interpolation for the layer duration
+    // We assume the base_width is the target width at the START of the zoom range
+    // And we scale it up slightly towards the end
+    widthExpression = [
+      'interpolate', ['linear'], ['zoom'],
+      minzoom, baseWidth,
+      maxzoom, baseWidth * 2.0
+    ];
 
     const layerDef = {
       id: `graph-${name}`,
@@ -67,6 +49,10 @@ function generateLodLayers(lodConfig, colors, widths) {
       minzoom,
       ...(maxzoom !== undefined && maxzoom !== null ? { maxzoom } : {}),
       ...(filter !== null ? { filter } : {}),
+      layout: {
+        'line-join': 'round',
+        'line-cap': 'round'
+      },
       paint: {
         'line-color': colorExpression,
         'line-width': widthExpression
@@ -121,7 +107,7 @@ export function createMapStyle(tileUrl) {
       osm: { type: 'raster', tiles: [tileUrl], tileSize: cfg.tiles.tileSize },
       'graph-vector': {
         type: 'vector',
-        tiles: [`${(window.MAP_CONFIG && window.MAP_CONFIG.apiBaseUrl) || 'http://localhost:8000'}/tiles/{z}/{x}/{y}.mvt`],
+        tiles: [`${cfg.apiBaseUrl || 'http://localhost:8000'}/tiles/{z}/{x}/{y}.mvt?v=${Date.now()}`],
         minzoom: 0,
         maxzoom: 18
       },

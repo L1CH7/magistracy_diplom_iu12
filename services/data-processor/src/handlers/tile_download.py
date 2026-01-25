@@ -370,7 +370,12 @@ class TileDownloadHandler:
         Returns:
             Number of ways saved
         """
-        start_time = time.time()
+    @staticmethod
+    def _prepare_batch_data(ways: List[dict], elements: List[dict]) -> Tuple[List[tuple], int]:
+        """
+        Prepare data for batch insert (CPU bound).
+        Run this in a thread pool to avoid blocking asyncio loop.
+        """
         batch_data = []
         saved_count = 0
         
@@ -381,7 +386,6 @@ class TileDownloadHandler:
             if e.get("type") == "node"
         }
         
-        # Drivable road types
         # Drivable road types
         drivable_types = {
             'motorway', 'motorway_link',
@@ -395,7 +399,7 @@ class TileDownloadHandler:
             'bus_guideway', 'escape'
         }
         
-        for idx, way in enumerate(ways, start=1):
+        for way in ways:
             osm_id = way.get("id")
             tags = way.get("tags", {})
             highway = tags.get("highway")
@@ -439,8 +443,29 @@ class TileDownloadHandler:
             ))
             
             saved_count += 1
+            
+        return batch_data, saved_count
+
+    async def _save_ways_to_db(
+        self,
+        ways: List[dict],
+        elements: List[dict],
+        task_id: str,
+        total_ways: int
+    ) -> int:
+        """
+        Save ways to database using batch insert.
+        """
+        # Offload CPU-bound preparation to thread pool
+        loop = asyncio.get_running_loop()
+        batch_data, saved_count = await loop.run_in_executor(
+            None, 
+            self._prepare_batch_data, 
+            ways, 
+            elements
+        )
         
-        # Batch insert
+        # Batch insert (I/O bound)
         if batch_data:
             async with self.db.acquire() as conn:
                 await conn.executemany(

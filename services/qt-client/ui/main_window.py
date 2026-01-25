@@ -1,5 +1,6 @@
 """Main application window with fullscreen map + overlay sidebar."""
 import os
+import asyncio
 import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
@@ -85,6 +86,10 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         from api.api_workers import DataSocketWorker
         self.data_msg_worker = DataSocketWorker(self.gateway_url)
         self.data_msg_worker.message_received.connect(self._on_data_message)
+        # Connect new signal for connection establishment
+        self.data_msg_worker.connected.connect(lambda: threading.Thread(
+            target=lambda: asyncio.run(self._on_data_processor_connected())
+        ).start())
         self.data_msg_worker.start()
         
         self.showMaximized()
@@ -99,10 +104,10 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         """Handle data updates from WebSocket."""
         msg_type = data.get("type")
         
-        if msg_type == "tile_downloaded":
-             log.info("Tile downloaded notification received, reloading map layers")
-             # Reload layers
-             js_code = "if (window.app && window.app.refreshTiles) { window.app.refreshTiles(); }"
+        if msg_type == "tiles_invalidated" or msg_type == "ways_updated":
+             log.info(f"Data update received ({msg_type}), reloading map layers")
+             # Reload layers using the correct API method
+             js_code = "if (window.app && window.app.refreshMVTTiles) { window.app.refreshMVTTiles(); }"
              self.map_widget.page().runJavaScript(js_code)
              
         elif msg_type == "task_updated":

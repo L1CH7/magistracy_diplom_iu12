@@ -708,5 +708,47 @@ class MainWindowHandlers:
     def _start_simulation_timer(self) -> None:
         pass
 
-    def _stop_simulation_timer(self) -> None:
-        pass
+    async def _on_data_processor_connected(self):
+        """Called when connected to data processor WebSocket."""
+        # Load and send LOD config
+        try:
+            from services.common.config import config_loader
+            try:
+                # Try to load from project config
+                # Note: Client might run in different path, adjusted for common local dev structure
+                import os
+                config_path = "client/map.lod.yaml"
+                lod_config = config_loader.load(config_path)
+            except Exception:
+                # Fallback to direct file read if config_loader fails (e.g. strict paths)
+                import yaml
+                with open("configs/client/map.lod.yaml") as f:
+                    lod_config = yaml.safe_load(f)
+            
+            if lod_config:
+                log.info("Sending LOD config to Data Processor...")
+                if self.data_msg_worker and self.data_msg_worker.internal_client:
+                   # This must be run in the worker's loop or use run_coroutine_threadsafe
+                   # But internal_client.send_lod_config is async.
+                   # Since we are in a separate thread (created in main_window.py lambda),
+                   # we can't easily await it if it belongs to another loop.
+                   
+                   # Actually, DataSocketWorker runs its own loop.
+                   # We should schedule the send on THAT loop.
+                   client = self.data_msg_worker.internal_client
+                   loop = self.data_msg_worker._loop
+                   if client and loop:
+                       import asyncio
+                       future = asyncio.run_coroutine_threadsafe(
+                           client.send_lod_config(lod_config),
+                           loop
+                       )
+                       # Wait for result if needed, or just let it fly
+                       try:
+                           future.result(timeout=5)
+                       except Exception as e:
+                           log.error(f"Failed to send config future: {e}")
+                
+        except Exception as e:
+            log.warning(f"Failed to load/send LOD config: {e}") 
+

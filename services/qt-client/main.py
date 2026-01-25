@@ -41,6 +41,9 @@ def main():
     os.environ["QT_QPA_PLATFORMTHEME"] = ""  # Disable platform theme
     os.environ["QT_STYLE_OVERRIDE"] = "Fusion"  # Use Qt's Fusion style
 
+    # Append chromium flags for docker execution
+    sys.argv.append("--no-sandbox")
+    sys.argv.append("--ignore-gpu-blocklist")
     app = QApplication(sys.argv)
     
     # Явно устанавливаем Fusion style и светлую палитру
@@ -65,7 +68,7 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Navigation MAS Client")
     parser.add_argument("--config-dir", type=str, help="Path to configuration directory")
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     # Create and show main window
     # Gateway URL resolution using config_loader for consistency

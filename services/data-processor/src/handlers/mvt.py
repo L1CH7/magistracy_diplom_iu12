@@ -14,67 +14,73 @@ from ..db.pool import DatabasePool
 from ..db.queries import OSMQueries
 
 
-import yaml
-from pathlib import Path
+
 
 class MVTHandler:
     """Handles MVT tile generation."""
     
     def __init__(self, db: DatabasePool):
         self.db = db
-        self.lod_config = self._load_lod_config()
+        # Start matching strict empty state (will be populated by client)
+        self.lod_config = []
+
+    def update_lod_config(self, new_config: dict):
+        """Update LOD configuration at runtime."""
+        if not new_config:
+            return
         
-    def _load_lod_config(self) -> dict:
-        """Load LOD configuration."""
+        # Store config as raw list of layers for range checking
+        # Format: [{'minzoom': 0, 'maxzoom': 5, 'highways': [...]}, ...]
         try:
-            # Try loading from common config location or default
-            config_path = Path("/app/configs/data-processor/mvt_style.yaml")
-            if config_path.exists():
-                with open(config_path) as f:
-                    cfg = yaml.safe_load(f)
-                    logger.info("Loaded MVT LOD config")
-                    return cfg.get("lod", {})
+            if "layers" in new_config:
+                self.lod_config = new_config["layers"]
+                logger.info(f"Updated LOD config (layers mode): {len(self.lod_config)} layers")
             else:
-                logger.warning("mvt_style.yaml not found, using defaults")
-                return {}
+                # Direct update not supported in this strict mode? 
+                # Let's assume new_config IS the layers list if it's a list
+                if isinstance(new_config, list):
+                    self.lod_config = new_config
+                    logger.info(f"Updated LOD config (list mode): {len(self.lod_config)} layers")
+                else:
+                    logger.warning("Invalid LOD config format received (expected 'layers' key or list)")
+                
         except Exception as e:
-            logger.error(f"Failed to load MVT config: {e}")
-            return {}
+            logger.error(f"Failed to update LOD config: {e}")
 
     def _get_visible_types(self, z: int) -> list:
         """Get list of visible highway types for zoom level."""
-        # Find the specific level or the closest lower level key
-        # Keys in yaml are integers
+        # Strict range check: minzoom <= z < maxzoom
         
-        # If config is empty or broken, fallback to safe defaults (City view)
-        if not self.lod_config:
+        # If config is empty, fallback to safe defaults
+        if not self.lod_config or not isinstance(self.lod_config, list):
+            # Fallback hardcoded logic if no config yet (e.g. before client connects)
             if z >= 14: return ["ALL"]
-            return ["motorway", "trunk", "primary"] # fallback
+            if z >= 10: return ["motorway", "trunk", "primary", "secondary", "tertiary"]
+            return ["motorway", "trunk", "primary"]
 
-        # Check exact match
-        if z in self.lod_config:
-            types = self.lod_config[z]
-            if "*" in types or "ALL" in types: return ["ALL"]
-            return types
-
-        # Find closest lower
-        available_levels = sorted([k for k in self.lod_config.keys() if isinstance(k, int)])
-        # filter those <= z
-        lower = [l for l in available_levels if l <= z]
+        # Iterate layers
+        for layer in self.lod_config:
+            min_z = layer.get("minzoom", 0)
+            max_z = layer.get("maxzoom", 25) # Default max if not set
+            
+            # Check range
+            if min_z <= z < max_z:
+                highways = layer.get("highways", [])
+                # If highways list is empty, it means "show nothing" for this layer?
+                # Or if it contains specific types, use them.
+                return highways
         
-        if not lower:
-            # Zoom is lower than lowest defined (e.g. z=-1?), unlikely
-            # Return lowest defined
-            if available_levels:
-                types = self.lod_config[available_levels[0]]
-                if "*" in types: return ["ALL"]
-                return types
-            return ["motorway", "trunk"] # default default
+        # If no range matches (e.g. z < 0 or z > max defined), return valid default
+        # For z > max, usually we want highest detail
+        # But per user request "strict simple logic", if not found, maybe empty?
+        # Let's fallback to the last layer if z >= all maxzooms
+        if self.lod_config:
+             # Sort by minzoom
+             last_layer = sorted(self.lod_config, key=lambda x: x.get("minzoom", 0))[-1]
+             if z >= last_layer.get("maxzoom", 100):
+                 return last_layer.get("highways", [])
 
-        target_level = lower[-1] # max of lower
-        types = self.lod_config[target_level]
-        if "*" in types: return ["ALL"]
-        return types
+        return ["motorway", "trunk"] # Absolute fallback
 
     async def generate_tile(
         self,

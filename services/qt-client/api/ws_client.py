@@ -39,6 +39,7 @@ class DataSocketClient:
         
         # Callback for updates
         self.on_message: Optional[Callable] = None
+        self.on_connect: Optional[Callable] = None
         
         logger.info(f"DataSocketClient created: {self.url}")
     
@@ -50,6 +51,17 @@ class DataSocketClient:
             
             logger.success(f"Connected to Data Socket: {self.url}")
             
+            if self.on_connect:
+                try:
+                    # If it's a coroutine, we should await it? 
+                    # But this is inside async connect(), so we can await.
+                    if asyncio.iscoroutinefunction(self.on_connect):
+                        await self.on_connect()
+                    else:
+                        self.on_connect()
+                except Exception as e:
+                    logger.error(f"Error in on_connect callback: {e}")
+            
             # Start receiving loop
             await self._receive_loop()
             
@@ -58,6 +70,23 @@ class DataSocketClient:
             # Don't raise, just log - we might retry
             self.connected = False
             raise e
+
+    async def send_lod_config(self, lod_config: dict):
+        """Send LOD configuration to server."""
+        if not self.ws or not self.connected:
+            logger.warning("Cannot send LOD config: WebSocket not connected")
+            return
+            
+        message = {
+            "type": "config",
+            "lod": lod_config
+        }
+        
+        try:
+            await self.ws.send(json.dumps(message))
+            logger.info("Sent LOD config to server")
+        except Exception as e:
+            logger.error(f"Failed to send LOD config: {e}")
     
     async def disconnect(self):
         """Disconnect from Data Processor."""

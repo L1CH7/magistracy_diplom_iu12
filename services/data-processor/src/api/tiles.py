@@ -207,7 +207,16 @@ async def get_mvt_tile(z: int, x: int, y: int):
     
     if not clip_result["is_valid"]:
         # Tile is completely outside default_bbox
-        return FastAPIResponse(status_code=204)
+        return FastAPIResponse(
+            status_code=200,
+            content=b"",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Cache-Control": "public, max-age=3600"
+            }
+        )
 
     try:
         mvt_data = await router.mvt_handler.generate_tile(z, x, y)
@@ -228,25 +237,40 @@ async def get_mvt_tile(z: int, x: int, y: int):
                     if is_covered:
                         # It's a valid empty area (e.g., forest/water without roads)
                         return FastAPIResponse(
-                            content=b"",
-                            # user logs showed 200 OK for empty tiles in some cases.
                             status_code=200,
-                            headers={"Cache-Control": "public, max-age=3600"}
+                            content=b"",
+                            headers={
+                                "Cache-Control": "public, max-age=3600",
+                                "Access-Control-Allow-Origin": "*",
+                                "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                                "Access-Control-Allow-Headers": "*"
+                            }
                         )
             except Exception as e:
                 logger.warning(f"Failed to check coverage: {e}")
 
-            # Data missing -> 202 Accepted + Trigger Download
+            # Data missing -> 204 No Content + Trigger Download
+            # MapLibre expects 200/204. 202 causes "Failed to fetch".
             target_bbox = clip_result["clipped_bbox"] # Should be tile_bbox clipped to default
             
+            logger.info(f"Tile [{z}/{x}/{y}] missing/empty (size={len(mvt_data) if mvt_data else 0}). Triggering download.")
+
             asyncio.create_task(
                 router.tile_handler.download_area(target_bbox, overwrite=False)
             )
             
+            # Using 204 No Content for "loading" causes issues in QT
+            # Switching to 200 OK with empty body + No-Cache
             return FastAPIResponse(
-                status_code=202,
+                status_code=200,
                 content=b"",
-                headers={"Retry-After": "5"}
+                headers={
+                    "Retry-After": "5",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Cache-Control": "no-cache, no-store, must-revalidate"
+                }
             )
         
         # Compress MVT data with gzip
@@ -258,7 +282,9 @@ async def get_mvt_tile(z: int, x: int, y: int):
             headers={
                 "Content-Encoding": "gzip",
                 "Cache-Control": "public, max-age=604800",  # 7 days
-                "Access-Control-Allow-Origin": "*"
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers": "*"
             }
         )
         

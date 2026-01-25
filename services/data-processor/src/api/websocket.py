@@ -39,18 +39,38 @@ async def websocket_data_updates(websocket: WebSocket):
         # Keep connection alive with ping/pong
         while True:
             try:
-                # Wait for messages from client (heartbeat)
-                message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=30.0
-                )
+                # Wait for messages from client
+                data = await websocket.receive_json()
                 
-                if message == "ping":
-                    await websocket.send_text("pong")
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    
+                elif data.get("type") == "config":
+                    # Client sent LOD configuration
+                    # format: {"type": "config", "lod": {...}}
+                    lod_config = data.get("lod")
+                    if lod_config:
+                        logger.info("Received LOD config from client via WebSocket")
+                        logger.trace(f"Client LOD config: {lod_config}")
+                        
+                        # Update MVT handler config via app state
+                        if hasattr(websocket.app.state, "mvt_handler"):
+                            if hasattr(websocket.app.state.mvt_handler, "update_lod_config"):
+                                websocket.app.state.mvt_handler.update_lod_config(lod_config)
+                                
+                                # Broadcast invalidation to ALL clients (including self)
+                                # This forces them to reload tiles with new LOD
+                                await broadcast_tiles_invalidated()
+                                
+                                await websocket.send_json({
+                                    "type": "ack", 
+                                    "message": "LOD config updated"
+                                })
                     
             except asyncio.TimeoutError:
                 # Send ping to keep alive
-                await websocket.send_json({"type": "ping"})
+                # await websocket.send_json({"type": "ping"})
+                pass
                 
     except WebSocketDisconnect:
         connected_clients.remove(websocket)

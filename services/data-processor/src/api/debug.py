@@ -8,7 +8,7 @@ Endpoints:
 from fastapi import APIRouter
 from loguru import logger
 from typing import List
-from services.common.utils.config_loader import config_loader
+from services.common.config import config_loader
 
 
 router = APIRouter(prefix="/api/v1/debug", tags=["debug"])

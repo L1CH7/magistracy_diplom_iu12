@@ -206,9 +206,11 @@ class DataSocketWorker(QThread):
         # Bridge callback to Qt signal (safe across threads?)
         # emit() is thread-safe in PyQt
         self.client.on_message = self.message_received.emit
+        # Hook on_connect to signal
+        self.client.on_connect = self.connected.emit
         
         try:
-            self.connected.emit()
+            # self.connected.emit() - REMOVED, now emitted by client
             # connect() runs until connection closes
             self._loop.run_until_complete(self.client.connect())
         except Exception as e:
@@ -227,3 +229,7 @@ class DataSocketWorker(QThread):
             )
         # Wait for thread to finish
         self.wait(2000)
+
+    @property
+    def internal_client(self):
+        return self.client

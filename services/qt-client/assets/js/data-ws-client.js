@@ -5,6 +5,8 @@
  * Receives notifications when OSM data is saved → triggers MVT tile refresh.
  */
 
+import { getMapConfig } from './map-config-loader.js';
+
 let wsConnection = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -19,7 +21,8 @@ export function connectDataProcessorWS() {
     return;
   }
 
-  const baseUrl = (window.MAP_CONFIG && window.MAP_CONFIG.apiBaseUrl) || 'http://localhost:8000';
+  const config = getMapConfig();
+  const baseUrl = (config && config.apiBaseUrl) || 'http://localhost:8000';
   const wsBase = baseUrl.replace(/^http/, 'ws');
   const wsUrl = `${wsBase}/ws/data_updates`;
   console.log(`[DataWS] Connecting to ${wsUrl}...`);

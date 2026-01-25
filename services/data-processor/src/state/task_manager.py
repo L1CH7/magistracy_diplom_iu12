@@ -69,7 +69,8 @@ class TaskManager:
     def create_task(
         self,
         task_type: str,
-        tile_key: Optional[str] = None
+        tile_key: Optional[str] = None,
+        items_total: int = 0
     ) -> str:
         """
         Create new task and return task_id.
@@ -77,6 +78,7 @@ class TaskManager:
         Args:
             task_type: "tile_download" | "graph_build"
             tile_key: Optional tile identifier
+            items_total: Total items to process
         
         Returns:
             task_id: Unique task identifier
@@ -89,6 +91,7 @@ class TaskManager:
             task_type=task_type,
             tile_key=tile_key,
             phase=TaskPhase.PENDING,
+            items_total=items_total,
             started_at=now,
             updated_at=now
         )

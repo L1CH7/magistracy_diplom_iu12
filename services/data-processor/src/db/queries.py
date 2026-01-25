@@ -143,7 +143,9 @@ class OSMQueries:
                 ) AS geom
             FROM osm.ways
             WHERE 
-                geom_3857 && ST_TileEnvelope($1, $2, $3)
+                -- Expand selection envelope by buffer margin (0.125 = 1/8 tile size ~= 512 units)
+                -- ST_AsMVTGeom buffer is 256 units (0.0625). We use double that to be safe.
+                geom_3857 && ST_TileEnvelope($1, $2, $3, margin => 0.125)
                 AND highway IS NOT NULL
                 -- Dynamic LOD Filter
                 -- $4 contains the array of allowed highway types for this zoom

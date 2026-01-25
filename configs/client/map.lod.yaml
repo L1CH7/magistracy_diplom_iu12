@@ -4,14 +4,12 @@
 layers:
   - name: highways
     minzoom: 0
-    maxzoom: 6
+    maxzoom: 8
     highways:
       - motorway
       - motorway_link
       - trunk
       - trunk_link
-      # - primary
-      # - primary_link
     show_names: false
     show_refs: true    # Highway refs (M-11, A-107)
     show_lanes: false
@@ -20,8 +18,8 @@ layers:
     base_width: 0.5
   
   - name: major_roads
-    minzoom: 6
-    maxzoom: 8
+    minzoom: 8
+    maxzoom: 11
     highways:
       - motorway
       - motorway_link
@@ -37,8 +35,8 @@ layers:
     base_width: 1.5
   
   - name: arterial_roads
-    minzoom: 8
-    maxzoom: 10
+    minzoom: 11
+    maxzoom: 14
     highways:
       - motorway
       - motorway_link
@@ -50,10 +48,6 @@ layers:
       - secondary_link
       - tertiary
       - tertiary_link
-      - residential
-      - living_street
-      - unclassified
-      - service
     show_names: true   # Show street names
     show_refs: true
     show_lanes: true   # Show lane count
@@ -62,7 +56,7 @@ layers:
     base_width: 2.0
   
   - name: all_roads
-    minzoom: 10
+    minzoom: 14
     maxzoom: 24
     highways:
       - motorway

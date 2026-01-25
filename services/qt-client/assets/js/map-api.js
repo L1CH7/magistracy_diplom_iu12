@@ -509,6 +509,7 @@ export class MapAPI {
    * Call this after new OSM data is loaded to update the map display.
    */
   refreshMVTTiles() {
+    console.log('[MVT] refreshMVTTiles called - refreshing source...');
     const source = this.map.getSource('graph-vector');
     if (!source) {
       console.warn('[MVT] graph-vector source not found');
