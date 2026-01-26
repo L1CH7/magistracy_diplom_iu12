@@ -29,16 +29,16 @@ class ApiClient:
     async def find_routes(
         self, 
         points: List[Dict[str, float]], 
-        k: int = 3,
-        agent_type: str = "car_normal"
+        k: int = 1,
+        priority: int = 0
     ) -> Dict[str, Any]:
         """
         Request route calculation between points.
         
         Args:
             points: List of dicts, e.g. [{"lat": 55.7, "lon": 37.6}, ...]
-            k: Number of routes (ignored by current server implementation)
-            agent_type: Profile name
+            k: Number of routes/alternatives
+            priority: Routing priority factor (0-100)
             
         Returns:
             JSON response dictionary containing routes
@@ -46,8 +46,8 @@ class ApiClient:
         url = self._url("/routing/calculate")
         payload = {
             "waypoints": points,
-            "priority": 0,
-            # "agent_type": agent_type # Not yet supported by server model
+            "priority": priority,
+            "k": k
         }
         
         try:
@@ -58,6 +58,45 @@ class ApiClient:
             logger.error(f"Routing request failed: {e}")
             raise
 
-    # Note: Fetching graph/tiles is often done via standard synchronous requests (requests lib)
-    # inside QThreads (Qt Workers) separately to avoid async event loop conflicts with PyQt.
-    # See api_workers.py for those implementations.
+    def find_routes_sync(
+        self, 
+        points: List[Dict[str, float]], 
+        k: int = 1,
+        priority: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Synchronous version of find_routes for use in QThreads/blocking contexts.
+        Uses 'requests' library.
+        """
+        import requests
+        import json
+        url = self._url("/routing/calculate")
+        payload = {
+            "waypoints": points,
+            "priority": priority,
+            "k": k
+        }
+        
+        # TRACE: Log request
+        logger.trace(f"POST {url}")
+        logger.trace(f"Request payload: {json.dumps(payload, indent=2)}")
+        
+        try:
+            response = requests.post(url, json=payload, timeout=60.0)
+            
+            # TRACE: Log response
+            logger.trace(f"Response status: {response.status_code}")
+            try:
+                resp_json = response.json()
+                # Truncate geometry for readability
+                routes_count = len(resp_json.get("routes", []))
+                logger.trace(f"Response: {routes_count} routes returned")
+                logger.trace(f"Response body: {json.dumps(resp_json, indent=2)[:2000]}...")
+            except Exception:
+                logger.trace(f"Response body (raw): {response.text[:500]}")
+            
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Routing request failed: {e}")
+            raise

@@ -542,9 +542,26 @@ export class MapAPI {
     };
     this.map.addSource('graph-vector', sourceDef);
 
-    // Step 4: Re-add layers
+    // Step 4: Re-add layers BELOW the routes
+    // Find the first route-related layer to insert before
+    let beforeLayerId = 'routes';
+    if (!this.map.getLayer(beforeLayerId)) {
+      // Fallback: try k-routes layers if routes layer doesn't exist
+      const layers = this.map.getStyle().layers;
+      const routeLayer = layers.find(l => l.id.startsWith('k-routes') || l.id === 'routes');
+      if (routeLayer) {
+        beforeLayerId = routeLayer.id;
+      } else {
+        beforeLayerId = undefined; // Add to top if no route layers found
+      }
+    }
+
     layersToRestore.forEach(layer => {
-      this.map.addLayer(layer);
+      if (beforeLayerId && this.map.getLayer(beforeLayerId)) {
+        this.map.addLayer(layer, beforeLayerId);
+      } else {
+        this.map.addLayer(layer);
+      }
     });
 
     console.log(`[MVT] Tiles refreshed with cache-buster: v=${cacheBuster}`);

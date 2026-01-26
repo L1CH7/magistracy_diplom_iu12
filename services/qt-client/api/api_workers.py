@@ -134,12 +134,15 @@ class RouteFetchWorker(QThread):
     """
     
     finished = pyqtSignal(dict)
+    finished = pyqtSignal(dict)
     error = pyqtSignal(str)
     
-    def __init__(self, gateway_url: str, waypoints: list):
+    def __init__(self, gateway_url: str, waypoints: list, k: int = 1, priority: int = 0):
         super().__init__()
         self.gateway_url = gateway_url
         self.waypoints = waypoints
+        self.k = k
+        self.priority = priority
         self._is_cancelled = False
     
     def cancel(self):
@@ -149,31 +152,27 @@ class RouteFetchWorker(QThread):
     def run(self):
         """Execute the route fetch request in background thread."""
         try:
-            url = f"{self.gateway_url}/routing/calculate"
-
-            waypoints = [
+            from .client import ApiClient
+            client = ApiClient(self.gateway_url)
+            
+            # Convert tuples/lists to dicts if needed, or assume ApiClient handles it?
+            # ApiClient expects List[Dict[str, float]].
+            # self.waypoints are likely tuples from main_window_handlers.
+            formatted_points = [
                 {"lat": wp[0], "lon": wp[1]} for wp in self.waypoints
             ]
-
-            response = requests.post(
-                url,
-                json={"waypoints": waypoints, "priority": 0},
-                timeout=60
+            
+            data = client.find_routes_sync(
+                formatted_points, 
+                k=self.k, 
+                priority=self.priority
             )
-            response.raise_for_status()
-
+            
             if self._is_cancelled:
                 return
 
-            data = response.json()
             self.finished.emit(data)
         
-        except requests.exceptions.Timeout:
-            self.error.emit("Route calculation timeout")
-        except requests.exceptions.ConnectionError:
-            self.error.emit("Connection failed")
-        except requests.exceptions.HTTPError as e:
-            self.error.emit(f"HTTP error: {e}")
         except Exception as e:
             self.error.emit(f"Error: {str(e)}")
 

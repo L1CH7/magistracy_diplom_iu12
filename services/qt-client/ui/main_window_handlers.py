@@ -357,42 +357,83 @@ class MainWindowHandlers:
                 "lon": point["lon"]
             })
         
-        log.info(
-            "requesting_routes",
-            num_points=len(points_list),
-            k=k
-        )
+        if self._zoom_slider_dragging:
+            return  # Prevent requests while dragging? allow for now
         
-        # Call API (TODO: use api_client)
-        import requests
-        try:
-            if len(points_list) >= 2:
-                # Use /routing/calculate with waypoints
-                response = requests.post(
-                    f"{self.gateway_url}/routing/calculate",
-                    json={
-                        "waypoints": points_list,
-                        "priority": 0
-                    },
-                    timeout=30
-                )
-            else:
-                # Multi-point routing not yet implemented
-                log.error("multi_point_routing_not_supported")
+        # 1. Fetch fresh points from JS to avoid "phantom" stale state
+        js = """
+        (function() {
+            if (!window.app || !window.app.getPickedPoints) return null;
+            return window.app.getPickedPoints();
+        })();
+        """
+        
+        def on_points_received(result):
+            if not result:
+                log.warning("get_routes_no_points_from_js")
                 return
-            response.raise_for_status()
-            data = response.json()
+                
+            # Parse points
+            points_list = []
+            if result.get('start'):
+                p = result['start']
+                points_list.append((p['lat'], p['lon']))
             
+            via_points = result.get('via', [])
+            if isinstance(via_points, list):
+                for p in via_points:
+                    points_list.append((p['lat'], p['lon']))
+            
+            if result.get('end'):
+                p = result['end']
+                points_list.append((p['lat'], p['lon']))
+            
+            if len(points_list) < 2:
+                log.warning("get_routes_not_enough_points", count=len(points_list))
+                return
+
+            log.info(
+                "requesting_routes",
+                num_points=len(points_list),
+                k=k,
+                priority=0
+            )
+            
+            # 2. Cancel previous worker if running
+            if hasattr(self, '_route_worker') and self._route_worker.isRunning():
+                self._route_worker.cancel()
+                self._route_worker.wait()
+            
+            # 3. Start new worker
+            from api.api_workers import RouteFetchWorker
+            self._route_worker = RouteFetchWorker(
+                self.gateway_url, 
+                points_list, 
+                k=k, 
+                priority=0
+            )
+            self._route_worker.finished.connect(self._on_routes_received)
+            self._route_worker.error.connect(self._on_route_error)
+            self._route_worker.start()
+            
+            # Show loading state
+            self.sidebar.route_panel.status_label.setText("Loading...")
+            self.sidebar.route_panel.status_label.show()
+
+        self.map_widget.page().runJavaScript(js, on_points_received)
+    
+    def _on_routes_received(self, data: dict) -> None:
+        """Handle routes received from worker."""
+        try:
             raw_routes = data.get("routes", [])
             log.info("routes_received", count=len(raw_routes))
             
             # Convert internal format → UI format
             routes = []
             for route in raw_routes:
-                # Extract edge IDs
                 edge_ids = route.get("edge_ids", [])
                 
-                # Build LineString geometry from segments
+                # Build LineString geometry
                 geometry_coords = []
                 segments = route.get("segments", [])
                 
@@ -400,11 +441,9 @@ class MainWindowHandlers:
                     seg_geom = seg.get("geometry")
                     if seg_geom and seg_geom.get("type") == "LineString":
                         coords = seg_geom["coordinates"]
-                        # Append coords, avoiding duplicates at boundaries
                         if not geometry_coords:
                             geometry_coords.extend(coords)
                         else:
-                            # Skip first point if it matches last point
                             if coords and len(coords) > 0:
                                 if coords[0] == geometry_coords[-1]:
                                     geometry_coords.extend(coords[1:])
@@ -424,34 +463,17 @@ class MainWindowHandlers:
             
             # Display all routes on map
             self._display_routes_on_map(routes)
-            
-        except requests.exceptions.HTTPError as e:
-            # Server returned error response (404, 500, etc)
-            try:
-                error_detail = e.response.json().get("detail", "Unknown error")
-            except Exception:
-                error_detail = str(e)
 
-            log.error("get_routes_failed",
-                      status_code=e.response.status_code,
-                      detail=error_detail)
-            
-            # Show error in UI
-            self.sidebar.route_panel.status_label.setText(
-                f"❌ {error_detail}"
-            )
-            self.sidebar.route_panel.status_label.show()
-            self.sidebar.route_panel.routes_list.hide()
-            
         except Exception as e:
-            log.error("get_routes_failed", error=str(e), exc_info=True)
-            
-            # Show generic error in UI
-            self.sidebar.route_panel.status_label.setText(
-                f"❌ Error: {str(e)}"
-            )
-            self.sidebar.route_panel.status_label.show()
-            self.sidebar.route_panel.routes_list.hide()
+            log.error(f"Error processing routes: {e}")
+            self._on_route_error(str(e))
+
+    def _on_route_error(self, error_msg: str) -> None:
+        """Handle route worker error."""
+        log.error("get_routes_failed", error=error_msg)
+        self.sidebar.route_panel.status_label.setText(f"❌ {error_msg}")
+        self.sidebar.route_panel.status_label.show()
+        self.sidebar.route_panel.routes_list.hide()
     
     @track_metric("ROUTE_SELECTION")
     def _on_route_selected(self, route_id: int) -> None:
