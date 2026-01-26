@@ -85,21 +85,31 @@ class PgRoutingEngine(RoutingEngine):
                         ),
                         $1, $2, directed := true
                     )
+                ),
+                ordered_path AS (
+                    SELECT 
+                        r1.seq,
+                        r1.node AS from_node,
+                        r2.node AS to_node,
+                        r1.edge
+                    FROM route r1
+                    JOIN route r2 ON r1.seq + 1 = r2.seq
+                    WHERE r1.edge > 0
                 )
                 SELECT 
-                    r.seq,
-                    r.node,
-                    r.edge,
-                    r.cost,
-                    r.agg_cost,
+                    op.seq,
+                    op.from_node,
+                    op.to_node,
+                    op.edge,
                     e.length_m,
                     e.max_speed,
-                    e.source_id as source,
-                    e.target_id as target,
-                    ST_AsGeoJSON(e.geometry) as geometry_json
-                FROM route r
-                LEFT JOIN graphs.edges e ON r.edge = e.id
-                ORDER BY r.seq
+                    (CASE 
+                        WHEN op.from_node = e.target_id THEN ST_AsGeoJSON(ST_Reverse(e.geometry))
+                        ELSE ST_AsGeoJSON(e.geometry)
+                    END)::jsonb as geometry_json
+                FROM ordered_path op
+                LEFT JOIN graphs.edges e ON op.edge = e.id
+                ORDER BY op.seq
             """
             rows = await conn.fetch(query, start_node, end_node)
             if not rows:
@@ -118,6 +128,7 @@ class PgRoutingEngine(RoutingEngine):
                     segments,
                     total_distance_m,
                     estimated_time_sec,
+                    diversity_score,
                     edge_ids
                 FROM graphs.get_k_routes_with_diversity($1, $2, $3, 1.5, 0.3, $4)
             """
@@ -127,41 +138,28 @@ class PgRoutingEngine(RoutingEngine):
                 return []
                 
             routes = []
-            
-            # Batched fetch of geometries for all edges involved
-            all_edge_ids = set()
-            for r in rows:
-                if r['edge_ids']:
-                    all_edge_ids.update(r['edge_ids'])
-            
-            edge_geoms = {}
-            if all_edge_ids:
-                geom_query = "SELECT id, ST_AsGeoJSON(geometry) as geojson FROM graphs.edges WHERE id = ANY($1)"
-                geom_rows = await conn.fetch(geom_query, list(all_edge_ids))
-                for g in geom_rows:
-                    edge_geoms[g['id']] = g['geojson']
-            
             for row in rows:
                 raw_seg = row['segments']
                 if isinstance(raw_seg, str):
                     seg_list = json.loads(raw_seg)
                 else:
                     seg_list = raw_seg
-                    
-                # Inject geometry
+                
                 final_segments = []
                 node_sequence = []
-                
                 if seg_list:
                     node_sequence.append(seg_list[0]['from_node'])
                     for s in seg_list:
-                        eid = s['edge_id']
-                        s['geometry_json'] = edge_geoms.get(eid)
-                        final_segments.append(s)
+                        # Extract geometry
+                        geom = s.get('geometry')
+                        if isinstance(geom, str):
+                            geom = json.loads(geom)
+                            
+                        final_segments.append({
+                            **s,
+                            "geometry_json": geom
+                        })
                         node_sequence.append(s['to_node'])
-
-                if row['total_distance_m'] is None:
-                    continue
 
                 routes.append(Route(
                     edge_ids=row['edge_ids'],
@@ -186,25 +184,38 @@ class PgRoutingEngine(RoutingEngine):
             if row.get('edge') == -1 or row['edge'] is None:
                 if 'node' in row:
                      node_sequence.append(row['node'])
+                elif 'from_node' in row:
+                     node_sequence.append(row['from_node'])
                 continue
                 
             dist = float(row['length_m'] or 0)
-            cost = float(row['cost'] or 0)
+            cost = float(row.get('cost', dist/60.0)) # Fallback if cost not in rows
             
+            # Extract geometry
+            geom = row.get('geometry_json')
+            if isinstance(geom, str):
+                geom = json.loads(geom)
+
             segment = {
                 "edge_id": row['edge'],
-                "from_node": row.get('real_source') or row.get('source'),
-                "to_node": row.get('real_target') or row.get('target'),
+                "from_node": row.get('from_node') or row.get('source'),
+                "to_node": row.get('to_node') or row.get('target'),
                 "distance_m": dist,
-                "speed_limit": float(row['max_speed'] or 60.0),
-                "geometry_json": row['geometry_json']
+                "speed_limit": float(row.get('max_speed') or 60.0),
+                "geometry_json": geom
             }
             segments.append(segment)
             total_distance += dist
             total_cost += cost
-            if 'node' in row:
+            if 'from_node' in row:
+                node_sequence.append(row['from_node'])
+            elif 'node' in row:
                 node_sequence.append(row['node'])
         
+        # Add the final node
+        if rows and 'to_node' in rows[-1]:
+            node_sequence.append(rows[-1]['to_node'])
+
         return Route(
             edge_ids=[s['edge_id'] for s in segments],
             total_cost=total_cost,
@@ -213,6 +224,7 @@ class PgRoutingEngine(RoutingEngine):
             node_sequence=node_sequence,
             segments=segments
         )
+
 
     async def snap_to_road(self, lat: float, lon: float, snap_radius_m: float = 100.0) -> Optional[Tuple[int, float]]:
         if not self.db_pool:
