@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from services.common.utils.loguru_config import configure_loguru
 from src.db import DatabasePool
-from src.graph import GraphBuilder
+# from src.graph import GraphBuilder # REMOVED
 from src.engine import PgRoutingEngine
 from src.api import graph_router
 from src.api.routing import router as routing_router
@@ -57,18 +57,9 @@ async def lifespan(app: FastAPI):
     app.state.db = DatabasePool(**db_config)
     await app.state.db.connect()
     
-    # 2. GraphBuilder
-    logger.info("Creating GraphBuilder...")
-    dsn = (
-        f"postgresql://{settings.db.user}:{settings.db.password}"
-        f"@{settings.db.host}:{settings.db.port}/{settings.db.name}"
-    )
-    app.state.graph_builder = GraphBuilder(
-        config_path="routing/car_profile.yaml",
-        db_dsn=dsn
-    )
-    await app.state.graph_builder.initialize()
-    logger.info("Checking routing graph...")
+    # 2. GraphBuilder - REMOVED (Handled by separate service)
+    # logger.info("Creating GraphBuilder...")
+    # ...
     
     # 3. PgRouting Engine
     logger.info("Initializing PgRouting engine...")

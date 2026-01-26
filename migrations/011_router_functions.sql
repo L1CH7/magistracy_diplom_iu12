@@ -174,8 +174,6 @@ BEGIN
                     END AS reverse_cost
                 FROM graphs.edges
                 WHERE 1=1 -- enabled column missing in my schema?
-                FROM graphs.edges
-                WHERE 1=1 -- enabled column missing in my schema?
                 ', p_priority, v_current_edges, p_penalty_factor, v_current_edges, p_penalty_factor, 
                    p_priority, v_current_edges, p_penalty_factor, v_current_edges, p_penalty_factor),
                 p_start_node,

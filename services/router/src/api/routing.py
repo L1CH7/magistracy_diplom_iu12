@@ -46,7 +46,7 @@ async def calculate_route(request: Request, body: MultiPointRequest):
     all_routes_data = []
     
     if len(nodes) == 2 and body.k > 1:
-        # K-Shortest Paths mode
+        # K-Shortest Paths mode (2 points)
         try:
             k_routes = await engine.find_k_routes(nodes[0], nodes[1], k=body.k, priority=body.priority)
             for r in k_routes:
@@ -55,11 +55,66 @@ async def calculate_route(request: Request, body: MultiPointRequest):
             logger.error(f"K-routing failed: {e}")
             raise HTTPException(status_code=404, detail=f"Routing failed: {e}")
             
+    elif len(nodes) > 2 and body.k > 1:
+        # K-Shortest Paths mode (Multi-point) - Combinatorial / Beam Search
+        try:
+            # 1. Fetch K routes for each segment
+            segment_options = []
+            for i in range(len(nodes) - 1):
+                start, end = nodes[i], nodes[i+1]
+                routes = await engine.find_k_routes(start, end, k=body.k, priority=body.priority)
+                if not routes:
+                    raise HTTPException(status_code=404, detail=f"No route between waypoint {i} and {i+1}")
+                segment_options.append(routes)
+            
+            # 2. Combine segments (Beam Search approach)
+            # Start with the routes of the first segment
+            current_paths = segment_options[0] # List[EngineRoute]
+            
+            for i in range(1, len(segment_options)):
+                next_segment_routes = segment_options[i]
+                new_candidates = []
+                
+                for path_so_far in current_paths:
+                    for extension in next_segment_routes:
+                        # Combine path_so_far + extension
+                        merged_ids = (path_so_far.edge_ids or []) + (extension.edge_ids or [])
+                        
+                        # Merge segments
+                        merged_segments = (path_so_far.segments or []) + (extension.segments or [])
+                        
+                        # Merge node sequence (handle potential duplicate at join point)
+                        seq_so_far = path_so_far.node_sequence or []
+                        seq_ext = extension.node_sequence or []
+                        if seq_so_far and seq_ext and seq_so_far[-1] == seq_ext[0]:
+                            merged_seq = seq_so_far + seq_ext[1:]
+                        else:
+                            merged_seq = seq_so_far + seq_ext
+
+                        new_route = EngineRoute(
+                            edge_ids=merged_ids,
+                            total_cost=path_so_far.total_cost + extension.total_cost,
+                            total_distance_m=path_so_far.total_distance_m + extension.total_distance_m,
+                            algorithm="sequential_ksp",
+                            node_sequence=merged_seq, 
+                            segments=merged_segments
+                        )
+                        new_candidates.append(new_route)
+                
+                # Prune: Keep only top K by cost
+                new_candidates.sort(key=lambda r: r.total_cost)
+                current_paths = new_candidates[:body.k]
+                
+            all_routes_data = current_paths
+            
+        except HTTPException as he:
+            raise he
+        except Exception as e:
+            logger.error(f"Multi-point K-routing failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Multi-point routing failed: {e}")
+
     else:
-        # Sequential mode (can only return 1 composite route for now per request structure usually)
-        # But if user requested K routes for N points, we might just return the best composite route.
-        # Future: Implement cartesian product or K-alternatives for composite.
-        
+        # Sequential mode (Single route)
         full_route_segments = []
         total_dist = 0.0
         total_time = 0.0
@@ -72,14 +127,18 @@ async def calculate_route(request: Request, body: MultiPointRequest):
                 route_data = await engine.find_route(start, end, priority=body.priority)
                 if route_data.segments:
                     for seg in route_data.segments:
-                         # Map dict to Model manually if needed, or pass dict if Pydantic allows (it usually does via **seg)
+                         # Map dict to Model manually
+                        geom = None
+                        if 'geometry_json' in seg and seg['geometry_json']:
+                             geom = json.loads(seg['geometry_json']) if isinstance(seg['geometry_json'], str) else seg['geometry_json']
+
                         segment_model = RouteSegment(
                             edge_id=seg['edge_id'],
                             from_node=seg['from_node'],
                             to_node=seg['to_node'],
                             distance_m=seg['distance_m'],
                             speed_limit=seg['speed_limit'],
-                            geometry=json.loads(seg['geometry_json']) if seg.get('geometry_json') else None
+                            geometry=geom
                         )
                         full_route_segments.append(segment_model)
                 
@@ -91,17 +150,6 @@ async def calculate_route(request: Request, body: MultiPointRequest):
                 raise HTTPException(status_code=404, detail=f"No route between waypoint {i} and {i+1}")
 
         # Create composite route
-        composite_route = EngineRoute(
-             edge_ids=all_edge_ids,
-             total_cost=total_time,
-             total_distance_m=total_dist,
-             algorithm="sequential",
-             node_sequence=[], # aggregate if needed
-             segments=full_route_segments # logic mismatch but handled below
-        )
-        # Hack for types since composite_route above is EngineRoute but we need Pydantic logic below
-        # Actually let's just use the Pydantic model construction here
-        
         final_route = RouteModel(
             route_id=0,
             segments=full_route_segments,
@@ -118,13 +166,17 @@ async def calculate_route(request: Request, body: MultiPointRequest):
         r_segments = []
         if r_data.segments:
             for seg in r_data.segments:
+                geom = None
+                if 'geometry_json' in seg and seg['geometry_json']:
+                     geom = json.loads(seg['geometry_json']) if isinstance(seg['geometry_json'], str) else seg['geometry_json']
+                
                 segment_model = RouteSegment(
                     edge_id=seg['edge_id'],
                     from_node=seg['from_node'],
                     to_node=seg['to_node'],
                     distance_m=seg['distance_m'],
                     speed_limit=seg['speed_limit'],
-                    geometry=json.loads(seg['geometry_json']) if seg.get('geometry_json') else None
+                    geometry=geom
                 )
                 r_segments.append(segment_model)
         
@@ -133,20 +185,8 @@ async def calculate_route(request: Request, body: MultiPointRequest):
             segments=r_segments,
             total_distance_m=r_data.total_distance_m,
             estimated_time_sec=r_data.total_cost,
-            diversity_score=1.0, # TODO calculate
+            diversity_score=1.0, # Approximate for combined
             edge_ids=r_data.edge_ids
         ))
         
     return RouteResponse(routes=response_routes)
-
-    # 3. Construct response
-    final_route = RouteModel(
-        route_id=0,
-        segments=full_route_segments,
-        total_distance_m=total_dist,
-        estimated_time_sec=total_time,
-        diversity_score=1.0, # Not applicable for single route
-        edge_ids=all_edge_ids
-    )
-    
-    return RouteResponse(routes=[final_route])
