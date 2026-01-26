@@ -60,6 +60,11 @@ class RouteSegment(BaseModel):
         None,
         description="Bearing (degrees, 0-360)"
     )
+    
+    geometry: Optional[dict] = Field(
+        None,
+        description="GeoJSON geometry (LineString)"
+    )
 
 
 class Route(BaseModel):

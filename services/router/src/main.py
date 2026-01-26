@@ -30,17 +30,11 @@ from src.api.routing import router as routing_router
 
 # ==================== Configuration ====================
 
-def load_config() -> dict:
-    """Load configuration from environment"""
-    return {
-        "db": {
-            "host": os.getenv("DB_HOST", "postgis"),
-            "port": int(os.getenv("DB_PORT", "5432")),
-            "database": os.getenv("DB_NAME", "osm"),
-            "user": os.getenv("DB_USER", "diplom"),
-            "password": os.getenv("DB_PASSWORD", "diplom_pass"),
-        }
-    }
+from services.common.config import load_settings, Settings
+from services.common.config.settings import ServiceConfig
+
+def get_settings() -> Settings:
+    return load_settings()
 
 
 # ==================== Application Lifecycle ====================
@@ -48,39 +42,38 @@ def load_config() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown"""
-    config = load_config()
+    settings = get_settings()
     
     logger.info("Initializing router service...")
     
     # 1. Database pool
-    app.state.db = DatabasePool(**config["db"])
+    db_config = {
+        "host": settings.db.host,
+        "port": settings.db.port,
+        "database": settings.db.name,
+        "user": settings.db.user,
+        "password": settings.db.password,
+    }
+    app.state.db = DatabasePool(**db_config)
     await app.state.db.connect()
     
     # 2. GraphBuilder
     logger.info("Creating GraphBuilder...")
-    db_cfg = config["db"]
     dsn = (
-        f"postgresql://{db_cfg['user']}:{db_cfg['password']}"
-        f"@{db_cfg['host']}:{db_cfg['port']}/{db_cfg['database']}"
+        f"postgresql://{settings.db.user}:{settings.db.password}"
+        f"@{settings.db.host}:{settings.db.port}/{settings.db.name}"
     )
     app.state.graph_builder = GraphBuilder(
-        config_path="configs/router/traffic_config.yaml",
+        config_path="routing/car_profile.yaml",
         db_dsn=dsn
     )
     await app.state.graph_builder.initialize()
     logger.info("Checking routing graph...")
-    # Graph already exists (built in previous runs), skip rebuild
     
     # 3. PgRouting Engine
     logger.info("Initializing PgRouting engine...")
     app.state.routing_engine = PgRoutingEngine({
-        "database": {
-            "host": config["db"]["host"],
-            "port": config["db"]["port"],
-            "name": config["db"]["database"],
-            "user": config["db"]["user"],
-            "password": config["db"]["password"]
-        },
+        "database": db_config,
         "connection_pool": {"min_size": 2, "max_size": 10},
         "routing": {"snap_radius_m": 100.0}
     })

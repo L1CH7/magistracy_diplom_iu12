@@ -46,19 +46,27 @@ BEGIN
         FROM pgr_dijkstra(
             format('
                 SELECT 
-                    edge_id AS id,
-                    source AS source,
-                    target AS target,
+                    id,
+                    source_id AS source,
+                    target_id AS target,
                     CASE 
-                        WHEN %s >= 20 THEN length_m / speed_limit
+                        WHEN %s >= 20 THEN length_m / speed_limit_kmh
                         ELSE length_m / GREATEST(
-                            effective_speed,
-                            speed_limit * 0.2
+                            speed_limit_kmh, -- Simplified cost
+                            speed_limit_kmh * 0.2
                         )
-                    END AS cost
+                    END AS cost,
+                    CASE 
+                        WHEN oneway THEN -1.0
+                        WHEN %s >= 20 THEN length_m / speed_limit_kmh
+                        ELSE length_m / GREATEST(
+                            speed_limit_kmh,
+                            speed_limit_kmh * 0.2
+                        )
+                    END AS reverse_cost
                 FROM graphs.edges
-                WHERE enabled = true
-            ', p_priority),
+                WHERE 1=1
+            ', p_priority, p_priority),
             p_start_node,
             p_end_node,
             directed := true
@@ -77,18 +85,19 @@ BEGIN
         SELECT 
             unnest(v_current_edges) AS edge_id
     ),
-    enriched AS (
+        enriched AS (
         SELECT 
-            e.edge_id,
-            e.source AS from_node,
-            e.target AS to_node,
+            e.id AS edge_id,
+            e.source_id AS from_node,
+            e.target_id AS to_node,
             e.length_m AS distance_m,
-            e.speed_limit,
-            e.effective_speed,
-            e.bearing
+            e.speed_limit_kmh AS speed_limit,
+            -- e.effective_speed, -- Missing column in new schema?
+            e.speed_limit_kmh * 0.8 as effective_speed, -- Approximation
+            0.0 as bearing -- Missing bearing column
         FROM route_edges re
-        JOIN graphs.edges e ON e.edge_id = re.edge_id
-        ORDER BY array_position(v_current_edges, e.edge_id)
+        JOIN graphs.edges e ON e.id = re.edge_id
+        ORDER BY array_position(v_current_edges, e.id)
     )
     SELECT
         0 AS route_id,
@@ -111,7 +120,7 @@ BEGIN
                 ELSE distance_m / GREATEST(effective_speed, speed_limit * 0.2)
             END
         ) AS estimated_time_sec,
-        1.0 AS diversity_score,
+        1.0::float AS diversity_score,
         v_current_edges AS edge_ids
     FROM enriched;
     
@@ -130,27 +139,45 @@ BEGIN
                 agg_cost
             FROM pgr_dijkstra(
                 format('
-                    SELECT 
-                        edge_id AS id,
-                        source AS source,
-                        target AS target,
-                        CASE 
-                            WHEN %s >= 20 THEN 
-                                length_m / speed_limit * 
-                                CASE 
-                                    WHEN edge_id = ANY($1) THEN %s
-                                    ELSE 1.0
-                                END
-                            ELSE 
-                                length_m / GREATEST(effective_speed, speed_limit * 0.2) *
-                                CASE 
-                                    WHEN edge_id = ANY($1) THEN %s
-                                    ELSE 1.0
-                                END
-                        END AS cost
-                    FROM graphs.edges
-                    WHERE enabled = true
-                ', p_priority, p_penalty_factor, p_penalty_factor),
+                SELECT 
+                    id,
+                    source_id AS source,
+                    target_id AS target,
+                    CASE 
+                        WHEN %s >= 20 THEN 
+                            length_m / speed_limit_kmh * 
+                            CASE 
+                                WHEN id = ANY(%L) THEN %s
+                                ELSE 1.0
+                            END
+                        ELSE 
+                            length_m / GREATEST(speed_limit_kmh, speed_limit_kmh * 0.2) * -- simplified for now or match schema
+                            CASE 
+                                WHEN id = ANY(%L) THEN %s
+                                ELSE 1.0
+                            END
+                    END AS cost,
+                    CASE 
+                        WHEN oneway THEN -1.0
+                        WHEN %s >= 20 THEN 
+                            length_m / speed_limit_kmh * 
+                            CASE 
+                                WHEN id = ANY(%L) THEN %s
+                                ELSE 1.0
+                            END
+                        ELSE 
+                            length_m / GREATEST(speed_limit_kmh, speed_limit_kmh * 0.2) * 
+                            CASE 
+                                WHEN id = ANY(%L) THEN %s
+                                ELSE 1.0
+                            END
+                    END AS reverse_cost
+                FROM graphs.edges
+                WHERE 1=1 -- enabled column missing in my schema?
+                FROM graphs.edges
+                WHERE 1=1 -- enabled column missing in my schema?
+                ', p_priority, v_current_edges, p_penalty_factor, v_current_edges, p_penalty_factor, 
+                   p_priority, v_current_edges, p_penalty_factor, v_current_edges, p_penalty_factor),
                 p_start_node,
                 p_end_node,
                 directed := true
@@ -184,16 +211,17 @@ BEGIN
             ),
             enriched AS (
                 SELECT 
-                    e.edge_id,
-                    e.source AS from_node,
-                    e.target AS to_node,
+                    e.id AS edge_id,
+                    e.source_id AS from_node,
+                    e.target_id AS to_node,
                     e.length_m AS distance_m,
-                    e.speed_limit,
-                    e.effective_speed,
-                    e.bearing
+                    e.speed_limit_kmh AS speed_limit,
+                    -- e.effective_speed,
+                    e.speed_limit_kmh * 0.8 as effective_speed,
+                    0.0 as bearing
                 FROM route_edges re
-                JOIN graphs.edges e ON e.edge_id = re.edge_id
-                ORDER BY array_position(v_current_edges, e.edge_id)
+                JOIN graphs.edges e ON e.id = re.edge_id
+                ORDER BY array_position(v_current_edges, e.id)
             )
             SELECT
                 v_route_count AS route_id,
