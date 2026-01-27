@@ -101,14 +101,14 @@ class MVTHandler:
         """
         try:
             visible_types = self._get_visible_types(z)
-            
+
             async with self.db.acquire() as conn:
                 mvt_data = await conn.fetchval(
                     OSMQueries.GENERATE_MVT_TILE,
                     z, x, y,
                     visible_types
                 )
-            
+             
             if not mvt_data or len(mvt_data) == 0:
                 # logger.trace(f"MVT tile [{z}/{x}/{y}] is empty")
                 return None

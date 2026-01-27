@@ -198,25 +198,16 @@ async def get_mvt_tile(z: int, x: int, y: int):
     if x < 0 or x >= max_tile or y < 0 or y >= max_tile:
         raise HTTPException(status_code=400, detail="Invalid tile coords")
     
-    # 1. Check intersection with default_bbox
-    # We need tile_to_bbox and crop_default_bbox
+    # 1. Soft Check intersection with default_bbox
+    # Logic:
+    # - If inside bbox: OK to view, OK to download if missing.
+    # - If outside bbox: OK to view (if exists), BLOCK download if missing.
     from ..handlers.utils import tile_to_bbox, crop_default_bbox
     
     tile_bbox = tile_to_bbox(z, x, y)
     clip_result = crop_default_bbox(*tile_bbox)
     
-    if not clip_result["is_valid"]:
-        # Tile is completely outside default_bbox
-        return FastAPIResponse(
-            status_code=200,
-            content=b"",
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-                "Access-Control-Allow-Headers": "*",
-                "Cache-Control": "public, max-age=3600"
-            }
-        )
+    is_outside_bbox = not clip_result["is_valid"]
 
     try:
         mvt_data = await router.mvt_handler.generate_tile(z, x, y)
@@ -253,11 +244,15 @@ async def get_mvt_tile(z: int, x: int, y: int):
             # MapLibre expects 200/204. 202 causes "Failed to fetch".
             target_bbox = clip_result["clipped_bbox"] # Should be tile_bbox clipped to default
             
-            logger.info(f"Tile [{z}/{x}/{y}] missing/empty (size={len(mvt_data) if mvt_data else 0}). Triggering download.")
+            # ONLY Trigger download if inside default_bbox config
+            if is_outside_bbox:
+                 logger.debug(f"Tile [{z}/{x}/{y}] missing and outside bbox. Skipping download.")
+            else:
+                logger.info(f"Tile [{z}/{x}/{y}] missing/empty (size={len(mvt_data) if mvt_data else 0}). Triggering download.")
 
-            asyncio.create_task(
-                router.tile_handler.download_area(target_bbox, overwrite=False)
-            )
+                asyncio.create_task(
+                    router.tile_handler.download_area(target_bbox, overwrite=False)
+                )
             
             # Using 204 No Content for "loading" causes issues in QT
             # Switching to 200 OK with empty body + No-Cache

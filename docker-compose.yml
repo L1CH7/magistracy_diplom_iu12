@@ -89,6 +89,8 @@ services:
     depends_on:
       - gateway
       - data-processor
+    profiles:
+      - donotstart
 
   postgis:
     image: pgrouting/pgrouting:17-3.5-3.8

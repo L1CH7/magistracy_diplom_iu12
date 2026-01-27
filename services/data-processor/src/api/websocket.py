@@ -40,10 +40,26 @@ async def websocket_data_updates(websocket: WebSocket):
         while True:
             try:
                 # Wait for messages from client
-                data = await websocket.receive_json()
+                message = await websocket.receive()
                 
-                if data.get("type") == "ping":
-                    await websocket.send_json({"type": "pong"})
+                if message["type"] == "websocket.receive":
+                    text = message.get("text")
+                    if not text:
+                         continue
+                         
+                    try:
+                        import json
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        if text == "ping":
+                             await websocket.send_json({"type": "pong"})
+                        continue
+
+                    if not isinstance(data, dict):
+                        continue
+                
+                    if data.get("type") == "ping":
+                        await websocket.send_json({"type": "pong"})
                     
                 elif data.get("type") == "config":
                     # Client sent LOD configuration

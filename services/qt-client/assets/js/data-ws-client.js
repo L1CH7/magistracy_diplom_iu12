@@ -35,12 +35,22 @@ export function connectDataProcessorWS() {
       reconnectAttempts = 0;
 
       // Send initial ping
-      wsConnection.send('ping');
+      wsConnection.send(JSON.stringify({ type: 'ping' }));
+
+      // Send current LOD config to sync with server
+      const lodConfig = config.lod;
+      if (lodConfig) {
+        console.log('[DataWS] Sending LOD config...');
+        wsConnection.send(JSON.stringify({
+          type: 'config',
+          lod: lodConfig
+        }));
+      }
 
       // Heartbeat: send ping every 20 seconds
       setInterval(() => {
         if (wsConnection.readyState === WebSocket.OPEN) {
-          wsConnection.send('ping');
+          wsConnection.send(JSON.stringify({ type: 'ping' }));
         }
       }, 20000);
     };

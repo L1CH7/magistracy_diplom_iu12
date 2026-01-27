@@ -128,12 +128,10 @@ class OSMQueries:
         FROM (
             SELECT
                 osm_id,
-                jsonb_build_object(
-                    'highway', highway,
-                    'name', name,
-                    'oneway', tags->>'oneway',
-                    'maxspeed', maxspeed
-                ) AS properties,
+                highway,
+                name,
+                tags->>'oneway' AS oneway,
+                maxspeed,
                 ST_AsMVTGeom(
                     geom_3857,
                     ST_TileEnvelope($1, $2, $3),
@@ -156,6 +154,21 @@ class OSMQueries:
                     'ALL' = ANY($4::text[])
                     OR highway = ANY($4::text[])
                 )
+                ORDER BY
+                    CASE highway
+                        WHEN 'motorway' THEN 10
+                        WHEN 'trunk' THEN 9
+                        WHEN 'primary' THEN 8
+                        WHEN 'secondary' THEN 7
+                        WHEN 'tertiary' THEN 6
+                        WHEN 'unclassified' THEN 5
+                        WHEN 'residential' THEN 4
+                        WHEN 'service' THEN 3
+                        WHEN 'track' THEN 2
+                        WHEN 'path' THEN 1
+                        WHEN 'footway' THEN 1
+                        ELSE 0
+                    END ASC
         ) AS tile
         WHERE geom IS NOT NULL
     """

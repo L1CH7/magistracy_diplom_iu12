@@ -28,18 +28,13 @@ function generateLodLayers(lodConfig, colors, widths) {
 
     const colorExpression = ['match', ['get', 'highway'], ...colorPairs, '#353535ff'];
 
-    // Build line-width based on LOD base_width
-    let widthExpression;
+    // Build line-width based on per-highway target width
     const baseWidth = lod.base_width || 1.0;
-
-    // Smooth interpolation for the layer duration
-    // We assume the base_width is the target width at the START of the zoom range
-    // And we scale it up slightly towards the end
-    widthExpression = [
-      'interpolate', ['linear'], ['zoom'],
-      minzoom, baseWidth,
-      maxzoom, baseWidth * 2.0
-    ];
+    const highwayWidthMatch = ['match', ['get', 'highway']];
+    for (const hw of highways) {
+      highwayWidthMatch.push(hw, widths[hw] || widths.default || 1.0);
+    }
+    highwayWidthMatch.push(1.0); // Default multiplier
 
     const layerDef = {
       id: `graph-${name}`,
@@ -55,7 +50,11 @@ function generateLodLayers(lodConfig, colors, widths) {
       },
       paint: {
         'line-color': colorExpression,
-        'line-width': widthExpression
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          minzoom, baseWidth,
+          18, ['*', highwayWidthMatch, 1.5]
+        ]
       }
     };
 
