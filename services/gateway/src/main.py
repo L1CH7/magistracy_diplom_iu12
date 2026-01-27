@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Gateway Service")
     # Initialize shared AsyncClient with connection pooling
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
-    app.state.client = httpx.AsyncClient(limits=limits, timeout=30.0)
+    app.state.client = httpx.AsyncClient(limits=limits, timeout=60.0)
     yield
     # Cleanup
     await app.state.client.aclose()

@@ -28,22 +28,25 @@ DECLARE
     v_shared_count INTEGER;
     v_diversity FLOAT;
     v_route_count INTEGER := 0;
+    v_attempt_count INTEGER := 0;
 BEGIN
     -- Initialize cumulative penalty list with an empty array.
     -- v_all_penalized_edges will hold all edges from all discovered routes
     -- to penalize their reuse in future searches.
 
-    WHILE v_route_count < p_k LOOP
+    -- Safety limit: Max 30 attempts to find K routes
+    WHILE v_route_count < p_k AND v_attempt_count < 30 LOOP
+        v_attempt_count := v_attempt_count + 1;
         v_current_edges := ARRAY[]::BIGINT[];
         
         -- Temporary table to hold path structure for the current search
-        CREATE TEMP TABLE IF NOT EXISTS current_path (
+        DROP TABLE IF EXISTS current_path;
+        CREATE TEMP TABLE current_path (
             seq INTEGER,
             node_id BIGINT,
             edge_id BIGINT,
             cost FLOAT
         ) ON COMMIT DROP;
-        DELETE FROM current_path;
 
         -- Search for the shortest path given current penalties
         INSERT INTO current_path (seq, node_id, edge_id, cost)
@@ -158,14 +161,8 @@ BEGIN
             -- Accumulate edges to penalize them for the next route discovery
             v_all_penalized_edges := array_cat(v_all_penalized_edges, v_current_edges);
         ELSE
-            -- We apply penalties anyway to try finding something else, but if it gets too many failures we stop.
-            -- To keep it simple for now, if it's not diverse, we still penalize but don't count it.
+            -- Not diverse enough, still penalize to force new path
             v_all_penalized_edges := array_cat(v_all_penalized_edges, v_current_edges);
-            
-            -- Guard against infinite loop if we keep finding non-diverse routes
-            IF v_route_count > 0 AND array_length(v_all_penalized_edges, 1) > 10000 THEN
-                EXIT;
-            END IF;
         END IF;
     END LOOP;
 END;
@@ -174,4 +171,3 @@ $$;
 COMMENT ON FUNCTION graphs.get_k_routes_with_diversity IS 
 'Calculate K alternative routes with diversity penalties and corrected geometry orientation.
 Uses a penalty-based approach to discourage reusing edges from previous routes.';
-
