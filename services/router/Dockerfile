@@ -11,6 +11,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Copy service code
 COPY services/router/src/ ./src/
+COPY services/router/tests/ ./tests/
 # Copy common code to services/common to match local import structure
 COPY services/common/ ./services/common/
 COPY services/__init__.py ./services/

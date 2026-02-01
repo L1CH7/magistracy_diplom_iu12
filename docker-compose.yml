@@ -8,11 +8,9 @@ services:
     environment:
       - APP__SERVICES__ROUTER__URL=http://router:8000
       - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
-    depends_on:
-      - data-processor
-      - router
     volumes:
       - ./configs:/app/configs
+      - ./logs:/app/logs
 
   data-processor:
     build:
@@ -63,6 +61,14 @@ services:
       - POSTGRES_PASSWORD=postgres
     volumes:
       - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./benchmarks:/app/benchmarks
+      - ./services/router/src:/app/src
+      - ./services/router/tests:/app/tests
+      - ./services/common:/app/services/common
+      - ./services/__init__.py:/app/services/__init__.py
+
+# router-test service removed, using 'docker compose run --rm router pytest' instead
 
 
 
@@ -103,7 +109,7 @@ services:
     volumes:
       - postgis_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nav_mas"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -114,7 +120,35 @@ services:
       - "3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "3090:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./logs:/var/log/app
+      - ./configs/promtail-config.yaml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
 
 volumes:
   postgis_data:
   grafana_data:
+  prometheus_data:

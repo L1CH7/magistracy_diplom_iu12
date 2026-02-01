@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ..models import RouteRequest, RouteResponse, Route as RouteModel, RouteSegment
 from ..engine.interface import Route as EngineRoute
+from .metrics import observe_routing_metrics
 
 router = APIRouter(prefix="/api/v1/routing", tags=["routing"])
 
@@ -23,6 +24,7 @@ class MultiPointRequest(BaseModel):
     k: int = 1 # Number of routes requested
 
 @router.post("/calculate", response_model=RouteResponse)
+@observe_routing_metrics
 async def calculate_route(request: Request, body: MultiPointRequest):
     """
     Calculate route between checkpoints.
@@ -36,6 +38,7 @@ async def calculate_route(request: Request, body: MultiPointRequest):
     
     # 1. Snap all points to graph nodes
     nodes = []
+    
     for pt in body.waypoints:
         snapped = await engine.snap_to_road(pt.lat, pt.lon, snap_radius_m=200.0)
         if not snapped:
@@ -67,23 +70,15 @@ async def calculate_route(request: Request, body: MultiPointRequest):
                     raise HTTPException(status_code=404, detail=f"No route between waypoint {i} and {i+1}")
                 segment_options.append(routes)
             
-            # 2. Combine segments (Beam Search approach)
-            # Start with the routes of the first segment
-            current_paths = segment_options[0] # List[EngineRoute]
-            
+            # ...Logic for merging segments...
+            current_paths = segment_options[0]
             for i in range(1, len(segment_options)):
                 next_segment_routes = segment_options[i]
                 new_candidates = []
-                
                 for path_so_far in current_paths:
                     for extension in next_segment_routes:
-                        # Combine path_so_far + extension
                         merged_ids = (path_so_far.edge_ids or []) + (extension.edge_ids or [])
-                        
-                        # Merge segments
                         merged_segments = (path_so_far.segments or []) + (extension.segments or [])
-                        
-                        # Merge node sequence (handle potential duplicate at join point)
                         seq_so_far = path_so_far.node_sequence or []
                         seq_ext = extension.node_sequence or []
                         if seq_so_far and seq_ext and seq_so_far[-1] == seq_ext[0]:
@@ -100,11 +95,8 @@ async def calculate_route(request: Request, body: MultiPointRequest):
                             segments=merged_segments
                         )
                         new_candidates.append(new_route)
-                
-                # Prune: Keep only top K by cost
                 new_candidates.sort(key=lambda r: r.total_cost)
                 current_paths = new_candidates[:body.k]
-                
             all_routes_data = current_paths
             
         except HTTPException as he:
@@ -125,22 +117,23 @@ async def calculate_route(request: Request, body: MultiPointRequest):
             end = nodes[i+1]
             try:
                 route_data = await engine.find_route(start, end, priority=body.priority)
-                if route_data.segments:
-                    for seg in route_data.segments:
-                         # Map dict to Model manually
-                        geom = None
-                        if 'geometry_json' in seg and seg['geometry_json']:
-                             geom = json.loads(seg['geometry_json']) if isinstance(seg['geometry_json'], str) else seg['geometry_json']
+                if not route_data or not route_data.segments:
+                        raise Exception("No segments found")
+                        
+                for seg in route_data.segments:
+                    geom = None
+                    if 'geometry_json' in seg and seg['geometry_json']:
+                            geom = json.loads(seg['geometry_json']) if isinstance(seg['geometry_json'], str) else seg['geometry_json']
 
-                        segment_model = RouteSegment(
-                            edge_id=seg['edge_id'],
-                            from_node=seg['from_node'],
-                            to_node=seg['to_node'],
-                            distance_m=seg['distance_m'],
-                            speed_limit=seg['speed_limit'],
-                            geometry=geom
-                        )
-                        full_route_segments.append(segment_model)
+                    segment_model = RouteSegment(
+                        edge_id=seg['edge_id'],
+                        from_node=seg['from_node'],
+                        to_node=seg['to_node'],
+                        distance_m=seg['distance_m'],
+                        speed_limit=seg['speed_limit'],
+                        geometry=geom
+                    )
+                    full_route_segments.append(segment_model)
                 
                 total_dist += route_data.total_distance_m
                 total_time += route_data.total_cost
@@ -158,7 +151,8 @@ async def calculate_route(request: Request, body: MultiPointRequest):
             diversity_score=1.0,
             edge_ids=all_edge_ids
         )
-        return RouteResponse(routes=[final_route])
+        response_routes = [final_route]
+        return RouteResponse(routes=response_routes)
 
     # Convert K-routes (EngineRoute) to Response (RouteModel)
     response_routes = []
@@ -168,7 +162,7 @@ async def calculate_route(request: Request, body: MultiPointRequest):
             for seg in r_data.segments:
                 geom = None
                 if 'geometry_json' in seg and seg['geometry_json']:
-                     geom = json.loads(seg['geometry_json']) if isinstance(seg['geometry_json'], str) else seg['geometry_json']
+                        geom = json.loads(seg['geometry_json']) if isinstance(seg['geometry_json'], str) else seg['geometry_json']
                 
                 segment_model = RouteSegment(
                     edge_id=seg['edge_id'],
@@ -188,5 +182,5 @@ async def calculate_route(request: Request, body: MultiPointRequest):
             diversity_score=1.0, # Approximate for combined
             edge_ids=r_data.edge_ids
         ))
-        
+
     return RouteResponse(routes=response_routes)

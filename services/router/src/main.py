@@ -22,10 +22,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from services.common.utils.loguru_config import configure_loguru
 from src.db import DatabasePool
-# from src.graph import GraphBuilder # REMOVED
 from src.engine import PgRoutingEngine
 from src.api import graph_router
-from src.api.routing import router as routing_router
+from src.api import  routing_router
+from prometheus_client import make_asgi_app
 
 
 # ==================== Configuration ====================
@@ -136,7 +136,8 @@ async def root():
         "description": "Routing graph management and routing API",
         "endpoints": {
             "health": "/health",
-            "graph_update": "POST /api/v1/graph/update"
+            "graph_build": "POST /api/v1/graph/build",
+            "graph_status": "GET /api/v1/graph/status/{task_id}",
         }
     }
 
@@ -148,3 +149,7 @@ app.include_router(graph_router)
 
 # Mount routing API
 app.include_router(routing_router)
+
+# Expose Prometheus metrics
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)

@@ -1,0 +1,220 @@
+{
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "datasource": {
+                    "type": "grafana",
+                    "uid": "-- Grafana --"
+                },
+                "enable": true,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "name": "Annotations & Alerts",
+                "type": "dashboard"
+            }
+        ]
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "links": [],
+    "liveNow": false,
+    "panels": [
+        {
+            "title": "Search Efficiency Index (SEI)",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 0
+            },
+            "targets": [
+                {
+                    "expr": "rate(routing_search_efficiency_sum[1m]) / rate(routing_search_efficiency_count[1m])",
+                    "legendFormat": "k={{k}} (Инфраструктура поиска)",
+                    "refId": "A"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "custom": {
+                        "drawStyle": "line",
+                        "lineInterpolation": "smooth",
+                        "showPoints": "auto"
+                    },
+                    "unit": "s",
+                    "decimals": 3
+                }
+            },
+            "description": "Эффективность поиска: среднее время на расчет одного ребра. Чем ниже значение, тем быстрее работает алгоритм. Всплески означают сложные участки графа."
+        },
+        {
+            "title": "Routing Success Rate (%)",
+            "type": "gauge",
+            "gridPos": {
+                "h": 8,
+                "w": 6,
+                "x": 12,
+                "y": 0
+            },
+            "targets": [
+                {
+                    "expr": "sum(rate(routing_search_duration_seconds_count{status=\"found\"}[5m])) / sum(rate(routing_search_duration_seconds_count[5m])) * 100",
+                    "refId": "A"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "min": 0,
+                    "max": 100,
+                    "unit": "percent",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "red",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 70
+                            },
+                            {
+                                "color": "green",
+                                "value": 90
+                            }
+                        ]
+                    }
+                }
+            },
+            "description": "Процент успешных запросов (статус 'found') ко всем запросам за последние 5 минут."
+        },
+        {
+            "title": "Diversity Stability",
+            "type": "gauge",
+            "gridPos": {
+                "h": 8,
+                "w": 6,
+                "x": 18,
+                "y": 0
+            },
+            "targets": [
+                {
+                    "expr": "routing_diversity_actual",
+                    "refId": "A"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "min": 0,
+                    "max": 1,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "red",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 0.5
+                            },
+                            {
+                                "color": "green",
+                                "value": 0.8
+                            }
+                        ]
+                    }
+                }
+            },
+            "description": "Показатель разнообразия альтернативных маршрутов. 1.0 — пути максимально не пересекаются."
+        },
+        {
+            "title": "Latency Distribution by K",
+            "type": "heatmap",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 8
+            },
+            "targets": [
+                {
+                    "expr": "sum by (le) (increase(routing_search_duration_seconds_bucket[5m]))",
+                    "format": "heatmap",
+                    "refId": "A"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "s"
+                }
+            },
+            "description": "Тепловая карта времени отклика. Показывает, сколько запросов попало в разные временные интервалы."
+        },
+        {
+            "title": "Found Route Count Distribution",
+            "type": "barchart",
+            "gridPos": {
+                "h": 8,
+                "w": 6,
+                "x": 12,
+                "y": 8
+            },
+            "targets": [
+                {
+                    "expr": "sum by (found_count) (increase(routing_result_count[10m]))",
+                    "legendFormat": "Найдено путей: {{found_count}}",
+                    "refId": "A"
+                }
+            ],
+            "description": "Распределение количества найденных альтернатив. Если всегда 0 — значит пути не находятся."
+        },
+        {
+            "title": "Total Requests (15m)",
+            "type": "stat",
+            "gridPos": {
+                "h": 8,
+                "w": 6,
+                "x": 18,
+                "y": 8
+            },
+            "targets": [
+                {
+                    "expr": "sum(increase(routing_search_duration_seconds_count[15m]))",
+                    "refId": "A"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "unit": "short"
+                }
+            },
+            "description": "Общее количество запросов к сервису за последние 15 минут."
+        }
+    ],
+    "refresh": "5s",
+    "schemaVersion": 38,
+    "style": "dark",
+    "tags": [
+        "routing",
+        "benchmark"
+    ],
+    "templating": {
+        "list": []
+    },
+    "time": {
+        "from": "now-15m",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "",
+    "title": "Routing Performance Dashboard",
+    "uid": "routing-perf",
+    "version": 2
+}

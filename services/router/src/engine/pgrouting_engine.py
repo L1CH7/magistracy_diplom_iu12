@@ -60,7 +60,7 @@ class PgRoutingEngine(RoutingEngine):
                         ST_XMax(box) as maxx,
                         ST_YMax(box) as maxy
                     FROM (
-                        SELECT ST_Expand(ST_Envelope(ST_MakeLine(start_n.geom, end_n.geom)), 0.02) as box 
+                        SELECT ST_Expand(ST_Envelope(ST_MakeLine(start_n.geom, end_n.geom)), 0.1) as box 
                         FROM start_n, end_n
                     ) sub
                 ),

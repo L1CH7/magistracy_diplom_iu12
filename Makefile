@@ -82,15 +82,56 @@ clean:
 	rm -rf services/web-client/node_modules
 	$(MAKE) -C services/qt-client clean
 
+# ==============================================================================
+# Testing & Benchmarking (Elegant Docker Approach)
+# ==============================================================================
+
+.PHONY: test bench shell
+
+# Запуск функциональных тестов маршрутизации
+test:
+	docker-compose run --rm router pytest -v tests/test_routing.py
+
+# Запуск бенчмарков производительности
+# Scientific Benchmarking (v3 - Metric Groups)
+# Scientific Benchmarking (v3 - Metric Groups)
+NUM_SAMPLES ?= 1000
+NUM_WORKERS_THROUGHPUT ?= 50
+
+bench-latency: ## 1. Sequential Latency Test (Default 1000, can override)
+	@echo "Running Latency Benchmark (Sequential)..."
+	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks \
+		-e NUM_SAMPLES=$(NUM_SAMPLES) -e BENCHMARK_PREFIX=latency_results router \
+		pytest -v tests/test_benchmark.py
+
+bench-throughput: ## 2. Parallel Throughput Test (Default 1000 samples, 50 threads)
+	@echo "Running Throughput Benchmark ($(NUM_WORKERS_THROUGHPUT) threads pool)..."
+	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks \
+		-e NUM_SAMPLES=$(NUM_SAMPLES) -e NUM_WORKERS=$(NUM_WORKERS_THROUGHPUT) \
+		-e BENCHMARK_PREFIX=throughput_results router \
+		pytest -n $(NUM_WORKERS_THROUGHPUT) tests/test_benchmark.py
+
+plot: ## 3. Generate Russian Plots
+	@echo "Generating projections and variance plots..."
+	PYTHON_BIN=.venv/bin/python3; \
+	$$PYTHON_BIN benchmarks/scripts/analyze.py
+
+clean-bench: ## Clean all benchmark data
+	rm -rf benchmarks/router
+
+# Для отладки: запускаем bash внутри окружения
+shell:
+	docker-compose run --rm --entrypoint /bin/bash router
+
 # Help command to list targets
 help:
 	@echo "Available commands:"
-	@echo "  make build          - Build all services in parallel"
-	@echo "  make up             - Start all services in background"
-	@echo "  make down           - Stop all services"
-	@echo "  make logs           - Follow logs of all services"
-	@echo "  make logs-<service> - Follow logs of specific service (e.g. make logs-router)"
-	@echo "  make restart        - Restart all services"
-	@echo "  make shell-<service>- Open bash shell in service container"
-	@echo "  make gui            - Run local Qt client"
-	@echo "  make clean          - Deep clean (remove volumes, orphans)"
+	@echo "  make build             - Build all services"
+	@echo "  make up                - Start all services"
+	@echo "  make test              - Run functional tests"
+	@echo "  make dataset           - Generate valid routes for benchmarks"
+	@echo "  make bench-latency     - Run algorithm latency test (1 thread)"
+	@echo "  make bench-throughput  - Run system stress test (12 threads)"
+	@echo "  make plot              - Generate scientific plots"
+	@echo "  make clean-bench       - Remove CSV results, plots and dataset"
+	@echo "  make gui               - Run local Qt client"

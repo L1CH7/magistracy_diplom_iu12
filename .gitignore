@@ -40,3 +40,9 @@ data/tiles/
 
 /*.md
 !README.md
+
+# Benchmarks
+benchmarks/**/results/
+benchmarks/**/plots/
+benchmarks/data/
+services/router/benchmarks/
