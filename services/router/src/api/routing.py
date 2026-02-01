@@ -51,7 +51,7 @@ async def calculate_route(request: Request, body: MultiPointRequest):
     if len(nodes) == 2 and body.k > 1:
         # K-Shortest Paths mode (2 points)
         try:
-            k_routes = await engine.find_k_routes(nodes[0], nodes[1], k=body.k, priority=body.priority)
+            k_routes = await engine.find_k_routes(nodes[0], nodes[1], k=body.k, priority=body.priority, use_diversity=True)
             for r in k_routes:
                 all_routes_data.append(r)
         except Exception as e:
@@ -65,7 +65,7 @@ async def calculate_route(request: Request, body: MultiPointRequest):
             segment_options = []
             for i in range(len(nodes) - 1):
                 start, end = nodes[i], nodes[i+1]
-                routes = await engine.find_k_routes(start, end, k=body.k, priority=body.priority)
+                routes = await engine.find_k_routes(start, end, k=body.k, priority=body.priority, use_diversity=True)
                 if not routes:
                     raise HTTPException(status_code=404, detail=f"No route between waypoint {i} and {i+1}")
                 segment_options.append(routes)

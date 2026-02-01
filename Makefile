@@ -92,6 +92,16 @@ clean:
 test:
 	docker-compose run --rm router pytest -v tests/test_routing.py
 
+analyze-topology: ## Analyze graph topology (Connected Components)
+	@echo "Running Topology Analysis..."
+	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks router \
+		python tests/analysis/analyze_topology.py
+
+extract-components: ## Extract component IDs for all nodes
+	@echo "Extracting Components to benchmarks/components.csv..."
+	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks router \
+		python tests/analysis/extract_components.py
+
 # Запуск бенчмарков производительности
 # Scientific Benchmarking (v3 - Metric Groups)
 # Scientific Benchmarking (v3 - Metric Groups)
@@ -129,6 +139,8 @@ help:
 	@echo "  make build             - Build all services"
 	@echo "  make up                - Start all services"
 	@echo "  make test              - Run functional tests"
+	@echo "  make analyze-topology  - Analyze graph topology"
+	@echo "  make extract-components- Extract all connected components"
 	@echo "  make dataset           - Generate valid routes for benchmarks"
 	@echo "  make bench-latency     - Run algorithm latency test (1 thread)"
 	@echo "  make bench-throughput  - Run system stress test (12 threads)"

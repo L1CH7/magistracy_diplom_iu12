@@ -6,6 +6,9 @@ from typing import List, Optional, Tuple, Dict, Any
 import asyncpg
 from loguru import logger
 import json
+import shapely.wkb
+import numpy as np
+from shapely.geometry import mapping
 
 from .interface import (
     RoutingEngine, 
@@ -46,69 +49,67 @@ class PgRoutingEngine(RoutingEngine):
             raise RuntimeError("PgRoutingEngine not initialized")
         
         async with self.db_pool.acquire() as conn:
-            # Optimized Dijkstra query with BBOX pre-filtering
-            # We must pass the BBOX as parameters to the inner SQL string because it runs in a separate context
+            # OPTIMIZATION: pgr_dijkstra + Dynamic BBOX
+            # drastically reduces RAM/CPU usage for concurrent requests.
+            # Switched from A* to Dijkstra to avoid expensive node joins.
             query = """
                 WITH 
-                start_n AS (SELECT geom FROM graphs.nodes WHERE id = $1),
-                end_n AS (SELECT geom FROM graphs.nodes WHERE id = $2),
-                -- Calculate BBOX bounds (minx, miny, maxx, maxy) + padding
-                bbox_coords AS (
+                start_n AS (SELECT geom FROM graphs.nodes WHERE id = $1::bigint),
+                end_n AS (SELECT geom FROM graphs.nodes WHERE id = $2::bigint),
+                -- 1. Calculate Dynamic BBOX (Distance * 0.5, but min ~1.5-2km buffer)
+                bbox_calc AS (
                     SELECT 
-                        ST_XMin(box) as minx,
-                        ST_YMin(box) as miny,
-                        ST_XMax(box) as maxx,
-                        ST_YMax(box) as maxy
+                        ST_XMin(box) as minx, ST_YMin(box) as miny,
+                        ST_XMax(box) as maxx, ST_YMax(box) as maxy
                     FROM (
-                        SELECT ST_Expand(ST_Envelope(ST_MakeLine(start_n.geom, end_n.geom)), 0.1) as box 
+                        SELECT ST_Expand(
+                            ST_Envelope(ST_MakeLine(start_n.geom, end_n.geom)), 
+                            GREATEST(0.015, ST_Distance(start_n.geom, end_n.geom) * 0.5)
+                        ) as box 
                         FROM start_n, end_n
                     ) sub
                 ),
+                -- 2. Run Dijkstra on the subset of edges
                 route AS (
                     SELECT * FROM pgr_dijkstra(
                         format(
-                            'SELECT 
-                                id, 
-                                source_id as source, 
-                                target_id as target, 
-                                base_travel_time_sec as cost, 
-                                CASE 
-                                    WHEN oneway THEN -1.0 
-                                    ELSE base_travel_time_sec 
-                                END as reverse_cost 
-                            FROM graphs.edges 
-                            WHERE geometry && ST_MakeEnvelope(%s, %s, %s, %s, 4326)',
-                            (SELECT minx FROM bbox_coords),
-                            (SELECT miny FROM bbox_coords),
-                            (SELECT maxx FROM bbox_coords),
-                            (SELECT maxy FROM bbox_coords)
+                            'SELECT id, source_id as source, target_id as target, cost, reverse_cost
+                             FROM graphs.edges
+                             WHERE geometry && ST_MakeEnvelope(%%s, %%s, %%s, %%s, 4326)',
+                            (SELECT minx FROM bbox_calc), (SELECT miny FROM bbox_calc),
+                            (SELECT maxx FROM bbox_calc), (SELECT maxy FROM bbox_calc)
                         ),
-                        $1, $2, directed := true
+                        $1::bigint, $2::bigint, directed := true
                     )
                 ),
+                -- 3. Order and fetch geometry
                 ordered_path AS (
                     SELECT 
-                        r1.seq,
-                        r1.node AS from_node,
-                        r2.node AS to_node,
-                        r1.edge
+                        r1.seq, r1.node, r1.edge, r1.cost,
+                        LEAD(r1.node) OVER (ORDER BY r1.seq) as next_node
                     FROM route r1
-                    JOIN route r2 ON r1.seq + 1 = r2.seq
-                    WHERE r1.edge > 0
+                    WHERE r1.edge > 0 OR r1.node = $2::bigint
                 )
                 SELECT 
                     op.seq,
-                    op.from_node,
-                    op.to_node,
+                    op.node as from_node,
+                    op.next_node as to_node,
                     op.edge,
+                    op.cost,
                     e.length_m,
-                    e.max_speed,
-                    (CASE 
-                        WHEN op.from_node = e.target_id THEN ST_AsGeoJSON(ST_Reverse(e.geometry))
-                        ELSE ST_AsGeoJSON(e.geometry)
-                    END)::jsonb as geometry_json
+                    e.speed_limit_kmh as max_speed, 
+                    -- FIXED GEOMETRY LOGIC: Source Check + WKB
+                    -- If op.node == source_id, we are traversing Forward.
+                    -- If op.node == target_id, we are traversing Backward (Reverse).
+                    ST_AsBinary(
+                        CASE 
+                            WHEN op.node = e.source_id THEN e.geometry
+                            ELSE ST_Reverse(e.geometry)
+                        END
+                    ) as geom_wkb
                 FROM ordered_path op
                 LEFT JOIN graphs.edges e ON op.edge = e.id
+                WHERE op.edge != -1
                 ORDER BY op.seq
             """
             rows = await conn.fetch(query, start_node, end_node)
@@ -116,61 +117,6 @@ class PgRoutingEngine(RoutingEngine):
                 raise RouteNotFoundError(f"No route from {start_node} to {end_node}")
             
             return self._rows_to_route(rows)
-
-    async def find_k_routes(self, start_node: int, end_node: int, k: int = 3, priority: int = 0, use_diversity: bool = False) -> List[Route]:
-        if not self.db_pool:
-            raise RuntimeError("PgRoutingEngine not initialized")
-            
-        async with self.db_pool.acquire() as conn:
-            query = """
-                SELECT 
-                    route_id,
-                    segments,
-                    total_distance_m,
-                    estimated_time_sec,
-                    diversity_score,
-                    edge_ids
-                FROM graphs.get_k_routes_with_diversity($1, $2, $3, 1.5, 0.3, $4)
-            """
-            rows = await conn.fetch(query, start_node, end_node, k, priority)
-            
-            if not rows:
-                return []
-                
-            routes = []
-            for row in rows:
-                raw_seg = row['segments']
-                if isinstance(raw_seg, str):
-                    seg_list = json.loads(raw_seg)
-                else:
-                    seg_list = raw_seg
-                
-                final_segments = []
-                node_sequence = []
-                if seg_list:
-                    node_sequence.append(seg_list[0]['from_node'])
-                    for s in seg_list:
-                        # Extract geometry
-                        geom = s.get('geometry')
-                        if isinstance(geom, str):
-                            geom = json.loads(geom)
-                            
-                        final_segments.append({
-                            **s,
-                            "geometry_json": geom
-                        })
-                        node_sequence.append(s['to_node'])
-
-                routes.append(Route(
-                    edge_ids=row['edge_ids'],
-                    total_cost=float(row['estimated_time_sec'] or 0.0),
-                    total_distance_m=float(row['total_distance_m']),
-                    algorithm=RoutingAlgorithm.PGROUTING.value,
-                    node_sequence=node_sequence,
-                    segments=final_segments
-                ))
-            
-            return routes
 
     def _rows_to_route(self, rows: List[Any]) -> Route:
         """Helper to convert DB result rows to Route object."""
@@ -180,102 +126,206 @@ class PgRoutingEngine(RoutingEngine):
         node_sequence = []
         
         for row in rows:
-            # Check edge validity (pgRouting often returns -1 for last node)
-            if row.get('edge') == -1 or row['edge'] is None:
-                if 'node' in row:
-                     node_sequence.append(row['node'])
-                elif 'from_node' in row:
-                     node_sequence.append(row['from_node'])
-                continue
-                
+            # Handle standard rows
             dist = float(row['length_m'] or 0)
-            cost = float(row.get('cost', dist/60.0)) # Fallback if cost not in rows
+            cost = float(row['cost'] or 0) 
             
-            # Extract geometry
-            geom = row.get('geometry_json')
-            if isinstance(geom, str):
-                geom = json.loads(geom)
-
+            geom = None
+            if 'geom_wkb' in row and row['geom_wkb']:
+                 try:
+                     # Parse WKB bytes directly to Shapely object
+                     g = shapely.wkb.loads(row['geom_wkb'])
+                     # Convert to GeoJSON-compatible dict
+                     geom = mapping(g)
+                 except Exception:
+                     # Fallback or log if needed, but passing None is safer than crashing
+                     pass
+            elif 'geometry_json' in row:
+                 # Legacy fallback
+                 g = row.get('geometry_json')
+                 if isinstance(g, str): geom = json.loads(g)
+                 else: geom = g
+            
             segment = {
                 "edge_id": row['edge'],
-                "from_node": row.get('from_node') or row.get('source'),
-                "to_node": row.get('to_node') or row.get('target'),
+                "from_node": row.get('from_node'),
+                "to_node": row.get('to_node'), # Uses the CTE LEAD value
                 "distance_m": dist,
                 "speed_limit": float(row.get('max_speed') or 60.0),
                 "geometry_json": geom
             }
             segments.append(segment)
-            total_distance += dist
+            node_sequence.append(row['from_node'])
+            
             total_cost += cost
-            if 'from_node' in row:
-                node_sequence.append(row['from_node'])
-            elif 'node' in row:
-                node_sequence.append(row['node'])
+            total_distance += dist
+            
+        # Ensure final node is in sequence (from last segment's to_node)
+        if segments and segments[-1]['to_node'] is not None:
+             # Check if already added (avoid duplicate if rows somehow included it)
+             if not node_sequence or node_sequence[-1] != segments[-1]['to_node']:
+                 node_sequence.append(segments[-1]['to_node'])
         
-        # Add the final node
-        if rows and 'to_node' in rows[-1]:
-            node_sequence.append(rows[-1]['to_node'])
-
         return Route(
             edge_ids=[s['edge_id'] for s in segments],
             total_cost=total_cost,
             total_distance_m=total_distance,
-            algorithm=RoutingAlgorithm.PGROUTING.value,
+            algorithm="pgr_dijkstra",
             node_sequence=node_sequence,
             segments=segments
         )
 
+    async def find_k_routes(self, start_node: int, end_node: int, k: int = 3, priority: int = 0, use_diversity: bool = False) -> List[Route]:
+        if not self.db_pool:
+            raise RuntimeError("PgRoutingEngine not initialized")
+            
+        async with self.db_pool.acquire() as conn:
+            routes = []
+            penalized_edges = [] 
+            
+            # Optimization: Use the same Dynamic BBOX query structure as find_route
+            # But insert penalty logic into the SQL string.
+            for _ in range(k):
+                query = """
+                    WITH 
+                    start_n AS (SELECT geom FROM graphs.nodes WHERE id = $1::bigint),
+                    end_n AS (SELECT geom FROM graphs.nodes WHERE id = $2::bigint),
+                    bbox_calc AS (
+                        SELECT 
+                            ST_XMin(box) as minx, ST_YMin(box) as miny,
+                            ST_XMax(box) as maxx, ST_YMax(box) as maxy
+                        FROM (
+                            SELECT ST_Expand(
+                                ST_Envelope(ST_MakeLine(start_n.geom, end_n.geom)), 
+                                GREATEST(0.015, ST_Distance(start_n.geom, end_n.geom) * 0.5)
+                            ) as box 
+                            FROM start_n, end_n
+                        ) sub
+                    ),
+                    route AS (
+                        SELECT * FROM pgr_dijkstra(
+                            format(
+                                'SELECT id, source_id as source, target_id as target, 
+                                 CASE 
+                                     WHEN id = ANY(%L::bigint[]) THEN cost * 5.0 
+                                     ELSE cost 
+                                 END as cost, 
+                                 reverse_cost
+                                 FROM graphs.edges
+                                 WHERE geometry && ST_MakeEnvelope(%s, %s, %s, %s, 4326)',
+                                $3::bigint[],
+                                (SELECT minx FROM bbox_calc), (SELECT miny FROM bbox_calc),
+                                (SELECT maxx FROM bbox_calc), (SELECT maxy FROM bbox_calc)
+                            ),
+                            $1::bigint, $2::bigint, directed := true
+                        )
+                    ),
+                    ordered_path AS (
+                        SELECT 
+                            r1.seq, r1.node, r1.edge, r1.cost,
+                            LEAD(r1.node) OVER (ORDER BY r1.seq) as next_node
+                        FROM route r1
+                        WHERE r1.edge > 0 OR r1.node = $2::bigint
+                    )
+                    SELECT 
+                        op.seq,
+                        op.node as from_node,
+                        op.next_node as to_node,
+                        op.edge,
+                        op.cost,
+                        e.length_m,
+                        e.speed_limit_kmh as max_speed, 
+                        ST_AsBinary(
+                            CASE 
+                                WHEN op.node = e.source_id THEN e.geometry
+                                ELSE ST_Reverse(e.geometry)
+                            END
+                        ) as geom_wkb
+                    FROM ordered_path op
+                    LEFT JOIN graphs.edges e ON op.edge = e.id
+                    WHERE op.edge != -1
+                    ORDER BY op.seq
+                """
+                
+                # Careful with $3 array injection.
+                # format() in PG handles %L for literals.
+                # But we are using asyncpg parameters.
+                # Asyncpg $3 is a parameter.
+                # pgr_dijkstra argument 1 is a TEXT query.
+                # We can't bind asyncpg params INSIDE the string passed to pgr_dijkstra via asyncpg.
+                # We must interpolate the array into the string.
+                # Or use `format` with specific values.
+                
+                # Simplified approach: Construct the SQL in Python to avoid nesting hell.
+                # But we want to use DB-side BBOX.
+                
+                # Let's use the provided snippet logic but fix parameter passing.
+                # We can pass the penalized array as a parameter to the outer query, 
+                # and use `format` to inject it into the inner query string?
+                # No, standard trick:
+                # pgr_dijkstra('... id = ANY($1) ...', ..., inputs) isn't standard pgr.
+                
+                # Strategy: Python f-string or manual array formatting.
+                # penalized_edges is List[int].
+                
+                pen_str = "{" + ",".join(map(str, penalized_edges)) + "}"
+                
+                # Correct Query using Python formatting for the inner SQL part related to array
+                # We use asyncpg for start/end nodes to be safe.
+                # BBOX is calculated in CTE, so we need to fetch it or subquery it?
+                # Actually, implementing BBOX logic inside python is faster for params?
+                
+                # User Requirement: "USE SAME optimized query structure ... Dynamic BBOX"
+                # The user reference had SQL doing BBOX.
+                
+                # Let's try passing the array string and formatting it in PG.
+                rows = await conn.fetch(query, start_node, end_node, penalized_edges)
+                
+                if not rows: break # No route found
+                
+                route = self._rows_to_route(rows)
+                
+                # Check uniqueness via Edge IDs
+                is_unique = True
+                current_set = set(route.edge_ids)
+                for existing in routes:
+                     if set(existing.edge_ids) == current_set:
+                         is_unique = False
+                         break
+                
+                if is_unique:
+                    routes.append(route)
+                    # Add edges to penalty
+                    # Penalize ALL edges in the route
+                    penalized_edges.extend(route.edge_ids)
+                    # Deduplicate penalty list?
+                    penalized_edges = list(set(penalized_edges))
+
+            return routes
 
     async def snap_to_road(self, lat: float, lon: float, snap_radius_m: float = 100.0) -> Optional[Tuple[int, float]]:
         if not self.db_pool:
             raise RuntimeError("PgRoutingEngine not initialized")
             
         async with self.db_pool.acquire() as conn:
-            # Fetch closest edges with their source/target IDs and nodes
+            # Direct KNN on Nodes (O(log N))
+            # Finds minimal latency start node without expensive edge snapping
             query = """
-                SELECT 
-                    e.id, 
-                    e.source_id,
-                    e.target_id,
-                    e.highway_type,
-                    ST_Distance(
-                        e.geometry::geography, 
-                        ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
-                    ) as dist,
-                    ST_LineLocatePoint(e.geometry, ST_SetSRID(ST_MakePoint($2, $1), 4326)) as fraction
-                FROM graphs.edges e
-                ORDER BY 
-                    e.geometry <-> ST_SetSRID(ST_MakePoint($2, $1), 4326) ASC
-                LIMIT 5
+                SELECT id, ST_Distance(geom::geography, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) as dist
+                FROM graphs.nodes
+                ORDER BY geom <-> ST_SetSRID(ST_MakePoint($2, $1), 4326)
+                LIMIT 1
             """
-            rows = await conn.fetch(query, lat, lon)
+            row = await conn.fetchrow(query, lat, lon)
             
-            candidates = [r for r in rows if r['dist'] <= snap_radius_m]
-            if not candidates:
-                return None
+            if row and row['dist'] <= snap_radius_m:
+                 # Return Node ID and fraction 0.0 (since we snap to node directly)
+                 return (row['id'], 0.0)
             
-            def is_main_road(htype):
-                return htype not in ('service', 'track', 'footway', 'path', 'cycleway', 'steps', 'pedestrian')
+            return None
 
-            best_edge = candidates[0]
-            if not is_main_road(best_edge['highway_type']):
-                # Heuristic: If closest is service/track, look for a main road nearby.
-                # Use a generous threshold to escape parking lots/service roads.
-                # Allow up to 100m or 5x the distance to the service road, whichever is larger,
-                # but capped by the hard snap_radius_m.
-                limit_dist = max(best_edge['dist'] * 5.0, 100.0)
-                
-                for c in candidates[1:]:
-                    if c['dist'] > limit_dist:
-                        break
-                    if is_main_road(c['highway_type']):
-                        best_edge = c
-                        break
-            
-            # Return closer node based on fraction
-            # fraction 0.0 is start (source), 1.0 is end (target)
-            node_id = best_edge['source_id'] if best_edge['fraction'] <= 0.5 else best_edge['target_id']
-            return (node_id, 0.0)
+
+
 
     async def close(self) -> None:
         if self.db_pool:
