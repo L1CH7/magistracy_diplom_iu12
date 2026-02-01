@@ -100,10 +100,18 @@ services:
 
   postgis:
     image: pgrouting/pgrouting:17-3.5-3.8
+    shm_size: '4gb'
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=nav_mas
+    # Тюнинг конфига прямо при запуске: больше локов для топологии, больше WAL для быстрой записи
+    command: >
+      postgres 
+      -c max_locks_per_transaction=128 
+      -c max_wal_size=4GB 
+      -c shared_buffers=2GB 
+      -c work_mem=64MB
     ports:
       - "5432:5432"
     volumes:

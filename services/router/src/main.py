@@ -22,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from services.common.utils.loguru_config import configure_loguru
 from src.db import DatabasePool
+from src.graph_builder import GraphBuilder
+from src.db_manager import PostGISManager
 from src.engine import PgRoutingEngine
 from src.api import graph_router
 from src.api import  routing_router
@@ -57,9 +59,10 @@ async def lifespan(app: FastAPI):
     app.state.db = DatabasePool(**db_config)
     await app.state.db.connect()
     
-    # 2. GraphBuilder - REMOVED (Handled by separate service)
-    # logger.info("Creating GraphBuilder...")
-    # ...
+    # 2. GraphBuilder (Restored & Fixed)
+    logger.info("Initializing GraphBuilder...")
+    app.state.db_manager = PostGISManager() # Sync connection for build
+    app.state.graph_builder = GraphBuilder(app.state.db_manager)
     
     # 3. PgRouting Engine
     logger.info("Initializing PgRouting engine...")
@@ -153,3 +156,11 @@ app.include_router(routing_router)
 # Expose Prometheus metrics
 metrics_app = make_asgi_app()
 app.mount("/metrics", metrics_app)
+
+# Suppress /metrics access logs
+import logging
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/metrics" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
