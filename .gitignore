@@ -44,5 +44,5 @@ data/tiles/
 # Benchmarks
 benchmarks/**/results/
 benchmarks/**/plots/
-benchmarks/data/
+benchmarks/router/components/
 services/router/benchmarks/

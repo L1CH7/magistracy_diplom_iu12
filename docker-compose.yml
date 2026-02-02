@@ -11,6 +11,7 @@ services:
     volumes:
       - ./configs:/app/configs
       - ./logs:/app/logs
+    user: "${UID:-1000}:${GID:-1000}"
 
   data-processor:
     build:
@@ -29,6 +30,7 @@ services:
       - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
     volumes:
       - ./configs:/app/configs
+    user: "${UID:-1000}:${GID:-1000}"
 
   router:
     build:
@@ -67,6 +69,7 @@ services:
       - ./services/router/tests:/app/tests
       - ./services/common:/app/services/common
       - ./services/__init__.py:/app/services/__init__.py
+    user: "${UID:-1000}:${GID:-1000}"
 
 # router-test service removed, using 'docker compose run --rm router pytest' instead
 

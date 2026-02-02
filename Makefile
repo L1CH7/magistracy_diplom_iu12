@@ -1,4 +1,8 @@
-.PHONY: all build up down logs restart clean prune shell-gateway shell-router shell-data help gui
+# Environment variables for Docker User Mapping
+export UID := $(shell id -u)
+export GID := $(shell id -g)
+
+.PHONY: help build run stop clean test logs shell start clean prune shell-gateway shell-router shell-data help gui
 
 # Default target
 all: help
@@ -98,25 +102,27 @@ analyze-topology: ## Analyze graph topology (Connected Components)
 		python tests/analysis/analyze_topology.py
 
 extract-components: ## Extract component IDs for all nodes
-	@echo "Extracting Components to benchmarks/components.csv..."
-	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks router \
+	@echo "Extracting Components to benchmarks/router/components/components.csv..."
+	docker compose run --rm -v $(PWD)/benchmarks:/app/benchmarks router \
 		python tests/analysis/extract_components.py
+	@echo "Generating Components Map..."
+	.venv/bin/python benchmarks/scripts/plot_components.py
 
 # Запуск бенчмарков производительности
 # Scientific Benchmarking (v3 - Metric Groups)
 # Scientific Benchmarking (v3 - Metric Groups)
 NUM_SAMPLES ?= 1000
-NUM_WORKERS_THROUGHPUT ?= 50
+NUM_WORKERS_THROUGHPUT ?= 12
 
 bench-latency: ## 1. Sequential Latency Test (Default 1000, can override)
 	@echo "Running Latency Benchmark (Sequential)..."
-	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks \
+	docker compose run --rm -v $(PWD)/benchmarks:/app/benchmarks \
 		-e NUM_SAMPLES=$(NUM_SAMPLES) -e BENCHMARK_PREFIX=latency_results router \
 		pytest -v tests/test_benchmark.py
 
 bench-throughput: ## 2. Parallel Throughput Test (Default 1000 samples, 50 threads)
 	@echo "Running Throughput Benchmark ($(NUM_WORKERS_THROUGHPUT) threads pool)..."
-	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks \
+	docker compose run --rm -v $(PWD)/benchmarks:/app/benchmarks \
 		-e NUM_SAMPLES=$(NUM_SAMPLES) -e NUM_WORKERS=$(NUM_WORKERS_THROUGHPUT) \
 		-e BENCHMARK_PREFIX=throughput_results router \
 		pytest -n $(NUM_WORKERS_THROUGHPUT) tests/test_benchmark.py

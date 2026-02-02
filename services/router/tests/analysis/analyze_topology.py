@@ -75,9 +75,11 @@ async def main():
                 log(f"Node {node['id']}: {node['lat']}, {node['lon']}")
 
         # Write to file
-        with open('/app/benchmarks/topology_report.txt', 'w') as f:
+        import os
+        os.makedirs('/app/benchmarks/router/components', exist_ok=True)
+        with open('/app/benchmarks/router/components/topology_report.txt', 'w') as f:
             f.write('\n'.join(output_lines))
-        print("\nReport saved to benchmarks/topology_report.txt")
+        print("\nReport saved to benchmarks/router/components/topology_report.txt")
                 
     except Exception as e:
         print(f"Analysis failed: {e}")
