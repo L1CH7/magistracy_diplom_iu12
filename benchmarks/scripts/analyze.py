@@ -28,7 +28,7 @@ def plot_projections(df, prefix):
     plt.figure(figsize=(10, 6))
     sns.pointplot(data=success_df, x='num_waypoints', y='duration_ms', hue='k', 
                   palette="viridis", errorbar=None, capsize=0.1) # Removed errorbar
-    plt.title(f'[{prefix}] Зависимость времени от N точек (Группировка по K)', fontsize=14)
+    plt.title(f'Зависимость времени от N точек (Группировка по K)', fontsize=14)
     plt.xlabel('Количество точек (N)', fontsize=12)
     plt.ylabel('Время (мс)', fontsize=12)
     plt.grid(True, alpha=0.3)
@@ -40,7 +40,7 @@ def plot_projections(df, prefix):
     plt.figure(figsize=(10, 6))
     sns.pointplot(data=success_df, x='k', y='duration_ms', hue='num_waypoints', 
                   palette="magma", errorbar=None, capsize=0.1) # Removed errorbar
-    plt.title(f'[{prefix}] Зависимость времени от K маршрутов (Группировка по N)', fontsize=14)
+    plt.title(f'Зависимость времени от K маршрутов (Группировка по N)', fontsize=14)
     plt.xlabel('Количество маршрутов (K)', fontsize=12)
     plt.ylabel('Время (мс)', fontsize=12)
     plt.grid(True, alpha=0.3)
@@ -67,7 +67,7 @@ def plot_3d_complexity(df, prefix):
     ax.set_xlabel('Точки (N)')
     ax.set_ylabel('Маршруты (K)')
     ax.set_zlabel('Время (мс)')
-    ax.set_title(f'[{prefix}] 3D Анализ Сложности (N, K, Time)')
+    ax.set_title(f'3D Анализ Сложности (N, K, Time)')
     fig.colorbar(scatter, ax=ax, shrink=0.5, aspect=5, label='Время (мс)')
     
     plt.savefig(os.path.join(PLOTS_DIR, f"{prefix}_complexity_3d.png"), dpi=300)
@@ -98,13 +98,72 @@ def plot_regression(df, prefix):
     y_vals = intercept + slope * x_vals
     plt.plot(x_vals, y_vals, 'r', linewidth=2, label=f'Fit: T = {slope:.1f}*(N*K) + {intercept:.1f}\n$R^2$={r_squared:.3f}')
     
-    plt.title(f'[{prefix}] Регрессия: Время ~ Алгоритмическая Сложность', fontsize=14)
+    plt.title(f'Регрессия: Время ~ Алгоритмическая Сложность', fontsize=14)
     plt.xlabel('Сложность (N * K)', fontsize=12)
     plt.ylabel('Время (мс)', fontsize=12)
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.savefig(os.path.join(PLOTS_DIR, f"{prefix}_regression.png"), dpi=300)
     print(f"Saved: {prefix}_regression.png")
+
+def plot_failure_breakdown(df, prefix):
+    """Pie Chart of Error Types"""
+    failures = df[df['success'] == 0]
+    if failures.empty:
+        print(f"[{prefix}] No failures to analyze.")
+        return
+    
+    if 'error' not in df.columns:
+        print(f"[{prefix}] 'error' column missing, skipping failure breakdown.")
+        return
+
+    # Count errors by type
+    error_counts = failures['error'].value_counts()
+    
+    plt.figure(figsize=(10, 8))
+    plt.pie(error_counts, labels=error_counts.index, autopct='%1.1f%%', startangle=140, colors=sns.color_palette('pastel'))
+    plt.title(f'Распределение типов ошибок (Total: {len(failures)})')
+    plt.axis('equal')
+    
+    plt.savefig(os.path.join(PLOTS_DIR, f"{prefix}_failure_breakdown.png"), dpi=300)
+    print(f"Saved: {prefix}_failure_breakdown.png")
+
+def plot_yield_heatmap(df, prefix):
+    """Heatmap: Probability of finding K routes for given N points."""
+    # We want to know: For (N, K), what % of requests were fully successful?
+    # Success = 1 (Found K routes)
+    
+    pivot = df.pivot_table(index='k', columns='num_waypoints', values='success', aggfunc='mean')
+    
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(pivot, annot=True, fmt=".1%", cmap="RdYlGn", vmin=0, vmax=1)
+    plt.title(f'Вероятность успеха поиска K маршрутов')
+    plt.xlabel('Количество точек (N)')
+    plt.ylabel('Количество маршрутов (K)')
+    
+    plt.savefig(os.path.join(PLOTS_DIR, f"{prefix}_yield_heatmap.png"), dpi=300)
+    print(f"Saved: {prefix}_yield_heatmap.png")
+
+def plot_tortuosity(df, prefix):
+    """Histogram of Route Tortuosity (Length / Euclidean Distance)"""
+    success_df = df[df['success'] == 1].copy()
+    if 'tortuosity' not in success_df.columns:
+        # Calculate if missing (assuming we have length_m and straight_dist)
+        # But for now, we skip if column is missing
+        return
+
+    plt.figure(figsize=(10, 6))
+    sns.histplot(success_df['tortuosity'], bins=30, kde=True, color='purple')
+    plt.axvline(success_df['tortuosity'].median(), color='k', linestyle='--', label=f'Median: {success_df["tortuosity"].median():.2f}')
+    
+    plt.title(f'Гистограмма Извилистости')
+    plt.xlabel('Коэффициент (Длина / Прямая)')
+    plt.ylabel('Частота')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.savefig(os.path.join(PLOTS_DIR, f"{prefix}_tortuosity_hist.png"), dpi=300)
+    print(f"Saved: {prefix}_tortuosity_hist.png")
 
 def process_group(prefix):
     # Pattern matching for specific prefix files
@@ -124,6 +183,9 @@ def process_group(prefix):
     plot_projections(df, prefix)
     plot_3d_complexity(df, prefix)
     plot_regression(df, prefix)
+    plot_yield_heatmap(df, prefix)
+    plot_failure_breakdown(df, prefix)
+    plot_tortuosity(df, prefix)
 
 def main():
     ensure_dir()

@@ -64,7 +64,7 @@ class PgRoutingEngine(RoutingEngine):
                     FROM (
                         SELECT ST_Expand(
                             ST_Envelope(ST_MakeLine(start_n.geom, end_n.geom)), 
-                            GREATEST(0.015, ST_Distance(start_n.geom, end_n.geom) * 0.5)
+                            GREATEST(0.015, ST_Distance(start_n.geom, end_n.geom) * 0.3)
                         ) as box 
                         FROM start_n, end_n
                     ) sub
@@ -75,7 +75,7 @@ class PgRoutingEngine(RoutingEngine):
                         format(
                             'SELECT id, source_id as source, target_id as target, cost, reverse_cost
                              FROM graphs.edges
-                             WHERE geometry && ST_MakeEnvelope(%%s, %%s, %%s, %%s, 4326)',
+                             WHERE geometry && ST_MakeEnvelope(%s, %s, %s, %s, 4326)',
                             (SELECT minx FROM bbox_calc), (SELECT miny FROM bbox_calc),
                             (SELECT maxx FROM bbox_calc), (SELECT maxy FROM bbox_calc)
                         ),
@@ -197,7 +197,7 @@ class PgRoutingEngine(RoutingEngine):
                         FROM (
                             SELECT ST_Expand(
                                 ST_Envelope(ST_MakeLine(start_n.geom, end_n.geom)), 
-                                GREATEST(0.015, ST_Distance(start_n.geom, end_n.geom) * 0.5)
+                                GREATEST(0.015, ST_Distance(start_n.geom, end_n.geom) * 0.3)
                             ) as box 
                             FROM start_n, end_n
                         ) sub

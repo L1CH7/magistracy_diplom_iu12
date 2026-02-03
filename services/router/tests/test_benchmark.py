@@ -85,10 +85,12 @@ def run_benchmark_case(waypoints, k):
         "num_waypoints": len(waypoints),
         "euclidean_dist_km": round(e_dist, 3),
         "route_dist_km": 0.0,
+        "tortuosity": 1.0,
         "k": k,
         "duration_ms": round(duration_ms, 2),
         "sei_ms_km": 0.0,
         "complexity_factor": round(e_dist * k * len(waypoints), 2),
+        "inputs": json.dumps([{"lat": p["lat"], "lon": p["lon"]} for p in waypoints]),
         "success": int(success),
         "error_type": error_type
     }
@@ -99,6 +101,11 @@ def run_benchmark_case(waypoints, k):
         metrics["route_dist_km"] = round(r_dist, 3)
         if r_dist > 0:
             metrics["sei_ms_km"] = round(duration_ms / r_dist, 2)
+        
+        # Calculate Tortuosity (Route Length / Euclidean Distance)
+        # 1.0 = Perfect straight line. >1.0 = winding road.
+        if e_dist > 0.1 and r_dist > 0:
+             metrics["tortuosity"] = round(r_dist / e_dist, 3)
         
     log_result_to_csv(metrics)
     return success

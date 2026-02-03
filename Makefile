@@ -112,7 +112,7 @@ extract-components: ## Extract component IDs for all nodes
 # Scientific Benchmarking (v3 - Metric Groups)
 # Scientific Benchmarking (v3 - Metric Groups)
 NUM_SAMPLES ?= 1000
-NUM_WORKERS_THROUGHPUT ?= 12
+NUM_WORKERS_THROUGHPUT ?= 16
 
 bench-latency: ## 1. Sequential Latency Test (Default 1000, can override)
 	@echo "Running Latency Benchmark (Sequential)..."

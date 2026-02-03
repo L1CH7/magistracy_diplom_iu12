@@ -42,7 +42,6 @@ data/tiles/
 !README.md
 
 # Benchmarks
-benchmarks/**/results/
-benchmarks/**/plots/
-benchmarks/router/components/
-services/router/benchmarks/
+benchmarks/router/
+*.png
+*.svg
