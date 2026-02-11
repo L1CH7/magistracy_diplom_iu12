@@ -71,6 +71,50 @@ async def get_random_points(count: int = 50):
         return [{"lat": row['lat'], "lon": row['lon']} for row in rows]
     finally:
         await conn.close()
+async def get_distant_random_points(min_dist_km: float = 5.0):
+    """
+    Извлекает две точки, которые находятся как минимум в min_dist_km друг от друга.
+    """
+    try:
+        settings = load_settings()
+        db_params = {
+            "host": settings.db.host,
+            "port": settings.db.port,
+            "user": settings.db.user,
+            "password": settings.db.password,
+            "database": settings.db.name
+        }
+    except Exception:
+        db_params = {"host": "postgis", "port": 5432, "user": "postgres", "password": "postgres", "database": "nav_mas"}
+    
+    conn = await asyncpg.connect(**db_params)
+    try:
+        # Берем случайную точку и ищем другую на расстоянии > min_dist_km
+        query = """
+            WITH p1 AS (
+                SELECT ST_StartPoint(geometry) as geom FROM graphs.edges ORDER BY random() LIMIT 1
+            ),
+            p2 AS (
+                SELECT ST_StartPoint(geometry) as geom 
+                FROM graphs.edges, p1 
+                WHERE ST_Distance(ST_StartPoint(geometry)::geography, p1.geom::geography) > $1 * 1000
+                ORDER BY random() 
+                LIMIT 1
+            )
+            SELECT ST_Y(p1.geom) as lat1, ST_X(p1.geom) as lon1, ST_Y(p2.geom) as lat2, ST_X(p2.geom) as lon2
+            FROM p1, p2;
+        """
+        row = await conn.fetchrow(query, min_dist_km)
+        if not row:
+            # Fallback if no such pair found (unlikely for 5km in Moscow)
+            return await get_random_points(2) # Fallback to original
+            
+        return [
+            {"lat": row['lat1'], "lon": row['lon1']},
+            {"lat": row['lat2'], "lon": row['lon2']}
+        ]
+    finally:
+        await conn.close()
 
 def load_curated_waypoints():
     """Загружает вручную отобранные точки из JSON."""

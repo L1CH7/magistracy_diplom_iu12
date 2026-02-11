@@ -127,6 +127,11 @@ bench-throughput: ## 2. Parallel Throughput Test (Default 1000 samples, 50 threa
 		-e BENCHMARK_PREFIX=throughput_results router \
 		pytest -n $(NUM_WORKERS_THROUGHPUT) tests/test_benchmark.py
 
+test-router-jakkard: ## 4. Jaccard Diversity Test (N=2..3, K=5)
+	@echo "Running Jaccard Diversity Benchmark..."
+	docker compose run --rm -v $(PWD)/benchmarks:/app/benchmarks router \
+		pytest -v tests/test_jaccard.py
+
 plot: ## 3. Generate Russian Plots
 	@echo "Generating projections and variance plots..."
 	PYTHON_BIN=.venv/bin/python3; \

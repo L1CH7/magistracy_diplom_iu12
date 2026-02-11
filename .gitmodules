@@ -1,0 +1,3 @@
+[submodule "docs/latex"]
+	path = docs/latex
+	url = https://github.com/L1CH7/magistracy-diplom-iu12-docs.git

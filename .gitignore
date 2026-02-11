@@ -45,3 +45,10 @@ data/tiles/
 benchmarks/router/
 *.png
 *.svg
+
+# docs
+# !docs/router
+# !docs/gateway
+# !docs/data-processor
+# !docs/qt-client
+# !docs/prompts

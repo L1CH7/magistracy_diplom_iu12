@@ -24,7 +24,7 @@ all: install compile
 # 1. Environment Setup
 $(VENV_DIR):
 	@echo ">>> Creating virtual environment..."
-	python3.13 -m venv $(VENV_DIR)
+	python3.14 -m venv $(VENV_DIR)
 
 install: $(VENV_DIR)
 	@echo ">>> Installing dependencies..."
