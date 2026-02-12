@@ -37,8 +37,46 @@
 *   Максимальное потребление RAM: **370 МБ** (снижение в **32 раза**).
 *   Время полной сборки графа: **13 минут** (вместо падения через 2 часа).
 
-## 2.3. Доказательство Эффективности (Статистика)
+## 2.3. Доказательство эффективности 
 Чтобы не быть голословными, приведем лог статистики длин ребер *до* и *после* оптимизации. Эти данные были получены прямым запросом к БД во время отладки.
+
+Текст запроса:
+
+```bash
+docker exec diplom-router-1 python -c "
+import psycopg2
+
+conn = psycopg2.connect(
+    host='postgis', 
+    user='postgres', 
+    password='postgres', 
+    dbname='nav_mas'
+)
+cur = conn.cursor()
+
+cur.execute('''
+    SELECT 
+        PERCENTILE_CONT(0.5)  WITHIN GROUP(ORDER BY length_m) AS median,
+        PERCENTILE_CONT(0.75) WITHIN GROUP(ORDER BY length_m) AS p75,
+        PERCENTILE_CONT(0.90) WITHIN GROUP(ORDER BY length_m) AS p90,
+        PERCENTILE_CONT(0.99) WITHIN GROUP(ORDER BY length_m) AS p99,
+        MAX(length_m) AS max_len,
+        AVG(length_m) AS avg_len,
+        COUNT(*)      AS count
+    FROM graphs.edges
+''')
+
+stats = cur.fetchone()
+
+print(f'Stats from graphs.edges (Count: {stats[6]}):')
+print(f'  Median: {stats[0]:.2f}m')
+print(f'  75%:    {stats[1]:.2f}m')
+print(f'  90%:    {stats[2]:.2f}m')
+print(f'  99%:    {stats[3]:.2f}m')
+print(f'  Max:    {stats[4]:.2f}m')
+print(f'  Avg:    {stats[5]:.2f}m')
+"
+```
 
 ### ДО Оптимизации (Сырые данные OSM)
 Обратите внимание на максимальную длину (Max) и хвост распределения (99%).
