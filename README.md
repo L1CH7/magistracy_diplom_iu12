@@ -1,93 +1,71 @@
-# Navigation MAS
+# Navigation MAS (Multi-Agent System)
 
-Сервер-координатор + GUI клиент для навигации, маршрутизации и симуляции агентов.
+Распределенная микросервисная система маршрутизации, построенная на базе СУБД-ориентированной архитектуры (Database-Centric).
 
 ## Архитектура
 
-**Client**: PyQt5 + MapLibre GL JS с аппаратным ускорением для рендеринга векторных карт  
-**Server**: FastAPI + PostgreSQL/PostGIS для хранения графов и MVT tiles  
-**Routing**: A*/Dijkstra (планируется миграция на pgRouting)  
-**Simulation**: собственная симуляция агентов с динамическим capacity и FPS-контролем  
-**Configuration**: YAML с hot reload и директивой !include для композиции конфигов  
-**Logging**: Loguru + Grafana + Loki для сбора логов и метрик  
+Система состоит из нескольких независимых сервисов, взаимодействующих через API Gateway:
 
-## Quick Start
+- **Data Processor**: Загрузка данных из OSM (OpenStreetMap), партиционирование графа и генерация векторных тайлов (MVT) средствами PostGIS.
+- **Router Service**: Построение маршрутов с использованием `pgRouting` внутри PostgreSQL. Поддерживает динамическое ограничение области поиска (Bounding Box), алгоритм нахождения альтернативных маршрутов (метод итеративных штрафов) и умную привязку координат (KNN поиск).
+- **API Gateway**: Единая точка входа на базе FastAPI. Обеспечивает маршрутизацию REST-запросов и WebSocket-соединения для работы в реальном времени.
+- **Client (UI)**: Кроссплатформенное десктопное приложение на базе PyQt5. Включает интерактивную карту (MapLibre GL JS) с аппаратным ускорением GPU среды (WebGL). Интеграция Python-бекенда и JS реализована через механизм QWebChannel (IPC).
+- **СУБД**: База данных PostgreSQL с расширениями PostGIS и pgRouting. Обеспечивает неблокирующее чтение (MVCC) и хранит как бизнес-логику, так и сами пространственные данные.
+- **Мониторинг**: Единая система асинхронного логирования на базе `loguru` и PLG-стека (Promtail, Loki, Grafana).
 
-### Docker run (рекомендуется)
-```bash
-docker-compose up --build
+## Требования (Prerequisites)
+
+Для успешного запуска системы вам понадобятся:
+- **Docker** и **Docker Compose** (для серверной части базы данных, API и мониторинга).
+- **Python 3.10+**, `venv`, `make` (для сборки и запуска локального клиента).
+- Системные зависимости для сборки PyQt5 и работы с картами (на Linux: `build-essential`, `qt5-default` и др. базовые библиотеки сборки).
+
+## Подготовка конфигурации
+
+Перед первым запуском вы можете настроить параметры скачивания графа дорог:
+- **Выбор региона**: В файле `configs/data-processor/bboxes.yaml` можно указать географическую область (Bounding Box) для загрузки.
+- **Серверы OSM**: В файле `configs/data-processor/overpass.yaml` укажите предпочтительные зеркала Overpass API (`server_priority: "ru"` или `"de"`) для быстрого скачивания данных.
+
+## Quick Start (Быстрый запуск)
+
+1. **Запуск серверной инфраструктуры** (БД, Gateway, Router, Data Processor, Мониторинг):
+   ```bash
+   docker-compose up -d --build
+   ```
+   Ключевые сервисы будут доступны:
+   - **API Gateway**: `http://localhost:8000`
+   - **Grafana**: `http://localhost:3000`
+
+2. **Сборка и запуск GUI клиента**:
+   На локальной машине терминале выполните установку зависимостей, генерацию файлов перевода и компиляцию ресурсов (делается один раз или при изменении интерфейса/переводов):
+   ```bash
+   make build-gui
+   ```
+   Запуск самого приложения клиента:
+   ```bash
+   make gui
+   ```
+   *Примечание: клиентское приложение автоматически запустится и подключится к API Gateway.*
+
+## Ключевые особенности
+
+- **Векторные тайлы (MVT)**: Генерация тайлов на лету средствами СУБД (`ST_AsMVT`) и рендеринг миллионов объектов при идеальных 60 FPS через MapLibre.
+- **СУБД-ориентированная маршрутизация**: Граф хранится в базе, что позволяет мгновенно обновлять веса ребер (пробки, перекрытия) одним SQL `UPDATE`, без долгих перестроений графа в оперативной памяти (как в OSRM или GraphHopper).
+- **Альтернативные маршруты**: Использование метода итеративных штрафов для нахождения топологически независимых (до 3% пересечения) путей между точками.
+- **Многоверсионность (MVCC)**: Конкурентные запросы маршрутов от множества пользователей не блокируют друг друга в СУБД, обеспечивая линейное масштабирование при интенсивной нагрузке.
+- **Продвинутая конфигурация**: Древовидная конфигурация через YAML с поддержкой директивы переиспользования `!include` и строгой валидацией моделей через Pydantic.
+- **Инфраструктура метрик**: Автоматический сбор логов, задержек и ошибок во всех микросервисах с трансляцией в дэшборд Grafana.
+
+## Структура проекта
+
 ```
-Клиент на порту 5000, сервер на 8000, Grafana на 3000.
-
-### Local run
-```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cd src/server && uvicorn app:app --reload &
-cd src/client && python main.py
+configs/              # Иерархические конфигурационные файлы YAML
+services/
+  common/             # Общие модули (конфигурации, логгер DB, базовые утилиты)
+  data-processor/     # Загрузчик OSM и генератор MVT
+  gateway/            # FastAPI шлюз для роутинга и проксирования запросов
+  qt-client/          # Настольное приложение PyQt5 + интерфейс MapLibre HTML
+  router/             # Сервис построения маршрутов и бизнес-логика
+logs/                 # Директория для текстовых логов сервисов
+docker-compose.yml    # Манифест инфраструктуры Docker
 ```
-
-## Ключевые фичи
-
-- **MVT Tiles**: граф дорог хранится как векторные тайлы ST_AsMVT, рендерится в реальном времени MapLibre
-- **LOD System**: 4-слойная прогрессивная детализация (z0-10: магистрали, z14+: все дороги)
-- **Hot Reload**: редактируй YAML конфиги → перезапусти контейнер (без rebuild)
-- **Include Directive**: `map.yaml` включает `map.lod.yaml` + `map.rendering.yaml` через `!include`
-- **Simulation**: динамические веса рёбер (capacity), FPS-контроль, детект телепортаций
-- **k-shortest paths**: построение нескольких лучших маршрутов
-- **PostGIS Integration**: хранение графов, тайлов, bbox-запросы
-- **Grafana Monitoring**: логи и метрики производительности (время маршрутизации, загрузка данных)
-
-## Структура
-
-```
-configs/                     # YAML конфиги с hot reload
-  client/                    # gui, data, simulation, map (+ LOD/rendering)
-  server/                    # api, database, routing
-  common.yaml, regions.yaml
-src/
-  client/                    # PyQt5 GUI + MapLibre
-    ui/widgets/map_widget.py # интеграция MapLibre GL через QWebEngineView
-    services/                # API клиенты, async workers
-    handlers/                # обработчики событий карты
-  server/app.py              # FastAPI endpoints (/route, /tiles/road, /graph)
-  data/                      # OSM Overpass, graph builder, PostGIS
-  routing/                   # route_engine.py (A*/Dijkstra)
-  simulation/agent.py        # агент с capacity-aware движением
-  utils/config_loader.py     # ConfigLoader с !include и hot reload
-```
-
-## Конфигурация
-
-Все параметры в `configs/*.yaml`. Примеры:
-
-**LOD фильтрация** (`configs/client/map.lod.yaml`):
-```yaml
-lod_layers:
-  - zoom_range: [0, 10]
-    highways: [motorway, trunk, primary]  # только магистрали
-  - zoom_range: [14, 22]
-    highways: [motorway, trunk, primary, secondary, tertiary, residential, service]  # всё
-```
-
-**Симуляция** (`configs/client/simulation.yaml`):
-```yaml
-speed:
-  min: 0.1
-  max: 10.0
-  default: 1.0
-fps: 20
-agent:
-  look_ahead_steps: 3
-```
-
-Изменил конфиг → `docker-compose restart client` → изменения применены.
-
-## Следующие шаги (НИР-2)
-
-- Миграция на pgRouting для динамической маршрутизации
-- Выделение агента как отдельной сущности (без GUI)
-- Координатор для управления тысячами агентов
-- Админ-клиент для мониторинга
-- Масштабирование симуляции (целевое требование: 1000+ агентов)
