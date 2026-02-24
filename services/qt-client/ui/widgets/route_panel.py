@@ -1,0 +1,255 @@
+"""
+Routing panel with K routes selector and route list.
+
+This panel displays:
+- K routes slider
+- "Get Routes" button
+- List of found routes with metrics
+- Route selection
+"""
+
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QSpinBox, QListWidget, QListWidgetItem, QGroupBox
+)
+from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt5.QtGui import QColor
+
+from loguru import logger as log
+
+
+class RoutePanel(QWidget):
+    """
+    Panel for route configuration and display.
+
+    Signals:
+        get_routes_clicked: User clicked "Get Routes" button
+        route_selected: User selected a route (route_id)
+    """
+
+    # Signals
+    get_routes_clicked = pyqtSignal(int)  # k value
+    route_selected = pyqtSignal(int)  # route_id
+
+    def __init__(self, parent: QWidget = None):
+        """Initialize routing panel."""
+        super().__init__(parent)
+        
+        # Track currently selected route
+        self.selected_route_id = None  # int or None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        # === K ROUTES SELECTOR ===
+        k_group = QGroupBox(self.tr("Route Options"))
+        k_layout = QVBoxLayout(k_group)
+
+        # K routes spinbox
+        k_row = QHBoxLayout()
+        k_row.addWidget(QLabel(self.tr("Number of routes:")))
+
+        self.k_spinbox = QSpinBox()
+        self.k_spinbox.setRange(1, 10)
+        self.k_spinbox.setValue(5)
+        self.k_spinbox.setMaximumWidth(60)
+        k_row.addWidget(self.k_spinbox)
+        k_row.addStretch()
+
+        k_layout.addLayout(k_row)
+
+        # Get Routes button
+        self.get_routes_btn = QPushButton(self.tr("Get Routes"))
+        self.get_routes_btn.setStyleSheet(
+            "QPushButton { "
+            "background-color: #10b981; "
+            "color: white; "
+            "border: none; "
+            "border-radius: 6px; "
+            "padding: 10px; "
+            "font-weight: bold; "
+            "font-size: 14px; "
+            "} "
+            "QPushButton:hover { "
+            "background-color: #059669; "
+            "} "
+            "QPushButton:pressed { "
+            "background-color: #047857; "
+            "} "
+            "QPushButton:disabled { "
+            "background-color: #d1d5db; "
+            "color: #9ca3af; "
+            "}"
+        )
+        self.get_routes_btn.clicked.connect(self._on_get_routes_clicked)
+        k_layout.addWidget(self.get_routes_btn)
+
+        layout.addWidget(k_group)
+
+        # === ROUTES LIST ===
+        routes_group = QGroupBox(self.tr("Found Routes"))
+        routes_layout = QVBoxLayout(routes_group)
+
+        # Status label
+        self.status_label = QLabel(self.tr("No routes found yet"))
+        self.status_label.setStyleSheet(
+            "color: #6b7280; font-style: italic; padding: 8px;"
+        )
+        self.status_label.setAlignment(Qt.AlignCenter)
+        routes_layout.addWidget(self.status_label)
+
+        # Routes list widget
+        self.routes_list = QListWidget()
+        self.routes_list.setMaximumHeight(300)
+        self.routes_list.setStyleSheet(
+            "QListWidget { "
+            "border: 1px solid #d1d5db; "
+            "border-radius: 6px; "
+            "background-color: white; "
+            "} "
+            "QListWidget::item { "
+            "padding: 10px; "
+            "border-bottom: 1px solid #f3f4f6; "
+            "} "
+            "QListWidget::item:selected { "
+            "background-color: #dbeafe; "
+            "color: #1e40af; "
+            "} "
+            "QListWidget::item:hover { "
+            "background-color: #f3f4f6; "
+            "}"
+        )
+        self.routes_list.itemClicked.connect(self._on_route_item_clicked)
+        routes_layout.addWidget(self.routes_list)
+
+        layout.addWidget(routes_group)
+
+        layout.addStretch()
+
+        # Store current routes data
+        self.routes_data = []
+
+    def _on_get_routes_clicked(self):
+        """Handle Get Routes button click."""
+        k = self.k_spinbox.value()
+        log.info("Get routes clicked", k=k)
+        self.get_routes_clicked.emit(k)
+
+    def _on_route_item_clicked(self, item: QListWidgetItem):
+        """Handle route item click."""
+        route_id = item.data(Qt.UserRole)
+        if route_id is not None:
+            log.info("Route selected", route_id=route_id)
+            self.selected_route_id = route_id  # Store selected route
+            self._highlight_selected_route(route_id)
+            self.route_selected.emit(route_id)
+    
+    def _highlight_selected_route(self, route_id: int):
+        """Highlight selected route in list with blue background."""
+        for i in range(self.routes_list.count()):
+            item = self.routes_list.item(i)
+            item_route_id = item.data(Qt.UserRole)
+            
+            if item_route_id == route_id:
+                # Selected route: blue background
+                item.setBackground(QColor("#3b82f6"))
+                item.setForeground(Qt.white)
+            else:
+                # Other routes: default transparent background
+                item.setBackground(Qt.transparent)
+                item.setForeground(Qt.black)
+
+    def display_routes(self, routes: list):
+        """
+        Display routes in the list.
+
+        Args:
+            routes: List of route dicts with keys:
+                - id: Route ID (int)
+                - edges: List of edge IDs
+                - total_distance_m: Total distance in meters
+                - total_time_sec: Total time in seconds
+                - geometry: List of (lon, lat) coordinates
+        """
+        self.routes_data = routes
+        self.routes_list.clear()
+
+        if not routes:
+            self.status_label.setText(self.tr("No routes found"))
+            self.status_label.show()
+            self.routes_list.hide()
+            return
+
+        self.status_label.hide()
+        self.routes_list.show()
+
+        for route in routes:
+            route_id = route['id']
+            distance_m = route['total_distance_m']
+            time_sec = route['total_time_sec']
+            num_edges = len(route['edges'])
+
+            # Format distance
+            if distance_m < 1000:
+                distance_str = f"{distance_m:.0f} m"
+            else:
+                distance_str = f"{distance_m / 1000:.2f} km"
+
+            # Format time
+            if time_sec < 60:
+                time_str = f"{time_sec:.0f} sec"
+            else:
+                minutes = int(time_sec / 60)
+                seconds = int(time_sec % 60)
+                time_str = f"{minutes} min {seconds} sec"
+
+            # Create item text
+            item_text = self.tr("Route") + f" {route_id + 1}\n"
+            item_text += self.tr("Dist:") + f" {distance_str}  " + self.tr("Time:") + f" {time_str}\n"
+            item_text += self.tr("Edges:") + f" {num_edges}"
+
+            # Create list item
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.UserRole, route_id)
+
+            self.routes_list.addItem(item)
+
+        # Highlight first route (best) by default
+        first_route_id = routes[0]['id']
+        self.selected_route_id = first_route_id  # Store actual route ID
+        self._highlight_selected_route(first_route_id)
+        self.routes_list.setCurrentRow(0)
+        
+        # Emit selection to sync with map (blue highlight)
+        self.route_selected.emit(first_route_id)
+
+        log.info("Routes displayed", num_routes=len(routes), auto_selected=first_route_id)
+
+    def clear_routes(self):
+        """Clear routes list."""
+        self.routes_list.clear()
+        self.routes_data = []
+        self.selected_route_id = None  # Reset selection
+        self.status_label.setText(self.tr("No routes found yet"))
+        self.status_label.show()
+        self.routes_list.hide()
+        log.debug("Routes cleared")
+
+    def get_k_value(self) -> int:
+        """Get current K value from spinbox."""
+        return self.k_spinbox.value()
+
+    def set_loading(self, loading: bool):
+        """
+        Set loading state for Get Routes button.
+
+        Args:
+            loading: True if loading, False otherwise
+        """
+        if loading:
+            self.get_routes_btn.setEnabled(False)
+            self.get_routes_btn.setText(self.tr("Loading..."))
+        else:
+            self.get_routes_btn.setEnabled(True)
+            self.get_routes_btn.setText(self.tr("Get Routes"))

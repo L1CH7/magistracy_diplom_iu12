@@ -19,18 +19,39 @@ colors:
   service: '#008d0cff'       # Green
   default: '#353535ff'       # Dark gray
 
-# Base width by highway type at zoom 15 (pixels)
+# Base width by highway type at zoom 18 (pixels)
+# These values match old hardcoded values for maximum zoom
 widths:
-  motorway: 8
-  trunk: 7
-  primary: 6
-  secondary: 5
-  tertiary: 4
+  motorway: 3
+  motorway_link: 3
+  trunk: 3
+  trunk_link: 3
+  primary: 3
+  primary_link: 3
+  secondary: 3
+  secondary_link: 3
+  tertiary: 3
+  tertiary_link: 3
   residential: 3
-  living_street: 2
-  unclassified: 2
-  service: 2
-  default: 2
+  living_street: 3
+  unclassified: 3
+  service: 3
+  default: 3
+  # motorway: 12
+  # motorway_link: 9
+  # trunk: 10
+  # trunk_link: 9
+  # primary: 9
+  # primary_link: 7
+  # secondary: 7
+  # secondary_link: 6
+  # tertiary: 6
+  # tertiary_link: 5
+  # residential: 5
+  # living_street: 3
+  # unclassified: 3
+  # service: 3
+  # default: 3
 
 # Highway type groups (for filtering)
 highway_groups:
@@ -56,8 +77,4 @@ highway_groups:
 
 # MapLibre GL rendering parameters
 rendering:
-  # Font glyphs for text labels (required for symbol layers)
-  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
-  
-  # Tile URL for MVT vector tiles (if needed)
-  # tiles: 'http://localhost:9000/tiles/{z}/{x}/{y}.mvt'
+  # Moved glyphs to map.yaml > style.glyphs

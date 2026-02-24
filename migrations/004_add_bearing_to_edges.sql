@@ -3,7 +3,7 @@
 -- Purpose: Add bearing (azimuth) for turn cost calculations
 
 -- Add bearing column as GENERATED (calculated from geometry)
-ALTER TABLE edges 
+ALTER TABLE graphs.edges 
 ADD COLUMN IF NOT EXISTS bearing FLOAT 
 GENERATED ALWAYS AS (
     CASE 
@@ -18,10 +18,10 @@ GENERATED ALWAYS AS (
 ) STORED;
 
 -- Add index for bearing-based queries
-CREATE INDEX IF NOT EXISTS idx_edges_bearing ON edges(bearing);
+CREATE INDEX IF NOT EXISTS idx_edges_bearing ON graphs.edges(bearing);
 
 -- Update statistics
-ANALYZE edges;
+ANALYZE graphs.edges;
 
 -- Verify
 SELECT COUNT(*) as total_edges,
@@ -29,4 +29,4 @@ SELECT COUNT(*) as total_edges,
        MIN(bearing) as min_bearing,
        MAX(bearing) as max_bearing,
        AVG(bearing) as avg_bearing
-FROM edges;
+FROM graphs.edges;

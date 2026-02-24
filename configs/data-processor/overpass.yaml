@@ -1,0 +1,51 @@
+# Overpass API Configuration
+# Settings for OSM data fetching from Overpass servers
+
+# Server priority: which servers to try first
+# "de" - German servers (reliable, slower for Moscow)
+# "ru" - Russian servers (faster for Moscow, may timeout)
+server_priority: "de"
+
+primary_servers:
+  # Russian server - FAST, confirmed working with headers
+  - "https://maps.mail.ru/osm/tools/overpass"
+  # German servers - RELIABLE, clean data (no duplicates/fragments)
+  - "https://overpass.kumi.systems"
+  - "https://overpass-api.de"
+
+# Fallback servers (if primary fail)
+fallback_servers:
+# Fallback servers (if primary fail)
+fallback_servers: []
+
+# Timeout for Overpass requests (seconds)
+timeout: 300  # 5 minutes (increased from 180)
+
+# Retry settings for download failures
+retry:
+  # Max retries with SAME server before switching
+  max_retries_per_server: 3
+  
+  # Delay between retries (seconds) - will use exponential backoff
+  initial_retry_delay: 5   # First retry after 5s
+  max_retry_delay: 60      # Max delay 60s (backoff caps here)
+  backoff_multiplier: 2    # Each retry: delay *= 2
+  
+  # Max servers to try (primary + fallback)
+  max_servers_to_try: 5    # Try up to 5 different servers total
+
+# Tile size for grid-based downloads (degrees)
+# null / ~ / not set = MONOLITHIC mode (single tile for entire bbox) - may timeout on large areas
+# 0.2 = ~22km (Moscow: ~4 tiles) - RECOMMENDED (balance: few tiles, no fragmentation, stable download)
+# 0.1 = ~11km (Moscow: ~9 tiles) - medium granularity
+# 0.05 = ~5.5km (Moscow: ~25 tiles) - high granularity, may have fragmentation artifacts
+# 0.01 = ~1.1km (Moscow: ~625 tiles) - very high granularity, fragmentation issues
+#
+# TRADE-OFF: larger tiles = fewer requests, faster overall, but single request timeout risk
+#            smaller tiles = more requests, better progress, but fragmentation artifacts in MapLibre
+#            smaller tiles = more requests, better progress, but fragmentation artifacts in MapLibre
+tile_size: 0.05  # 22km tiles (RECOMMENDED) - Used by tile_download.py
+tile_size_degrees: 0.05 # Legacy/Alternate name
+
+# Concurrency settings
+cpu_cores: 0 # 0 = use all available cores (or sane default limit). Used for Semaphore.

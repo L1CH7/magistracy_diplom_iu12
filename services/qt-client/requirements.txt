@@ -1,0 +1,11 @@
+loguru
+pydantic
+pydantic-settings
+PyQt5
+PyQtWebEngine
+pyyaml
+pyyaml-include
+qt5-tools
+requests
+websockets
+httpx

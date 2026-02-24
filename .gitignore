@@ -4,7 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.egg-info/
-.venv/
+.venv*/
 .env
 .mypy_cache/
 
@@ -34,3 +34,21 @@ logs/
 data/osm_data.json
 data/*.geojson
 data/tiles/
+
+# Qt Client Translations
+*.qm
+
+/*.md
+!README.md
+
+# Benchmarks
+benchmarks/router/
+*.png
+*.svg
+
+# docs
+# !docs/router
+# !docs/gateway
+# !docs/data-processor
+# !docs/qt-client
+# !docs/prompts

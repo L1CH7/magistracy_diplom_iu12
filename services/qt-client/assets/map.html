@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MapLibre Client</title>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    html, body, #map {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    .maplibregl-ctrl-logo, .maplibregl-ctrl-attrib {
+      opacity: .7;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script src="js/ws-client.js?v=2025117_0106"></script>
+  <script src="js/debug-grid.js?v=2025117_0106"></script>
+  <script type="module" src="js/data-ws-client.js?v=20251123"></script>
+  <script type="module" src="js/map-main.js?v=2025117_0106"></script>
+</body>
+</html>

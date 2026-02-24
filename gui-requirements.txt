@@ -1,0 +1,7 @@
+# GUI-only requirements (совместимо с Python 3.13)
+PyQt5==5.15.10
+PyQtWebEngine==5.15.7
+requests==2.31.0
+loguru==0.7.2
+PyYAML==6.0.1
+pyyaml-include==2.2

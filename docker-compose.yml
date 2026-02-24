@@ -1,153 +1,165 @@
----
-
 services:
-  # PostgreSQL with PostGIS for road graph storage
-  postgis:
-    image: postgis/postgis:16-3.4
-    container_name: diplom-postgis
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    ports:
+      - "8000:8000"
     environment:
-      POSTGRES_DB: road_graphs
-      POSTGRES_USER: diplom
-      POSTGRES_PASSWORD: diplom_pass
-      POSTGRES_INITDB_ARGS: "-E UTF8"
+      - APP__SERVICES__ROUTER__URL=http://router:8000
+      - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+    user: "${UID:-1000}:${GID:-1000}"
+
+  data-processor:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    depends_on:
+      postgis:
+        condition: service_healthy
+    environment:
+      - APP__DB__HOST=postgis
+      - APP__DB__PORT=5432
+      - APP__DB__NAME=nav_mas
+      - APP__DB__USER=postgres
+      - APP__DB__PASSWORD=postgres
+      - APP__SERVICES__ROUTER__URL=http://router:8000
+      - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
+    volumes:
+      - ./configs:/app/configs
+    user: "${UID:-1000}:${GID:-1000}"
+
+  router:
+    build:
+      context: .
+      dockerfile: services/router/Dockerfile
+    ports:
+      - "8006:8000"
+    depends_on:
+      postgis:
+        condition: service_healthy
+    environment:
+      - APP__DB__HOST=postgis
+      - APP__DB__PORT=5432
+      - APP__DB__NAME=nav_mas
+      - APP__DB__USER=postgres
+      - APP__DB__PASSWORD=postgres
+      - APP__SERVICES__ROUTER__URL=http://router:8000
+      - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
+      # Legacy for backward compatibility if needed, though router uses Settings now
+      - DB_HOST=postgis
+      - DB_PORT=5432
+      - DB_NAME=nav_mas
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      # PostGISManager specific
+      - POSTGRES_HOST=postgis
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=nav_mas
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./benchmarks:/app/benchmarks
+      - ./services/router/src:/app/src
+      - ./services/router/tests:/app/tests
+      - ./services/common:/app/services/common
+      - ./services/__init__.py:/app/services/__init__.py
+    user: "${UID:-1000}:${GID:-1000}"
+
+# router-test service removed, using 'docker compose run --rm router pytest' instead
+
+
+
+
+
+  # Agent Validation Service (Qt Client via VNC)
+  # User runs native client via `make gui`
+  qt-client-web:
+    build:
+      context: .
+      dockerfile: services/qt-client-web/Dockerfile
+    ports:
+      - "6080:6080" # Web VNC
+    environment:
+      - DISPLAY=:0
+      - RESOLUTION=1280x800x24
+      - GATEWAY_URL=http://gateway:8000
+      - SERVER_URL=http://gateway:8000
+      - PYTHONPATH=/app
+    volumes:
+      - ./services/qt-client:/app/services/qt-client
+      - ./services/common:/app/services/common
+      - ./configs:/app/configs
+    depends_on:
+      - gateway
+      - data-processor
+    profiles:
+      - donotstart
+
+  postgis:
+    image: pgrouting/pgrouting:17-3.5-3.8
+    shm_size: '4gb'
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=nav_mas
+    # Тюнинг конфига прямо при запуске: больше локов для топологии, больше WAL для быстрой записи
+    command: >
+      postgres 
+      -c max_locks_per_transaction=128 
+      -c max_wal_size=4GB 
+      -c shared_buffers=2GB 
+      -c work_mem=64MB
     ports:
       - "5432:5432"
     volumes:
       - postgis_data:/var/lib/postgresql/data
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-    networks:
-      - nav-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U diplom -d road_graphs"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nav_mas"]
+      interval: 5s
       timeout: 5s
       retries: 5
 
-  server:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-      cache_from:
-        - diplom-server:latest
-    image: diplom-server:latest
-    ports:
-      - "8000:8000"
-    environment:
-      OSM_JSON_PATH: /app/data/osm_data.json
-      POSTGRES_HOST: postgis
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: road_graphs
-      POSTGRES_USER: diplom
-      POSTGRES_PASSWORD: diplom_pass
-    volumes:
-      - ./data:/app/data
-      - ./scripts:/app/scripts
-      - ./logs/server:/app/logs
-      - ./configs:/app/configs:ro
-    networks:
-      - nav-net
-    depends_on:
-      postgis:
-        condition: service_healthy
-    develop:
-      watch:
-        - action: sync
-          path: ./src
-          target: /app/src
-        - action: rebuild
-          path: ./Dockerfile.server
-
-  client:
-    build:
-      context: .
-      dockerfile: Dockerfile.client
-      cache_from:
-        - diplom-client:latest
-    image: diplom-client:latest
-    depends_on:
-      - server
-    environment:
-      DISPLAY: ${DISPLAY}
-      QT_X11_NO_MITSHM: "1"
-      QT_QPA_PLATFORM: xcb
-      QTWEBENGINE_DISABLE_SANDBOX: "1"
-      QT_DEBUG_PLUGINS: "1"
-      QTWEBENGINE_CHROMIUM_FLAGS: --enable-gpu-rasterization --ignore-gpu-blocklist
-      # Use our PostGIS-caching proxy instead of direct OSM
-      TILE_URL: ${TILE_URL:-http://server:8000/tiles/osm/{z}/{x}/{y}.png}
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ~/.Xauthority:/root/.Xauthority:rw
-      - /dev/shm:/dev/shm
-      - ./logs/client:/app/logs
-      - ./configs:/app/configs:ro
-    devices:
-      - /dev/dri:/dev/dri
-    networks:
-      - nav-net
-    stdin_open: true
-    tty: true
-    develop:
-      watch:
-        - action: sync
-          path: ./src
-          target: /app/src
-        - action: rebuild
-          path: ./Dockerfile.client
-
-  # Loki for log aggregation (lightweight, Grafana-native)
-  loki:
-    image: grafana/loki:latest
-    container_name: diplom-loki
-    ports:
-      - "3100:3100"
-    volumes:
-      - loki_data:/tmp/loki
-    command: -config.file=/etc/loki/local-config.yaml
-    environment:
-      - TZ=Europe/Moscow
-    networks:
-      - nav-net
-  
-  # Promtail for log shipping to Loki
-  promtail:
-    image: grafana/promtail:latest
-    container_name: diplom-promtail
-    volumes:
-      # Mount application logs
-      - ./logs:/var/log/app:ro
-      # Mount Promtail config
-      - ./configs/promtail-config.yaml:/etc/promtail/config.yml:ro
-    command: -config.file=/etc/promtail/config.yml
-    depends_on:
-      - loki
-    networks:
-      - nav-net
-  
-  # Grafana for log visualization and dashboards
   grafana:
     image: grafana/grafana:latest
-    container_name: diplom-grafana
     ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
+      - "3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana
-    depends_on:
-      - loki
-    networks:
-      - nav-net
+      - ./configs/grafana/provisioning:/etc/grafana/provisioning
 
-networks:
-  nav-net:
-    driver: bridge
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "3090:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./logs:/var/log/app
+      - ./configs/promtail-config.yaml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
 
 volumes:
   postgis_data:
-    driver: local
-  loki_data:
-    driver: local
   grafana_data:
-    driver: local
+  prometheus_data:
