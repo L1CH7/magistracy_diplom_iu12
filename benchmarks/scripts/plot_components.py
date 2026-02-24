@@ -72,7 +72,7 @@ def main():
                     segments.append(pts)
         
         print(f"Plotting {len(segments)} main component edges...")
-        lc = LineCollection(segments, colors='black', linewidths=0.3, alpha=0.5, label='Main Network')
+        lc = LineCollection(segments, colors='black', linewidths=0.45, alpha=0.5, label='Main Network', rasterized=True)
         ax.add_collection(lc)
     else:
         print("Main edges not found, using scatter fallback.")
@@ -99,27 +99,28 @@ def main():
                     isegments.append(pts)
         
         print(f"Plotting {len(isegments)} island edges...")
-        ilc = LineCollection(isegments, colors='red', linewidths=.5, alpha=1.0, label='Islands (Disconnected)')
+        ilc = LineCollection(isegments, colors='red', linewidths=1.5, alpha=1.0, label='Islands (Disconnected)', rasterized=True)
         ax.add_collection(ilc)
     
-    plt.title(f"Graph Connectivity Map\nMain: {comp_sizes[main_comp_id]:,} nodes | Islands: {len(comp_sizes)-1} components", fontsize=22)
-    plt.xlabel("Longitude")
-    plt.ylabel("Latitude")
-    
+    plt.title(f"Graph Connectivity Map\nMain: {comp_sizes[main_comp_id]:,} nodes | Islands: {len(comp_sizes)-1} components", fontsize=24)
+    plt.xlabel("Longitude", fontsize=28)
+    plt.ylabel("Latitude", fontsize=28)
+    plt.tick_params(axis='both', which='major', labelsize=16)
+
     # Custom Legend
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], color='black', lw=1, label='Main Network'),
         Line2D([0], [0], color='red', lw=2, label='Islands (Disconnected)'),
     ]
-    plt.legend(handles=legend_elements, loc='upper right', fontsize=14)
+    plt.legend(handles=legend_elements, loc='upper right', fontsize=20)
     
     plt.grid(True, alpha=0.1)
     plt.axis('equal')
     
-    output_path = "benchmarks/router/plots/components_map.png"
+    output_path = "benchmarks/router/plots/components_map_pdf.pdf"
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, bbox_inches='tight')
+    plt.savefig(output_path, format='pdf', dpi=240, bbox_inches='tight')
     print(f"Saved map to {output_path}")
 
 if __name__ == "__main__":
