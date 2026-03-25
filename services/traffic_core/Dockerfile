@@ -1,21 +1,31 @@
-FROM python:3.11-slim as builder
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Установка зависимостей сборки
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    ninja-build \
+    libnuma-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+COPY services/traffic_core /app/services/traffic_core
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+WORKDIR /app/services/traffic_core/build
 
-COPY services/router/requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+# Сборка Release с HFT оптимизациями
+RUN cmake -G Ninja -DCMAKE_BUILD_TYPE=Release .. && \
+    cmake --build .
 
-# Copy service code
-COPY services/router/src/ ./src/
-COPY services/router/tests/ ./tests/
-# Copy common code to services/common to match local import structure
-COPY services/common/ ./services/common/
-COPY services/__init__.py ./services/
+FROM ubuntu:24.04 AS runtime
 
-ENV PYTHONPATH=/app
+# Устанавливаем libnuma для корректной работы Thread Affinity в C++
+RUN apt-get update && apt-get install -y libnuma1 && rm -rf /var/lib/apt/lists/*
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+WORKDIR /app
+COPY --from=builder /app/services/traffic_core/build/traffic_core /app/traffic_core
+
+ENTRYPOINT ["/app/traffic_core"]

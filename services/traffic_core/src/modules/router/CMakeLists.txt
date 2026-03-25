@@ -1,0 +1,3 @@
+add_library(traffic_router INTERFACE)
+target_include_directories(traffic_router INTERFACE include)
+# target_link_libraries(traffic_router INTERFACE traffic_logger)
