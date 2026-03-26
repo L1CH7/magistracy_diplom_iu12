@@ -100,6 +100,7 @@ COMMENT ON COLUMN graphs.edges.osm_tags IS 'Full OSM tags for future use (turn:l
 -- ============================================================================
 
 -- View for edges with congestion ratio
+DROP VIEW IF EXISTS edges_with_congestion CASCADE;
 CREATE OR REPLACE VIEW edges_with_congestion AS
 SELECT 
     e.*,
