@@ -241,6 +241,50 @@ class OSMQueries:
         WHERE download_status = 'complete'
     """
 
+    # ==================== Index Management ====================
+
+    # DROP INDEXES
+    DROP_INDEXES_WAYS = [
+        "DROP INDEX IF EXISTS osm.idx_osm_ways_geom",
+        "DROP INDEX IF EXISTS osm.idx_osm_ways_geom_3857",
+        "DROP INDEX IF EXISTS osm.idx_osm_ways_highway",
+        "DROP INDEX IF EXISTS osm.idx_osm_ways_region",
+        "DROP INDEX IF EXISTS osm.idx_osm_ways_tags",
+        "ALTER TABLE osm.ways DROP CONSTRAINT IF EXISTS ways_osm_id_key"
+    ]
+
+    DROP_INDEXES_NODES = [
+        "DROP INDEX IF EXISTS osm.idx_osm_nodes_geom",
+        "ALTER TABLE osm.nodes DROP CONSTRAINT IF EXISTS nodes_osm_id_key"
+    ]
+
+    DROP_INDEXES_BARRIERS = [
+        "DROP INDEX IF EXISTS osm.idx_osm_barriers_geom",
+        "DROP INDEX IF EXISTS osm.idx_osm_barriers_osm_id",
+        "ALTER TABLE osm.barriers DROP CONSTRAINT IF EXISTS osm_barriers_pk"
+    ]
+
+    # CREATE INDEXES
+    CREATE_INDEXES_WAYS = [
+        "CREATE INDEX IF NOT EXISTS idx_osm_ways_geom ON osm.ways USING GIST(geom)",
+        "CREATE INDEX IF NOT EXISTS idx_osm_ways_geom_3857 ON osm.ways USING GIST(geom_3857)",
+        "CREATE INDEX IF NOT EXISTS idx_osm_ways_highway ON osm.ways USING BTREE(highway)",
+        "CREATE INDEX IF NOT EXISTS idx_osm_ways_region ON osm.ways USING BTREE(region)",
+        "CREATE INDEX IF NOT EXISTS idx_osm_ways_tags ON osm.ways USING GIN(tags)",
+        "ALTER TABLE osm.ways ADD CONSTRAINT ways_osm_id_key UNIQUE (osm_id)"
+    ]
+
+    CREATE_INDEXES_NODES = [
+        "CREATE INDEX IF NOT EXISTS idx_osm_nodes_geom ON osm.nodes USING GIST(geom)",
+        "ALTER TABLE osm.nodes ADD CONSTRAINT nodes_osm_id_key UNIQUE (osm_id)"
+    ]
+
+    CREATE_INDEXES_BARRIERS = [
+        "CREATE INDEX IF NOT EXISTS idx_osm_barriers_geom ON osm.barriers USING GIST(geom)",
+        "CREATE INDEX IF NOT EXISTS idx_osm_barriers_osm_id ON osm.barriers USING BTREE(osm_id)",
+        "ALTER TABLE osm.barriers ADD CONSTRAINT osm_barriers_pk UNIQUE (osm_id, type)"
+    ]
+
 
 def parse_tile_key(tile_key: str) -> Optional[Tuple[float, float]]:
     """

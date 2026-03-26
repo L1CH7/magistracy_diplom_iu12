@@ -11,7 +11,11 @@ primary_servers:
   - "https://maps.mail.ru/osm/tools/overpass"
   # German servers - RELIABLE, clean data (no duplicates/fragments)
   - "https://overpass.kumi.systems"
-  - "https://overpass-api.de"
+  # Swiss server
+  # - "https://overpass.osm.ch/api/" # с него константно качается ноль
+
+  - "https://overpass-api.de" # DE, not work well
+  - "https://overpass.openstreetmap.ru/api/" # RU, not work well
 
 # Fallback servers (if primary fail)
 fallback_servers:

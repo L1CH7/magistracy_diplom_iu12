@@ -5,6 +5,12 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+RUN apt-get update && apt-get install -y \
+    libexpat1 \
+    libexpat1-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && ldconfig
+
 COPY services/data-processor/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
