@@ -30,6 +30,28 @@ class OSMQueries:
             lanes = EXCLUDED.lanes,
             maxspeed = EXCLUDED.maxspeed
     """
+
+    BATCH_INSERT_NODES = """
+        INSERT INTO osm.nodes (
+            osm_id, geom, tags
+        ) VALUES (
+            $1, ST_SetSRID(ST_Point($2, $3), 4326), $4::jsonb
+        )
+        ON CONFLICT (osm_id) DO UPDATE SET
+            geom = EXCLUDED.geom,
+            tags = EXCLUDED.tags
+    """
+
+    BATCH_INSERT_TURN_RESTRICTIONS = """
+        INSERT INTO osm.turn_restrictions (
+            osm_id, tags, members
+        ) VALUES (
+            $1, $2::jsonb, $3::jsonb
+        )
+        ON CONFLICT (osm_id) DO UPDATE SET
+            tags = EXCLUDED.tags,
+            members = EXCLUDED.members
+    """
     
     COUNT_WAYS_IN_BBOX = """
         SELECT COUNT(*)

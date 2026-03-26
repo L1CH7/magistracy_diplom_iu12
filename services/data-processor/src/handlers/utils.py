@@ -25,13 +25,14 @@ def split_bbox(
     Yields:
         Tuple[float, float, float, float]: (tile_west, tile_south, tile_east, tile_north)
     """
+    EPS = 1e-9
     w = west
-    while w < east:
+    while w < east - EPS:
         # Ensure we don't go past the eastern boundary
         curr_east = min(w + tile_size, east)
         
         s = south
-        while s < north:
+        while s < north - EPS:
             # Ensure we don't go past the northern boundary
             curr_north = min(s + tile_size, north)
             
