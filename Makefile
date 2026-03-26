@@ -9,42 +9,42 @@ all: help
 
 # Build all services with parallel execution
 build:
-	docker-compose build --parallel
+	docker compose build --parallel
 
 # Build specific service
 build-%:
-	docker-compose build $*
+	docker compose build $*
 
 # Start services in detached mode (recreates containers if config changed)
 up:
-	docker-compose up -d --remove-orphans
+	docker compose up -d --remove-orphans
 
 # Start specific service
 up-%:
-	docker-compose up -d $*
+	docker compose up -d $*
 
 # Stop all services
 down:
-	docker-compose down
+	docker compose down
 
 # Stop and remove volumes
 down-v:
-	docker-compose down -v
+	docker compose down -v
 
 # Show logs for all services
 logs:
-	docker-compose logs -f
+	docker compose logs -f
 
 # Show logs for specific service
 logs-%:
-	docker-compose logs -f $*
+	docker compose logs -f $*
 
 # Restart all services
 restart: down up
 
 # Restart specific service
 restart-%:
-	docker-compose restart $*
+	docker compose restart $*
 
 # Clean up docker resources (prune stopped containers and unused images)
 prune:
@@ -52,15 +52,15 @@ prune:
 
 # Open shell in gateway
 shell-gateway:
-	docker-compose exec gateway /bin/bash
+	docker compose exec gateway /bin/bash
 
 # Open shell in router
 shell-router:
-	docker-compose exec router /bin/bash
+	docker compose exec router /bin/bash
 
 # Open shell in data-processor
 shell-data:
-	docker-compose exec data-processor /bin/bash
+	docker compose exec data-processor /bin/bash
 
 # ==============================================================================
 # GUI Client Targets
@@ -81,7 +81,7 @@ build-clean-gui:
 
 # Clean up docker resources
 clean:
-	docker-compose down -v
+	docker compose down -v
 	rm -rf services/web-client/dist
 	rm -rf services/web-client/node_modules
 	$(MAKE) -C services/qt-client clean
@@ -94,11 +94,11 @@ clean:
 
 # Запуск функциональных тестов маршрутизации
 test:
-	docker-compose run --rm router pytest -v tests/test_routing.py
+	docker compose run --rm router pytest -v tests/test_routing.py
 
 analyze-topology: ## Analyze graph topology (Connected Components)
 	@echo "Running Topology Analysis..."
-	docker-compose run --rm -v $(PWD)/benchmarks:/app/benchmarks router \
+	docker compose run --rm -v $(PWD)/benchmarks:/app/benchmarks router \
 		python tests/analysis/analyze_topology.py
 
 extract-components: ## Extract component IDs for all nodes
@@ -142,7 +142,7 @@ clean-bench: ## Clean all benchmark data
 
 # Для отладки: запускаем bash внутри окружения
 shell:
-	docker-compose run --rm --entrypoint /bin/bash router
+	docker compose run --rm --entrypoint /bin/bash router
 
 # Help command to list targets
 help:
