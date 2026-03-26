@@ -10,8 +10,9 @@
 #include <stdexcept>
 #include <atomic>
 #include <thread>
-
 #include <mutex>
+#include <vector>
+#include <algorithm>
 
 namespace traffic::graph_builder
 {
@@ -137,6 +138,12 @@ std::expected<void, std::string> SqlOrchestrator::GridNoding()
             "SELECT ST_XMin(b), ST_YMin(b), ST_XMax(b), ST_YMax(b) "
             "FROM (SELECT ST_Extent(geom) AS b FROM edge_candidates) AS t" );
 
+        if( bbox_res.empty() || bbox_res[ 0 ][ 0 ].is_null() )
+        {
+            std::println( "-> No candidates found. Skipping Grid Noding." );
+            return {};
+        }
+
         double xmin = bbox_res[ 0 ][ 0 ].as<double>();
         double ymin = bbox_res[ 0 ][ 1 ].as<double>();
         double xmax = bbox_res[ 0 ][ 2 ].as<double>();
@@ -148,46 +155,93 @@ std::expected<void, std::string> SqlOrchestrator::GridNoding()
         double dy = ( ymax - ymin ) / grid_y;
 
         unsigned int num_workers = std::max( 1u, std::thread::hardware_concurrency() );
-        std::println( "Noding Grid: {}x{} = {} tiles (Concurrent workers: {})",
+        std::println( "   BBox: ({:.6f}, {:.6f}) -> ({:.6f}, {:.6f})", xmin, ymin, xmax, ymax );
+        std::println( "   Noding Grid: {}x{} = {} tiles (Concurrent workers: {})",
                       grid_x, grid_y, grid_x * grid_y, num_workers );
 
         traffic::core::ThreadPool pool( num_workers );
         std::atomic<int> done{ 0 };
-        int total = grid_x * grid_y;
 
-        for( int gy = 0; gy < grid_y; ++gy )
+        // --- Sub-step 1/3: Task Distribution (Ordering by density) ---
+        struct TileInfo { int gx, gy; int cnt; };
+        std::vector<TileInfo> tasks;
+        tasks.reserve( grid_x * grid_y );
+
         {
-            for( int gx = 0; gx < grid_x; ++gx )
+            std::println( "-> Sub-step 1/3: Analyzing density for optimal distribution..." );
+            pqxx::connection c( conn_str_ );
+            pqxx::nontransaction ntr( c );
+            
+            // Фильтруем NULL геометрии и используем подзапрос для корректной фильтрации gx/gy
+            auto res = ntr.exec( std::vformat( R"(
+                SELECT gx, gy, cnt FROM (
+                    SELECT 
+                        floor((ST_X(ST_Centroid(geom)) - {0}) / NULLIF({1}, 0))::int as gx,
+                        floor((ST_Y(ST_Centroid(geom)) - {2}) / NULLIF({3}, 0))::int as gy,
+                        count(*)::int as cnt
+                    FROM edge_candidates
+                    WHERE is_ground = TRUE AND geom IS NOT NULL
+                    GROUP BY 1, 2
+                ) t
+                WHERE gx IS NOT NULL AND gy IS NOT NULL
+            )", std::make_format_args( xmin, dx, ymin, dy ) ) );
+
+            for( auto row : res )
+                tasks.push_back( { row[ 0 ].as<int>(), row[ 1 ].as<int>(), row[ 2 ].as<int>() } );
+
+            if( tasks.empty() )
             {
-                double tile_xmin = xmin + gx * dx;
-                double tile_ymin = ymin + gy * dy;
-                double tile_xmax = tile_xmin + dx;
-                double tile_ymax = tile_ymin + dy;
-
-                std::string sql = std::vformat( 
-                    GRID_NODING_TILE_SQL,
-                    std::make_format_args( tile_xmin, tile_ymin, tile_xmax, tile_ymax ) 
-                );
-
-                pool.Enqueue( [sql, &done, total, this]()
-                {
-                    pqxx::connection c( conn_str_ );
-                    pqxx::work       w( c );
-                    w.exec( sql );
-                    w.commit();
-
-                    int n = ++done;
-                    DrawProgressBar( n * 100 / total, "Grid Noding..." );
+                std::println( "-> Sub-step 1/3: No active ground tiles found. Proceeding with default grid..." );
+                for( int gy = 0; gy < grid_y; ++gy )
+                    for( int gx = 0; gx < grid_x; ++gx )
+                        tasks.push_back({ gx, gy, 0 });
+            }
+            else
+            {
+                // Сортировка по убыванию плотности
+                std::sort( tasks.begin(), tasks.end(), []( const auto & a, const auto & b ) {
+                    return a.cnt > b.cnt;
                 } );
             }
         }
 
+        int total = static_cast<int>( tasks.size() );
+        std::println( "-> Sub-step 2/3: Processing {} active tiles (multithreaded)...", total );
+
+        for( const auto & tile : tasks )
+        {
+            double tile_xmin = xmin + tile.gx * dx;
+            double tile_ymin = ymin + tile.gy * dy;
+            double tile_xmax = tile_xmin + dx;
+            double tile_ymax = tile_ymin + dy;
+
+            std::string sql = std::vformat( 
+                GRID_NODING_TILE_SQL,
+                std::make_format_args( tile_xmin, tile_ymin, tile_xmax, tile_ymax ) 
+            );
+
+            pool.Enqueue( [sql, &done, total, this]()
+            {
+                pqxx::connection c( conn_str_ );
+                pqxx::work       w( c );
+                w.exec( sql );
+                w.commit();
+
+                int n = ++done;
+                DrawProgressBar( n * 100 / total, "Noding Grid Tiles" );
+            } );
+        }
+
         pool.WaitForAll();
+        DrawProgressBar( 100, "Noding Grid Tiles Complete!" );
         std::println( "" );
 
-        std::println( "-> Copying Bridges and Indexing..." );
+        std::println( "-> Sub-step 2/3: Merging results and copying bridges..." );
         ExecuteQuery( "Copy Bridges", std::string( COPY_BRIDGES_SQL ) );
+
+        std::println( "-> Sub-step 3/3: Building GiST/B-Tree Indexes & Analyzing (this may take a while)..." );
         ExecuteQuery( "Index Merged", std::string( INDEX_MERGED_SQL ) );
+        
         return {};
     }
     catch( const std::exception & e )
@@ -200,9 +254,28 @@ std::expected<void, std::string> SqlOrchestrator::CreateTopology()
 {
     try
     {
-        std::println( "-> Step 3: Extract Topology" );
-        ExecuteQuery( "Topology",   std::string( CREATE_TOPOLOGY_SQL ) );
+        std::println( "-> Step 3: Extract Topology (Hash-Join Strategy)" );
+        
+        std::println( "   [3.1/5] Initializing vertex tables..." );
+        ExecuteQuery( "Topo Init", std::string( TOPOLOGY_INIT_SQL ) );
+
+        std::println( "   [3.2/5] Extracting unique vertices..." );
+        ExecuteQuery( "Topo Insert", std::string( TOPOLOGY_INSERT_VERTICES_SQL ) );
+
+        std::println( "   [3.3/5] Indexing vertices & Preparing edges... (Spatial Index)" );
+        ExecuteQuery( "Topo Index", std::string( TOPOLOGY_INDEX_VERTICES_SQL ) );
+
+        std::println( "   [3.4/5] Mapping Source nodes to edges... (spatial join)" );
+        ExecuteQuery( "Topo Sources", std::string( TOPOLOGY_UPDATE_SOURCES_SQL ) );
+
+        std::println( "   [3.5/5] Mapping Target nodes to edges... (spatial join)" );
+        ExecuteQuery( "Topo Targets", std::string( TOPOLOGY_UPDATE_TARGETS_SQL ) );
+
+        ExecuteQuery( "Topo Analyze", std::string( TOPOLOGY_ANALYZE_SQL ) );
+        
+        std::println( "   Building nodes table..." );
         ExecuteQuery( "Fill Nodes", std::string( FILL_NODES_SQL ) );
+        
         return {};
     }
     catch( const std::exception & e )

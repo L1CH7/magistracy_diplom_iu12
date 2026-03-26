@@ -213,19 +213,18 @@ ANALYZE edge_candidates_merged;
 // ============================================================================
 // STAGE 3: ТОПОЛОГИЯ (Hash Join вместо pgr_createTopology)
 // ============================================================================
-constexpr std::string_view CREATE_TOPOLOGY_SQL = R"(
+// --- Sub-steps for Topology ---
+constexpr std::string_view TOPOLOGY_INIT_SQL = R"(
 SET maintenance_work_mem = '2GB';
 SET max_parallel_workers_per_gather = 12;
-
 DROP TABLE IF EXISTS edge_candidates_merged_vertices_pgr CASCADE;
-
 CREATE UNLOGGED TABLE edge_candidates_merged_vertices_pgr (
     id       BIGSERIAL PRIMARY KEY,
     the_geom GEOMETRY(Point, 4326)
 );
+)";
 
--- Уникальные вершины (start + end points) всех нодированных рёбер
--- Используем ST_SnapToGrid(0.00001) для группировки, чтобы "склеить" микро-зазоры
+constexpr std::string_view TOPOLOGY_INSERT_VERTICES_SQL = R"(
 INSERT INTO edge_candidates_merged_vertices_pgr (the_geom)
 SELECT ST_SnapToGrid(geom, 0.00001) FROM (
     SELECT ST_StartPoint(geom) AS geom FROM edge_candidates_merged
@@ -233,12 +232,15 @@ SELECT ST_SnapToGrid(geom, 0.00001) FROM (
     SELECT ST_EndPoint(geom)   AS geom FROM edge_candidates_merged
 ) AS pts
 GROUP BY ST_SnapToGrid(geom, 0.00001);
+)";
 
+constexpr std::string_view TOPOLOGY_INDEX_VERTICES_SQL = R"(
 CREATE INDEX edge_vertices_idx ON edge_candidates_merged_vertices_pgr USING GIST(the_geom);
-
 ALTER TABLE edge_candidates_merged ADD COLUMN IF NOT EXISTS source BIGINT;
 ALTER TABLE edge_candidates_merged ADD COLUMN IF NOT EXISTS target BIGINT;
+)";
 
+constexpr std::string_view TOPOLOGY_UPDATE_SOURCES_SQL = R"(
 WITH starts AS (
     SELECT e.id AS edge_id, v.id AS node_id
     FROM edge_candidates_merged e
@@ -248,8 +250,9 @@ WITH starts AS (
 UPDATE edge_candidates_merged e
 SET source = s.node_id
 FROM starts s WHERE e.id = s.edge_id;
+)";
 
--- target
+constexpr std::string_view TOPOLOGY_UPDATE_TARGETS_SQL = R"(
 WITH ends AS (
     SELECT e.id AS edge_id, v.id AS node_id
     FROM edge_candidates_merged e
@@ -258,8 +261,10 @@ WITH ends AS (
 )
 UPDATE edge_candidates_merged e
 SET target = s.node_id
-FROM ends   s WHERE e.id = s.edge_id;
+FROM ends s WHERE e.id = s.edge_id;
+)";
 
+constexpr std::string_view TOPOLOGY_ANALYZE_SQL = R"(
 ANALYZE edge_candidates_merged;
 )";
 
