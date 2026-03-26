@@ -379,7 +379,7 @@ std::expected<void, std::string> SqlOrchestrator::BuildEdgeBasedGraph()
         // Check if osm.relations exists to avoid parse errors
         pqxx::connection check_conn( conn_str_ );
         pqxx::nontransaction ntr( check_conn );
-        auto check_res = ntr.exec( "SELECT to_regclass('osm.relations') IS NOT NULL" );
+        auto check_res = ntr.exec( "SELECT to_regclass('osm.turn_restrictions') IS NOT NULL" );
         bool has_relations = check_res[0][0].as<bool>();
         
         if (has_relations)
@@ -388,7 +388,7 @@ std::expected<void, std::string> SqlOrchestrator::BuildEdgeBasedGraph()
         }
         else
         {
-            std::println( "   [INFO] osm.relations NOT FOUND. Building EB-Edges WITHOUT Turn Restrictions." );
+            std::println( "   [INFO] osm.turn_restrictions NOT FOUND. Building EB-Edges WITHOUT Turn Restrictions." );
             ExecuteQuery( "Fill EB Edges (No TR)", std::string( FILL_EB_EDGES_NO_TR_SQL ) );
         }
 

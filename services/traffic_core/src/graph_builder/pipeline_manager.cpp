@@ -16,11 +16,12 @@ PipelineManager::PipelineManager( std::string connection_string )
 
 PipelineManager::~PipelineManager() = default;
 
-void PipelineManager::SetFlags( bool csr_only, bool recursive, bool overwrite )
+void PipelineManager::SetFlags( bool dump_only, bool skip_noding, bool recursive, bool overwrite )
 {
-    csr_only_  = csr_only;
-    recursive_ = recursive;
-    overwrite_ = overwrite;
+    dump_only_  = dump_only;
+    skip_noding_ = skip_noding;
+    recursive_  = recursive;
+    overwrite_  = overwrite;
 }
 
 bool PipelineManager::IsStageComplete( const std::string & stage )
@@ -62,7 +63,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
     std::println( "\n=== TRAFFIC GRAPH BUILDER | PIPELINE START ===" );
 
     bool need_db_build = true;
-    if( csr_only_ && !recursive_ && !overwrite_ )
+    if( dump_only_ && !recursive_ && !overwrite_ )
     {
         need_db_build = false;
         if( !IsStageComplete( "edge_based_graph" ) )
@@ -75,7 +76,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
     if( need_db_build )
     {
         // 1. Schema Init
-        if( overwrite_ || !IsStageComplete( "schema_initialized" ) )
+        if( !skip_noding_ && ( overwrite_ || !IsStageComplete( "schema_initialized" ) ) )
         {
             auto res = sql.InitializeSchema();
             if( !res ) return std::unexpected( res.error() );
@@ -83,7 +84,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
         }
 
         // 2. Extract Candidates
-        if( overwrite_ || !IsStageComplete( "candidates_extracted" ) )
+        if( !skip_noding_ && ( overwrite_ || !IsStageComplete( "candidates_extracted" ) ) )
         {
             auto res = sql.ExtractCandidates();
             if( !res ) return std::unexpected( res.error() );
@@ -91,7 +92,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
         }
 
         // 3. Grid Noding
-        if( overwrite_ || !IsStageComplete( "grid_noding" ) )
+        if( !skip_noding_ && ( overwrite_ || !IsStageComplete( "grid_noding" ) ) )
         {
             auto res = sql.GridNoding();
             if( !res ) return std::unexpected( res.error() );
@@ -99,7 +100,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
         }
 
         // 4. Create Topology
-        if( overwrite_ || !IsStageComplete( "topology_extracted" ) )
+        if( !skip_noding_ && ( overwrite_ || !IsStageComplete( "topology_extracted" ) ) )
         {
             auto res = sql.CreateTopology();
             if( !res ) return std::unexpected( res.error() );
@@ -107,7 +108,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
         }
 
         // 5. Populate Attributes
-        if( overwrite_ || !IsStageComplete( "attributes_mapped" ) )
+        if( !skip_noding_ && ( overwrite_ || !IsStageComplete( "attributes_mapped" ) ) )
         {
             auto res = sql.PopulateAttributes();
             if( !res ) return std::unexpected( res.error() );
@@ -115,7 +116,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
         }
 
         // 6. Isolate LCC
-        if( overwrite_ || !IsStageComplete( "lcc_isolated" ) )
+        if( !skip_noding_ && ( overwrite_ || !IsStageComplete( "lcc_isolated" ) ) )
         {
             auto res = sql.IsolateLCC();
             if( !res ) return std::unexpected( res.error() );
@@ -138,7 +139,7 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
     }
     else
     {
-        std::println( "\n-> DB graph ready. Skipping DB pipeline (--csr mode)." );
+        std::println( "\n-> DB graph ready. Skipping DB pipeline (--dump-only mode)." );
     }
 
     // Binary Dumps Phase

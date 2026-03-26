@@ -1,4 +1,5 @@
 #include "binary_dumper.hpp"
+#include "road_config.hpp"
 #include <pqxx/pqxx>
 #include <print>
 #include <format>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstdint>
+#include <cmath>
 
 namespace traffic::graph_builder
 {
@@ -60,15 +62,16 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
         DrawProgressBar( 25, "Reading EB-edges (maneuvers)..." );
         auto edges_res = work.exec(
             "SELECT ee.from_eb_node, ee.to_eb_node, "
-            "       ROUND(en_to.length_m)::INT, "
-            "       ROUND(en_to.t_free + ee.maneuver_time)::INT "
+            "       en_to.t_free, "
+            "       en_to.highway, "
+            "       ee.turn_type "
             "FROM graphs.eb_edges ee "
             "JOIN graphs.eb_nodes en_to ON en_to.id = ee.to_eb_node "
             "ORDER BY ee.from_eb_node" );
 
         struct Edge
         {
-            uint32_t src, tgt, length_m, base_time_sec;
+            uint32_t src, tgt, base_time_sec;
         };
         std::vector<Edge> edges;
         edges.reserve( edges_res.size() );
@@ -79,10 +82,21 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             auto tgt_it = node_map.find( row[ 1 ].as<int64_t>() );
             if( src_it == node_map.end() || tgt_it == node_map.end() ) continue;
 
+            float t_free = row[ 2 ].as<float>();
+            std::string highway_str = row[ 3 ].is_null() ? "" : row[ 3 ].as<std::string>();
+            int turn_type = row[ 4 ].as<int>();
+
+            const auto & config = GetRoadConfig( highway_str );
+            float penalty = 0.0f;
+            if( turn_type == 1 ) penalty = static_cast<float>( config.turn_right_sec );
+            else if( turn_type == 2 ) penalty = static_cast<float>( config.turn_left_sec );
+            else if( turn_type == 3 ) penalty = static_cast<float>( config.turn_uturn_sec );
+
+            uint32_t base_time = static_cast<uint32_t>( std::max( std::round( t_free + penalty ), 1.0f ) );
+
             edges.push_back( {
                 src_it->second, tgt_it->second,
-                static_cast<uint32_t>( std::max( row[ 2 ].as<int64_t>(), 0L ) ),
-                static_cast<uint32_t>( std::max( row[ 3 ].as<int64_t>(), 1L ) )
+                base_time
             } );
         }
         uint32_t num_edges = static_cast<uint32_t>( edges.size() );
@@ -90,7 +104,6 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
         DrawProgressBar( 50, "Generating FWD CSR layout..." );
         std::vector<uint32_t> fwd_row_ptr( num_nodes + 1, 0 );
         std::vector<uint32_t> fwd_col_ind( num_edges );
-        std::vector<uint32_t> fwd_length( num_edges );
         std::vector<uint32_t> fwd_base_time( num_edges );
 
         for( const auto & e : edges )
@@ -104,7 +117,6 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             {
                 uint32_t pos = cur[ e.src ]++;
                 fwd_col_ind[ pos ]  = e.tgt;
-                fwd_length[ pos ]   = e.length_m;
                 fwd_base_time[ pos ] = e.base_time_sec;
             }
         }
@@ -113,7 +125,7 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
         {
             std::ofstream out( "/app/data/csr.bin", std::ios::binary );
             if( !out )
-                return std::unexpected( "Cannot write /app/data/csr.bin" );
+                return std::unexpected( std::string( "Cannot write /app/data/csr.bin" ) );
             size_t n = num_nodes, m = num_edges;
             out.write( reinterpret_cast<const char *>( &n ), sizeof( n ) );
             out.write( reinterpret_cast<const char *>( &m ), sizeof( m ) );
@@ -121,8 +133,6 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
                        fwd_row_ptr.size() * sizeof( uint32_t ) );
             out.write( reinterpret_cast<const char *>( fwd_col_ind.data() ),
                        fwd_col_ind.size() * sizeof( uint32_t ) );
-            out.write( reinterpret_cast<const char *>( fwd_length.data() ),
-                       fwd_length.size() * sizeof( uint32_t ) );
             out.write( reinterpret_cast<const char *>( fwd_base_time.data() ),
                        fwd_base_time.size() * sizeof( uint32_t ) );
         }
@@ -155,7 +165,7 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
         {
             std::ofstream rout( "/app/data/csr_rev.bin", std::ios::binary );
             if( !rout )
-                return std::unexpected( "Cannot write /app/data/csr_rev.bin" );
+                return std::unexpected( std::string( "Cannot write /app/data/csr_rev.bin" ) );
             size_t n = num_nodes, m = num_edges;
             rout.write( reinterpret_cast<const char *>( &n ), sizeof( n ) );
             rout.write( reinterpret_cast<const char *>( &m ), sizeof( m ) );
@@ -185,35 +195,46 @@ std::expected<void, std::string> BinaryDumper::DumpAttributes()
         pqxx::nontransaction work( conn );
 
         auto res = work.exec(
-            "SELECT speed_kmh, lanes, highway, oneway "
+            "SELECT speed_kmh, lanes, highway, oneway, length_m "
             "FROM graphs.eb_nodes "
             "ORDER BY id" );
 
         uint32_t num_entries = static_cast<uint32_t>( res.size() );
-        DrawProgressBar( 0, "Writing attributes.bin..." );
+        DrawProgressBar( 0, "Writing attributes & k_magic..." );
 
-        std::ofstream out( "/app/data/attributes.bin", std::ios::binary );
-        if( !out )
-            return std::unexpected( "Cannot write /app/data/attributes.bin" );
+        std::ofstream out_attr( "/app/data/attributes.bin", std::ios::binary );
+        if( !out_attr )
+            return std::unexpected( std::string( "Cannot write /app/data/attributes.bin" ) );
 
-        out.write( reinterpret_cast<const char *>( &num_entries ), sizeof( num_entries ) );
+        std::ofstream out_kmagic( "/app/data/k_magic.bin", std::ios::binary );
+        if( !out_kmagic )
+            return std::unexpected( std::string( "Cannot write /app/data/k_magic.bin" ) );
+
+        out_attr.write( reinterpret_cast<const char *>( &num_entries ), sizeof( num_entries ) );
 
         for( auto row : res )
         {
             float   speed  = static_cast<float>( row[ 0 ].as<double>() );
             uint8_t lanes  = static_cast<uint8_t>( std::min( row[ 1 ].as<int>(), 8 ) );
+            std::string highway_str = row[ 2 ].is_null() ? "" : row[ 2 ].as<std::string>();
+            float length_m = row[ 4 ].as<float>();
+
+            const auto & config = GetRoadConfig( highway_str );
+            
+            // Calculate k_magic (mesoscopic constant)
+            float capacity = static_cast<float>( config.default_lanes ) * 1000.0f;
+            float k_magic = 1.0f / ( capacity * capacity );
 
             uint8_t hw = 3;
-            if( !row[ 2 ].is_null() )
+            if( !highway_str.empty() )
             {
-                std::string h = row[ 2 ].as<std::string>();
-                if( h == "motorway" || h == "motorway_link" ||
-                    h == "trunk"    || h == "trunk_link" )
+                if( highway_str == "motorway" || highway_str == "motorway_link" ||
+                    highway_str == "trunk"    || highway_str == "trunk_link" )
                     hw = 0;
-                else if( h == "primary"   || h == "primary_link"   ||
-                         h == "secondary" || h == "secondary_link" )
+                else if( highway_str == "primary"   || highway_str == "primary_link"   ||
+                         highway_str == "secondary" || highway_str == "secondary_link" )
                     hw = 1;
-                else if( h == "tertiary"  || h == "tertiary_link" )
+                else if( highway_str == "tertiary"  || highway_str == "tertiary_link" )
                     hw = 2;
             }
 
@@ -221,14 +242,17 @@ std::expected<void, std::string> BinaryDumper::DumpAttributes()
                            : static_cast<uint8_t>( row[ 3 ].as<int>() != 0 ? 1 : 0 );
             uint8_t pad = 0;
 
-            out.write( reinterpret_cast<const char *>( &speed ),  sizeof( speed ) );
-            out.write( reinterpret_cast<const char *>( &lanes ),  sizeof( lanes ) );
-            out.write( reinterpret_cast<const char *>( &hw ),     sizeof( hw ) );
-            out.write( reinterpret_cast<const char *>( &oneway ), sizeof( oneway ) );
-            out.write( reinterpret_cast<const char *>( &pad ),    sizeof( pad ) );
+            out_attr.write( reinterpret_cast<const char *>( &speed ),  sizeof( speed ) );
+            out_attr.write( reinterpret_cast<const char *>( &lanes ),  sizeof( lanes ) );
+            out_attr.write( reinterpret_cast<const char *>( &hw ),     sizeof( hw ) );
+            out_attr.write( reinterpret_cast<const char *>( &oneway ), sizeof( oneway ) );
+            out_attr.write( reinterpret_cast<const char *>( &pad ),    sizeof( pad ) );
+            out_attr.write( reinterpret_cast<const char *>( &length_m ), sizeof( length_m ) );
+
+            out_kmagic.write( reinterpret_cast<const char *>( &k_magic ), sizeof( k_magic ) );
         }
 
-        DrawProgressBar( 100, "attributes.bin ready!" );
+        DrawProgressBar( 100, "attributes.bin and k_magic.bin ready!" );
         std::println( "" );
         return {};
     }
@@ -257,7 +281,7 @@ std::expected<void, std::string> BinaryDumper::DumpRTree()
 
         std::ofstream out( "/app/data/r-tree.bin", std::ios::binary );
         if( !out )
-            return std::unexpected( "Cannot write /app/data/r-tree.bin" );
+            return std::unexpected( std::string( "Cannot write /app/data/r-tree.bin" ) );
 
         out.write( reinterpret_cast<const char *>( &num_entries ), sizeof( num_entries ) );
 

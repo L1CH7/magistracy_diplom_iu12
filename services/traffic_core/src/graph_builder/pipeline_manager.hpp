@@ -12,7 +12,7 @@ public:
     explicit PipelineManager( std::string connection_string );
     ~PipelineManager();
 
-    void SetFlags( bool csr_only, bool recursive, bool overwrite );
+    void SetFlags( bool dump_only, bool skip_noding, bool recursive, bool overwrite );
 
     // Returns an error string if pipeline fails
     std::expected<void, std::string> RunPipeline();
@@ -23,9 +23,10 @@ private:
 
 private:
     std::string conn_str_;
-    bool csr_only_  = false;
-    bool recursive_ = false;
-    bool overwrite_ = false;
+    bool dump_only_   = false;
+    bool skip_noding_ = false;
+    bool recursive_  = false;
+    bool overwrite_  = false;
 };
 
 } // namespace traffic::graph_builder

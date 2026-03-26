@@ -245,7 +245,7 @@ WITH starts AS (
     SELECT e.id AS edge_id, v.id AS node_id
     FROM edge_candidates_merged e
     JOIN edge_candidates_merged_vertices_pgr v
-      ON ST_DWithin(ST_StartPoint(e.geom), v.the_geom, 0.00001)
+      ON ST_SnapToGrid(ST_StartPoint(e.geom), 0.00001) = v.the_geom
 )
 UPDATE edge_candidates_merged e
 SET source = s.node_id
@@ -257,7 +257,7 @@ WITH ends AS (
     SELECT e.id AS edge_id, v.id AS node_id
     FROM edge_candidates_merged e
     JOIN edge_candidates_merged_vertices_pgr v
-      ON ST_DWithin(ST_EndPoint(e.geom), v.the_geom, 0.00001)
+      ON ST_SnapToGrid(ST_EndPoint(e.geom), 0.00001) = v.the_geom
 )
 UPDATE edge_candidates_merged e
 SET target = s.node_id
@@ -356,27 +356,33 @@ LIMIT 5;
 // В graphs.edges есть FK (source_id, target_id) → graphs.nodes ON DELETE CASCADE,
 // поэтому удаление узла автоматически удаляет все связанные рёбра.
 constexpr std::string_view ISOLATE_LCC_SQL = R"(
+-- 1. Store valid nodes in a fast, indexed temporary table
+CREATE TEMP TABLE temp_valid_nodes AS
 WITH components AS (
-    SELECT component, node
-    FROM pgr_connectedComponents(
-        'SELECT id, source_id AS source, target_id AS target, cost, reverse_cost
-         FROM graphs.edges
-         WHERE cost != -1 OR reverse_cost != -1'
-    )
+    SELECT component, node 
+    FROM pgr_connectedComponents('SELECT id, source_id as source, target_id as target, cost, reverse_cost FROM graphs.edges')
 ),
 component_sizes AS (
-    SELECT component, COUNT(*) AS size FROM components GROUP BY component
+    SELECT component, count(*) as size FROM components GROUP BY component
 ),
 largest AS (
     SELECT component FROM component_sizes ORDER BY size DESC LIMIT 1
-),
-valid_nodes AS (
-    SELECT node FROM components WHERE component = (SELECT component FROM largest)
 )
-DELETE FROM graphs.nodes WHERE id NOT IN (SELECT node FROM valid_nodes);
+SELECT node FROM components WHERE component = (SELECT component FROM largest);
 
-ANALYZE graphs.nodes;
-ANALYZE graphs.edges;
+CREATE UNIQUE INDEX idx_temp_valid_nodes ON temp_valid_nodes(node);
+
+-- 2. Explicitly delete orphaned edges (much faster than relying on CASCADE)
+DELETE FROM graphs.edges 
+WHERE NOT EXISTS (SELECT 1 FROM temp_valid_nodes WHERE node = source_id)
+   OR NOT EXISTS (SELECT 1 FROM temp_valid_nodes WHERE node = target_id);
+
+-- 3. Delete the isolated nodes
+DELETE FROM graphs.nodes 
+WHERE NOT EXISTS (SELECT 1 FROM temp_valid_nodes WHERE node = id);
+
+-- 4. Cleanup
+DROP TABLE temp_valid_nodes;
 )";
 
 // ============================================================================
@@ -529,8 +535,8 @@ classified AS (
 restrictions AS (
     SELECT
         (elem->>'ref')::BIGINT AS way_id,
-        role,
-        r.id            AS rel_id,
+        elem->>'role'    AS role,
+        r.osm_id            AS rel_id,
         r.tags->>'restriction' AS restriction_type,
         -- Извлекаем via-узел
         (SELECT (m->>'ref')::BIGINT
@@ -538,7 +544,7 @@ restrictions AS (
          WHERE m->>'role' = 'via' AND m->>'type' = 'N'
          LIMIT 1)       AS via_node
     FROM (SELECT 1) dummy
-    LEFT JOIN osm.relations r ON (to_regclass('osm.relations') IS NOT NULL)
+    LEFT JOIN osm.turn_restrictions r ON (to_regclass('osm.turn_restrictions') IS NOT NULL)
     CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN r.members IS NULL THEN '[]'::jsonb ELSE r.members END) WITH ORDINALITY AS arr(elem, ord)
     WHERE r.tags->>'type' = 'restriction'
       AND r.members IS NOT NULL
@@ -615,13 +621,7 @@ INSERT INTO graphs.eb_edges
 SELECT
     from_eb, to_eb, junction,
     turn_type,
-    CASE turn_type
-        WHEN 0 THEN 0.0    -- прямо: без штрафа
-        WHEN 1 THEN 1.0    -- право: минимальный штраф
-        WHEN 2 THEN 4.0    -- лево: штраф за пересечение встречки
-        WHEN 3 THEN 20.0   -- разворот
-        ELSE 0.0
-    END AS maneuver_time
+    0.0 AS maneuver_time -- Calculated later in C++ via road_config.hpp
 FROM legal_maneuvers;
 
 ANALYZE graphs.eb_edges;
@@ -673,13 +673,7 @@ INSERT INTO graphs.eb_edges
 SELECT
     from_eb, to_eb, junction,
     turn_type,
-    CASE turn_type
-        WHEN 0 THEN 0.0
-        WHEN 1 THEN 1.0
-        WHEN 2 THEN 4.0
-        WHEN 3 THEN 20.0
-        ELSE 0.0
-    END
+    0.0 AS maneuver_time -- Calculated later in C++ via road_config.hpp
 FROM classified;
 
 ANALYZE graphs.eb_edges;
