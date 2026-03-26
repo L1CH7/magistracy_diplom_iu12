@@ -1,4 +1,4 @@
-#include "db_orchestrator.hpp"
+#include "pipeline_manager.hpp"
 #include <cstdlib>
 #include <print>
 #include <format>
@@ -29,9 +29,15 @@ int main( int argc, char * argv[] )
     std::string conn_str = std::format( "host={} port={} dbname={} user={} password={}",
                                         db_host, db_port, db_name, db_user, db_pass );
 
-    traffic::graph_builder::DbOrchestrator db( conn_str );
-    db.SetFlags( csr_only, recursive, overwrite );
-    db.RunPipeline();
+    traffic::graph_builder::PipelineManager pipeline( conn_str );
+    pipeline.SetFlags( csr_only, recursive, overwrite );
+    
+    auto res = pipeline.RunPipeline();
+    if( !res )
+    {
+        std::println( stderr, "Pipeline Error: {}", res.error() );
+        return 1;
+    }
 
     std::println( "Pipeline Finished." );
     return 0;
