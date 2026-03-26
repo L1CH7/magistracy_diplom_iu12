@@ -15,8 +15,6 @@ public:
     std::expected<void, std::string> DumpCSR();
     std::expected<void, std::string> DumpAttributes();
     std::expected<void, std::string> DumpRTree();
-    
-    std::expected<void, std::string> CalculateLandmarks();
 
 private:
     std::string conn_str_;

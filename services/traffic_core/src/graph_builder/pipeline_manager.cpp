@@ -1,6 +1,7 @@
 #include "pipeline_manager.hpp"
 #include "sql_orchestrator.hpp"
 #include "binary_dumper.hpp"
+#include "landmarks.hpp"
 
 #include <pqxx/pqxx>
 #include <print>
@@ -145,19 +146,21 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
     // Binary Dumps Phase
     if( IsStageComplete( "edge_based_graph" ) )
     {
-        // 8. ALT Landmarks (placeholder)
-        std::println( "\n-> Step 7: ALT Landmarks" );
-        if( auto r = dumper.CalculateLandmarks(); !r ) return std::unexpected( r.error() );
-
-        // 9. CSR Dump
-        std::println( "\n-> Step 8: Dumping CSR (csr.bin, csr_rev.bin)" );
+        // 8. CSR Dump (Must be FIRST)
+        std::println( "\n-> Step 7: Dumping CSR (csr.bin, csr_rev.bin)" );
         if( auto r = dumper.DumpCSR(); !r ) return std::unexpected( r.error() );
 
-        // 10. Attributes Dump
+        // 9. ALT Landmarks (Using new module)
+        std::println( "\n-> Step 8: ALT Landmarks (Border Minmax + MaxCover)" );
+        traffic::graph_builder::LandmarkBuilder lm_builder;
+        if( auto r = lm_builder.Build( "/app/data/csr.bin", "/app/data/csr_rev.bin", "/app/data/landmarks.bin" ); !r )
+            return std::unexpected( r.error() );
+
+        // 10. Dumping Edge Attributes (attributes.bin)
         std::println( "\n-> Step 9: Dumping Edge Attributes (attributes.bin)" );
         if( auto r = dumper.DumpAttributes(); !r ) return std::unexpected( r.error() );
 
-        // 11. R-Tree Dump
+        // 11. Dumping Flat BBox Index (r-tree.bin)
         std::println( "\n-> Step 10: Dumping Flat BBox Index (r-tree.bin)" );
         if( auto r = dumper.DumpRTree(); !r ) return std::unexpected( r.error() );
     }

@@ -35,11 +35,6 @@ BinaryDumper::BinaryDumper( std::string connection_string )
 
 BinaryDumper::~BinaryDumper() = default;
 
-std::expected<void, std::string> BinaryDumper::CalculateLandmarks()
-{
-    std::println( "-> (CalculateLandmarks) Placeholder: requires in-memory EB CSR." );
-    return {};
-}
 
 std::expected<void, std::string> BinaryDumper::DumpCSR()
 {
@@ -126,9 +121,10 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             std::ofstream out( "/app/data/csr.bin", std::ios::binary );
             if( !out )
                 return std::unexpected( std::string( "Cannot write /app/data/csr.bin" ) );
-            size_t n = num_nodes, m = num_edges;
-            out.write( reinterpret_cast<const char *>( &n ), sizeof( n ) );
-            out.write( reinterpret_cast<const char *>( &m ), sizeof( m ) );
+            uint32_t n = static_cast<uint32_t>( num_nodes );
+            uint32_t m = static_cast<uint32_t>( num_edges );
+            out.write( reinterpret_cast<const char *>( &n ), 4 );
+            out.write( reinterpret_cast<const char *>( &m ), 4 );
             out.write( reinterpret_cast<const char *>( fwd_row_ptr.data() ),
                        fwd_row_ptr.size() * sizeof( uint32_t ) );
             out.write( reinterpret_cast<const char *>( fwd_col_ind.data() ),
@@ -166,9 +162,10 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             std::ofstream rout( "/app/data/csr_rev.bin", std::ios::binary );
             if( !rout )
                 return std::unexpected( std::string( "Cannot write /app/data/csr_rev.bin" ) );
-            size_t n = num_nodes, m = num_edges;
-            rout.write( reinterpret_cast<const char *>( &n ), sizeof( n ) );
-            rout.write( reinterpret_cast<const char *>( &m ), sizeof( m ) );
+            uint32_t n = static_cast<uint32_t>( num_nodes );
+            uint32_t m = static_cast<uint32_t>( num_edges );
+            rout.write( reinterpret_cast<const char *>( &n ), 4 );
+            rout.write( reinterpret_cast<const char *>( &m ), 4 );
             rout.write( reinterpret_cast<const char *>( rev_row_ptr.data() ),
                         rev_row_ptr.size() * sizeof( uint32_t ) );
             rout.write( reinterpret_cast<const char *>( rev_col_ind.data() ),
@@ -221,9 +218,20 @@ std::expected<void, std::string> BinaryDumper::DumpAttributes()
 
             const auto & config = GetRoadConfig( highway_str );
             
-            // Calculate k_magic (mesoscopic constant)
-            float capacity = static_cast<float>( config.default_lanes ) * 1000.0f;
-            float k_magic = 1.0f / ( capacity * capacity );
+            // Critical: Fixed-Point Math for K_MAGIC (mesoscopic constant)
+            // K_magic_base = floor( (T_free * (V_free / 5.0 - 1)) / (C_300^2) * 2^20 )
+            float t_free = ( length_m / 1000.0f ) / ( config.default_speed_kmh / 3600.0f );
+            if( t_free <= 0.0f ) t_free = 1.0f;
+            float v_free = config.default_speed_kmh;
+            float c_300 = static_cast<float>( config.default_lanes ) * 150.0f;
+            if( c_300 <= 0.0f ) c_300 = 150.0f;
+
+            float p = 1.0f;
+            int32_t b = 0;
+
+            double k_magic_base_f = ( t_free * ( ( v_free / 5.0f ) - 1.0f ) ) / ( c_300 * c_300 ) * 1048576.0;
+            int32_t k_magic_base = static_cast<int32_t>( std::floor( k_magic_base_f ) );
+            int32_t k_magic = static_cast<int32_t>( p * k_magic_base ) + ( b << 20 );
 
             uint8_t hw = 3;
             if( !highway_str.empty() )
@@ -249,6 +257,7 @@ std::expected<void, std::string> BinaryDumper::DumpAttributes()
             out_attr.write( reinterpret_cast<const char *>( &pad ),    sizeof( pad ) );
             out_attr.write( reinterpret_cast<const char *>( &length_m ), sizeof( length_m ) );
 
+            // HOT Path Optimization: int32_t Fixed-Point instead of float
             out_kmagic.write( reinterpret_cast<const char *>( &k_magic ), sizeof( k_magic ) );
         }
 

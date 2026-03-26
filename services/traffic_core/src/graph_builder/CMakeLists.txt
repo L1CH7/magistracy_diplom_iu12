@@ -14,6 +14,7 @@ add_executable(traffic_graph_builder
     pipeline_manager.cpp
     sql_orchestrator.cpp
     binary_dumper.cpp
+    landmarks.cpp
 )
 
 target_include_directories(traffic_graph_builder PRIVATE
