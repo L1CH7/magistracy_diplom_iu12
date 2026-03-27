@@ -37,12 +37,12 @@ private:
     std::vector<uint32_t> GenerateFarthestCandidates( const CSR & graph, int count );
     
     // Strategy: Avoid (Generates candidates in sparse areas)
-    std::vector<uint32_t> GenerateAvoidCandidates( const CSR & graph, int count );
-    
+    std::vector<uint32_t> GenerateAvoidCandidates( const CSR & graph, int count, const std::vector<uint32_t> & existing_pool );
+
     // Strategy: MaxCover Stochastic Optimization
-    std::vector<uint32_t> OptimizeMaxCover( const CSR & fwd, 
-                                            const CSR & rev, 
-                                            const std::vector<uint32_t> & candidate_pool, 
+    std::vector<uint32_t> OptimizeMaxCover( const std::vector<std::vector<uint32_t>> & to_L,
+                                            const std::vector<std::vector<uint32_t>> & from_L,
+                                            uint32_t num_nodes,
                                             int num_landmarks );
 };
 
