@@ -2,6 +2,7 @@
 # EXECUTABLE: GRAPH BUILDER
 # ---------------------------------------------------------------------------
 # Офлайн-пайплайн генерации графа из БД (Stage 0-4)
+set(CMAKE_CXX_STANDARD 23) 
 
 # Поиск PostgreSQL, pqxx и OpenMP
 find_package(PostgreSQL REQUIRED)
@@ -37,4 +38,10 @@ target_link_libraries(traffic_graph_builder PRIVATE
 target_compile_options(traffic_graph_builder PRIVATE 
     ${OpenMP_CXX_FLAGS}
     -mavx2
+    -frtti # pqxx needs RTTI
+)
+
+# Убеждаемся что RTTI включен для этого таргета (перекрывает глобальный -fno-rtti)
+set_target_properties(traffic_graph_builder PROPERTIES 
+    CXX_RTTI ON
 )

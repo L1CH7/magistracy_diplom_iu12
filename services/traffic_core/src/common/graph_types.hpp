@@ -7,13 +7,14 @@ namespace traffic {
 
 using NodeID = uint32_t;
 using EdgeID = uint32_t;
-using Weight = uint32_t; // Используем 32-битные веса для предотвращения переполнения в A*
+using EdgeWeight = uint16_t; // Вес одного сегмента (в CSR) - 2 байта
+using PathWeight = uint32_t; // Накопленный вес маршрута (g_score) - 4 байта
 
-constexpr Weight INF_WEIGHT = 0x7FFFFFFF; // Половина макса для безопасности сложения
+constexpr PathWeight INF_WEIGHT = 0xFFFFFFFF;
 constexpr NodeID INVALID_NODE = 0xFFFFFFFF;
 
 struct RoutingResult {
-    Weight total_weight = INF_WEIGHT;
+    PathWeight total_weight = INF_WEIGHT;
     std::vector<NodeID> path;
 };
 
@@ -30,7 +31,7 @@ struct FlatBVHNode {
 
 // Узел очереди с приоритетом (8 байт)
 struct alignas(8) PQElement {
-    Weight weight;
+    PathWeight weight;
     NodeID id;
     bool operator>(const PQElement& other) const noexcept { return weight > other.weight; }
     bool operator<(const PQElement& other) const noexcept { return weight < other.weight; }
@@ -38,19 +39,22 @@ struct alignas(8) PQElement {
 
 // Zero-overhead CSR View
 struct GraphView {
-    const uint32_t* row_ptr;
-    const NodeID*   col_ind;
-    const Weight*   weights;
+    const uint32_t*   row_ptr;
+    const NodeID*     col_ind;
+    const EdgeWeight* static_weights;
 
     struct Edge {
         NodeID to;
-        Weight w;
+        PathWeight w; // При чтении кастим uint16_t -> uint32_t (Zero-Cost)
     };
 
     struct EdgeIterator {
-        const NodeID* c;
-        const Weight* w;
-        inline Edge operator*() const noexcept { return {*c, *w}; }
+        const NodeID*     c;
+        const EdgeWeight* w;
+        
+        inline Edge operator*() const noexcept { 
+            return { *c, static_cast<PathWeight>(*w) }; 
+        }
         inline EdgeIterator& operator++() noexcept { ++c; ++w; return *this; }
         inline bool operator!=(const EdgeIterator& other) const noexcept { return c != other.c; }
     };
@@ -64,7 +68,7 @@ struct GraphView {
     [[nodiscard]] inline EdgeRange get_edges(NodeID u) const noexcept {
         uint32_t start = row_ptr[u];
         uint32_t end   = row_ptr[u + 1];
-        return { {col_ind + start, weights + start}, {col_ind + end, weights + end} };
+        return { {col_ind + start, static_weights + start}, {col_ind + end, static_weights + end} };
     }
 };
 

@@ -15,7 +15,7 @@ struct RamEdge {
     NodeID   to_node;       // Перемапленный индекс
     float    angle_deg;     // Угол поворота
     uint16_t turn_penalty_sec; // Вычисленный кинематический штраф
-    Weight   static_weight; // Итоговый вес (СТРОГО uint16_t)
+    EdgeWeight static_weight; // Итоговый вес (СТРОГО uint16_t)
 };
 
 // FlatBVHNode теперь берется из ../common/graph_types.hpp
