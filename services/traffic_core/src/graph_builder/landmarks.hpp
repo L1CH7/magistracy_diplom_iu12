@@ -3,6 +3,7 @@
 #include <vector>
 #include <expected>
 #include <cstdint>
+#include "common/graph_types.hpp"
 
 namespace traffic::graph_builder
 {
@@ -25,7 +26,7 @@ private:
         uint32_t n = 0;
         uint32_t m = 0;
         std::vector<uint32_t> ptr;
-        std::vector<uint32_t> col;
+        std::vector<NodeID> col;
         std::vector<uint32_t> time;
     };
 

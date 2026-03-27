@@ -4,27 +4,21 @@
 #include <vector>
 #include <expected>
 #include <cstdint>
+#include "common/graph_types.hpp"
 
 namespace traffic::graph_builder
 {
 
+// RamEdge и RamNode используют типы из graph_types.hpp
 struct RamEdge {
-    uint32_t from_node;     // Перемапленный индекс
-    uint32_t to_node;       // Перемапленный индекс
+    NodeID   from_node;     // Перемапленный индекс
+    NodeID   to_node;       // Перемапленный индекс
     float    angle_deg;     // Угол поворота
     uint16_t turn_penalty_sec; // Вычисленный кинематический штраф
-    uint16_t static_weight; // Итоговый вес (СТРОГО uint16_t)
+    Weight   static_weight; // Итоговый вес (СТРОГО uint16_t)
 };
 
-#pragma pack(push, 1)
-struct FlatBVHNode {
-    float min_x, min_y, max_x, max_y; // 16 байт
-    uint32_t left_child;              // 4 байта (индекс или 0xFFFFFFFF)
-    uint32_t right_child;             // 4 байта (индекс или 0xFFFFFFFF)
-    uint32_t node_id;                 // 4 байта (для листов - индекс в ram_nodes_)
-    uint32_t _padding;                // 4 байта (выравнивание до 32 байт)
-};
-#pragma pack(pop)
+// FlatBVHNode теперь берется из ../common/graph_types.hpp
 
 struct RamNode {
     int64_t orig_db_id;

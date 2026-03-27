@@ -19,9 +19,7 @@ add_executable(traffic_graph_builder
 )
 
 target_include_directories(traffic_graph_builder PRIVATE
-    .
-    ..
-    ../common
+    ${CMAKE_SOURCE_DIR}/src
     ${PostgreSQL_INCLUDE_DIRS}
     ${PQXX_INCLUDE_DIRS}
 )
@@ -36,4 +34,7 @@ target_link_libraries(traffic_graph_builder PRIVATE
     OpenMP::OpenMP_CXX
 )
 
-target_compile_options(traffic_graph_builder PRIVATE ${OpenMP_CXX_FLAGS})
+target_compile_options(traffic_graph_builder PRIVATE 
+    ${OpenMP_CXX_FLAGS}
+    -mavx2
+)

@@ -1,6 +1,6 @@
 #include "sql_orchestrator.hpp"
 #include "schema.hpp"
-#include "thread_pool.hpp"
+#include "common/thread_pool.hpp"
 
 #include <pqxx/pqxx>
 #include <print>
