@@ -12,7 +12,7 @@ public:
     explicit PipelineManager( std::string connection_string );
     ~PipelineManager();
 
-    void SetFlags( bool dump_only, bool skip_noding, bool recursive, bool overwrite );
+    void SetFlags( bool skip_db, bool skip_eb, bool skip_landmarks, bool skip_attr, bool overwrite );
 
     // Returns an error string if pipeline fails
     std::expected<void, std::string> RunPipeline();
@@ -23,10 +23,11 @@ private:
 
 private:
     std::string conn_str_;
-    bool dump_only_   = false;
-    bool skip_noding_ = false;
-    bool recursive_  = false;
-    bool overwrite_  = false;
+    bool skip_db_        = false;
+    bool skip_eb_        = false;
+    bool skip_landmarks_ = false;
+    bool skip_attr_      = false;
+    bool overwrite_      = false;
 };
 
 } // namespace traffic::graph_builder

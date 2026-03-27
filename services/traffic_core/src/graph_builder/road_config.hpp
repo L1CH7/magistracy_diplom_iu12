@@ -2,52 +2,46 @@
 
 #include <cstdint>
 #include <string_view>
-
-// ============================================================================
-// ROAD CONFIGURATION TABLE
-// ============================================================================
-// Использование: при заполнении атрибутов графа, вычислении t_free и штрафов.
-//
-// speed_tolerance_kmh: добавка к официальному лимиту в км/ч.
-//   В России (и большинстве стран Европы): +19 км/ч до начала штрафа.
-//   Т.е. при расчёте t_free мы используем EFFECTIVE_SPEED = posted_speed + 19.
-//   Это приближает расчётное время к реальному времени в пробке без нагрузки.
-//
-// turn_right_sec / turn_left_sec / turn_uturn_sec:
-//   Штрафы за манёвр в секундах. Добавляются к base_time рёбра Edge-based графа.
-//   Для развороток на магистралях и т.п. - ставим IMPASSABLE (999).
-//
-// IMPASSABLE = запрещено, ребро в CSR не создаётся.
-// ============================================================================
+#include <limits>
+#include <string>
 
 namespace traffic::graph_builder
 {
 
-constexpr int32_t TURN_IMPASSABLE = 999;
+// Физические константы для кинематических расчетов
+constexpr float SPEED_TOLERANCE_KMH = 19.0f; // Нештрафуемый порог
+constexpr float CAR_LENGTH_M = 7.0f;         // 5m машина + 2m дистанция
+constexpr int32_t K_MAGIC_SHIFT = 1 << 20;   // 2^20 для Fixed-Point math
 
-// Оговорённая допустимая прибавка скорости (ненаказываемый предел)
-constexpr float SPEED_TOLERANCE_KMH = 19.0f;
+// Кинематика манёвров
+constexpr float ACCEL_MS2 = 1.5f;            // Базовое ускорение (м/с^2)
+constexpr float DECEL_MS2 = 2.0f;            // Базовое замедление (м/с^2)
+constexpr float MU_FRICTION = 0.6f;          // Коэффициент сцепления (поперечный)
+constexpr float G_ACCEL = 9.81f;
+constexpr float PI      = 3.14159265f;
+
+constexpr uint32_t TURN_IMPASSABLE = std::numeric_limits<uint32_t>::max();
 
 struct RoadTypeConfig
 {
     std::string_view highway_type;
     float            default_speed_kmh;
     int              default_lanes;
-    // Штрафы за поворот в секундах (для Edge-based Line Graph трансформации)
-    int32_t          turn_right_sec;     // правый поворот
-    int32_t          turn_straight_sec;  // прямо (обычно 0)
-    int32_t          turn_left_sec;      // левый (через встречку) поворот
-    int32_t          turn_uturn_sec;     // разворот
+    // Дефолтные штрафы за поворот в секундах
+    std::int32_t     turn_right_sec;
+    std::int32_t     turn_straight_sec;
+    std::int32_t     turn_left_sec;
+    std::int32_t     turn_uturn_sec;
 };
 
 // Порядок важен: поиск ведётся линейно по первому совпадению.
 // Должны перечисляться от более специфичных к более общим.
 constexpr RoadTypeConfig ROAD_TYPE_CONFIGS[] = {
     // highway_type         spd   lanes  right  str  left  uturn
-    { "motorway",           110,  2,     0,     0,   TURN_IMPASSABLE, TURN_IMPASSABLE },
-    { "motorway_link",      80,   1,     0,     0,   5,    TURN_IMPASSABLE },
-    { "trunk",              90,   2,     0,     0,   5,    TURN_IMPASSABLE },
-    { "trunk_link",         70,   1,     0,     0,   5,    TURN_IMPASSABLE },
+    { "motorway",           110,  2,     0,     0,   999,  999 },
+    { "motorway_link",      80,   1,     0,     0,   5,    999 },
+    { "trunk",              90,   2,     0,     0,   5,    999 },
+    { "trunk_link",         70,   1,     0,     0,   5,    999 },
     { "primary",            60,   2,     1,     0,   4,    30  },
     { "primary_link",       50,   1,     1,     0,   4,    30  },
     { "secondary",          60,   2,     1,     0,   4,    30  },

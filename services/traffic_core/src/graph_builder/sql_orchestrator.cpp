@@ -136,7 +136,7 @@ std::expected<void, std::string> SqlOrchestrator::GridNoding()
         pqxx::nontransaction stat( conn );
         auto bbox_res = stat.exec(
             "SELECT ST_XMin(b), ST_YMin(b), ST_XMax(b), ST_YMax(b) "
-            "FROM (SELECT ST_Extent(geom) AS b FROM edge_candidates) AS t" );
+            "FROM (SELECT ST_Extent(geom) AS b FROM graphs.edge_candidates) AS t" );
 
         if( bbox_res.empty() || bbox_res[ 0 ][ 0 ].is_null() )
         {
@@ -179,7 +179,7 @@ std::expected<void, std::string> SqlOrchestrator::GridNoding()
                         floor((ST_X(ST_Centroid(geom)) - {0}) / NULLIF({1}, 0))::int as gx,
                         floor((ST_Y(ST_Centroid(geom)) - {2}) / NULLIF({3}, 0))::int as gy,
                         count(*)::int as cnt
-                    FROM edge_candidates
+                    FROM graphs.edge_candidates
                     WHERE is_ground = TRUE AND geom IS NOT NULL
                     GROUP BY 1, 2
                 ) t
@@ -222,13 +222,20 @@ std::expected<void, std::string> SqlOrchestrator::GridNoding()
 
             pool.Enqueue( [sql, &done, total, this]()
             {
-                pqxx::connection c( conn_str_ );
-                pqxx::work       w( c );
-                w.exec( sql );
-                w.commit();
+                try
+                {
+                    pqxx::connection c( conn_str_ );
+                    pqxx::work       w( c );
+                    w.exec( sql );
+                    w.commit();
 
-                int n = ++done;
-                DrawProgressBar( n * 100 / total, "Noding Grid Tiles" );
+                    int n = ++done;
+                    DrawProgressBar( n * 100 / total, "Noding Grid Tiles" );
+                }
+                catch( const std::exception & e )
+                {
+                    std::println( stderr, "\n[ERROR] Thread failed in GridNoding: {}", e.what() );
+                }
             } );
         }
 

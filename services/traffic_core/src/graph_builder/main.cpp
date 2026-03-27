@@ -6,17 +6,19 @@
 
 int main( int argc, char * argv[] )
 {
-    bool dump_only = false;
-    bool skip_noding = false;
-    bool recursive = false;
+    bool skip_db = false;
+    bool skip_eb = false;
+    bool skip_landmarks = false;
+    bool skip_attr = false;
     bool overwrite = false;
 
     for( int i = 1; i < argc; ++i )
     {
         std::string_view arg = argv[ i ];
-        if( arg == "--csr" || arg == "--dump-only" ) dump_only = true;
-        if( arg == "--skip-noding" ) skip_noding = true;
-        if( arg == "--recursive" ) recursive = true;
+        if( arg == "--dump-only" || arg == "--skip-db" ) skip_db = true;
+        if( arg == "--skip-eb" || arg == "--skip-noding" ) skip_eb = true;
+        if( arg == "--skip-landmarks" ) skip_landmarks = true;
+        if( arg == "--skip-attr" ) skip_attr = true;
         if( arg == "--overwrite" ) overwrite = true;
     }
 
@@ -32,7 +34,7 @@ int main( int argc, char * argv[] )
                                         db_host, db_port, db_name, db_user, db_pass );
 
     traffic::graph_builder::PipelineManager pipeline( conn_str );
-    pipeline.SetFlags( dump_only, skip_noding, recursive, overwrite );
+    pipeline.SetFlags( skip_db, skip_eb, skip_landmarks, skip_attr, overwrite );
     
     auto res = pipeline.RunPipeline();
     if( !res )
