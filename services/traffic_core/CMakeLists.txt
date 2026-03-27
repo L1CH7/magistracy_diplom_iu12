@@ -8,9 +8,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Включаем опции компиляции (Runtime Config и Compile-time Constants)
 include(cmake/options.cmake)
 
-# Глобальные оптимизации (понижено до O2 для safety) и отключение логов в релизе
+# Глобальные оптимизации для HFT Hot Path (согласно стандарту кодирования)
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    add_compile_options(-O2)
+    add_compile_options(-O3 -march=native -mavx2 -flto)
+    add_link_options(-flto)
     add_compile_definitions(QUILL_ACTIVE_LOG_LEVEL=${QUILL_COMPILE_ACTIVE_LOG_LEVEL})
 else()
     add_compile_definitions(QUILL_ACTIVE_LOG_LEVEL=QUILL_LOG_LEVEL_TRACE_L3)

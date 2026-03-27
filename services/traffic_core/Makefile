@@ -18,9 +18,7 @@ build-release:
 
 run-router: build-release
 	docker run --rm --network host \
-		-e APP__DB__HOST=localhost \
-		-e APP__DB__PORT=5432 \
-		-e APP__DB__USER=postgres \
-		-e APP__DB__PASSWORD=postgres \
-		-e APP__DB__NAME=nav_mas \
-		traffic_core
+		-v $(shell pwd)/data:/app/data \
+		traffic_core /app/data
+
+test-router: run-router
