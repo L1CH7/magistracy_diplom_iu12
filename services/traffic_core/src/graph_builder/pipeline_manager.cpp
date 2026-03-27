@@ -157,8 +157,11 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
         {
             std::println( "\n-> Step 9: Dumping Attributes & Geometry (SoA)" );
             if( auto r = dumper.DumpExtendedAttributes(); !r ) return std::unexpected( r.error() );
+
+            std::println( "\n-> Step 10: Dumping Mesoscopic Constants (k_magic.bin)" );
+            if( auto r = dumper.DumpKMagic(); !r ) return std::unexpected( r.error() );
             
-            std::println( "\n-> Step 10: Dumping BBox Index (r-tree.bin)" );
+            std::println( "\n-> Step 11: Dumping BBox Index (r-tree.bin)" );
             if( auto r = dumper.DumpRTree(); !r ) return std::unexpected( r.error() );
         }
     }

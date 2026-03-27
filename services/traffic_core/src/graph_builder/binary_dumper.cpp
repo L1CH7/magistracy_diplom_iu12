@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <cmath>
+#include <numeric>
 
 namespace traffic::graph_builder
 {
@@ -220,7 +221,7 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
         DrawProgressBar(0, "Generating FWD CSR layout from RAM...");
         std::vector<uint32_t> fwd_row_ptr(num_nodes + 1, 0);
         std::vector<uint32_t> fwd_col_ind(num_edges);
-        std::vector<uint32_t> fwd_base_time(num_edges);
+        std::vector<uint16_t> fwd_base_time(num_edges);
 
         for (const auto& e : ram_edges_)
             fwd_row_ptr[e.from_node + 1]++;
@@ -232,7 +233,7 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             for (const auto& e : ram_edges_) {
                 uint32_t pos = cur[e.from_node]++;
                 fwd_col_ind[pos] = e.to_node;
-                fwd_base_time[pos] = static_cast<uint32_t>(e.static_weight);
+                fwd_base_time[pos] = e.static_weight;
             }
         }
 
@@ -244,13 +245,13 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             out.write(reinterpret_cast<const char*>(&num_edges), 4);
             out.write(reinterpret_cast<const char*>(fwd_row_ptr.data()), fwd_row_ptr.size() * 4);
             out.write(reinterpret_cast<const char*>(fwd_col_ind.data()), fwd_col_ind.size() * 4);
-            out.write(reinterpret_cast<const char*>(fwd_base_time.data()), fwd_base_time.size() * 4);
+            out.write(reinterpret_cast<const char*>(fwd_base_time.data()), fwd_base_time.size() * sizeof(uint16_t));
         }
 
         DrawProgressBar(75, "Generating REV CSR layout from RAM...");
         std::vector<uint32_t> rev_row_ptr(num_nodes + 1, 0);
         std::vector<uint32_t> rev_col_ind(num_edges);
-        std::vector<uint32_t> rev_base_time(num_edges);
+        std::vector<uint16_t> rev_base_time(num_edges);
 
         for (const auto& e : ram_edges_)
             rev_row_ptr[e.to_node + 1]++;
@@ -262,7 +263,7 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             for (const auto& e : ram_edges_) {
                 uint32_t pos = cur[e.to_node]++;
                 rev_col_ind[pos] = e.from_node;
-                rev_base_time[pos] = static_cast<uint32_t>(e.static_weight);
+                rev_base_time[pos] = e.static_weight;
             }
         }
 
@@ -275,7 +276,7 @@ std::expected<void, std::string> BinaryDumper::DumpCSR()
             rout.write(reinterpret_cast<const char*>(rev_row_ptr.data()), rev_row_ptr.size() * 4);
             rev_row_ptr.clear(); 
             rout.write(reinterpret_cast<const char*>(rev_col_ind.data()), rev_col_ind.size() * 4);
-            rout.write(reinterpret_cast<const char*>(rev_base_time.data()), rev_base_time.size() * 4);
+            rout.write(reinterpret_cast<const char*>(rev_base_time.data()), rev_base_time.size() * sizeof(uint16_t));
         }
 
         DrawProgressBar(100, "CSR (FWD/REV) ready from RAM!");
@@ -367,28 +368,102 @@ std::expected<void, std::string> BinaryDumper::DumpExtendedAttributes() {
     }
 }
 
-std::expected<void, std::string> BinaryDumper::DumpRTree() {
+std::expected<void, std::string> BinaryDumper::DumpKMagic() {
     try {
-        if (ram_nodes_.empty()) return std::unexpected("RAM nodes are empty. Call LoadAndSortNodes first.");
-        
-        uint32_t num_entries = static_cast<uint32_t>(ram_nodes_.size());
-        DrawProgressBar(0, "Writing r-tree.bin (flat BBox per EB-node from RAM)...");
+        if (ram_nodes_.empty()) return std::unexpected("RAM nodes are empty.");
+        DrawProgressBar(0, "Writing k_magic.bin...");
 
-        std::ofstream out("/app/data/r-tree.bin", std::ios::binary);
-        if (!out) return std::unexpected("Cannot write /app/data/r-tree.bin");
+        std::ofstream out("/app/data/k_magic.bin", std::ios::binary);
+        if (!out) return std::unexpected("Cannot write k_magic.bin");
 
-        out.write(reinterpret_cast<const char*>(&num_entries), sizeof(num_entries));
-
-        for (uint32_t i = 0; i < num_entries; ++i) {
-            const auto& n = ram_nodes_[i];
-            out.write(reinterpret_cast<const char*>(&n.min_x), sizeof(n.min_x));
-            out.write(reinterpret_cast<const char*>(&n.min_y), sizeof(n.min_y));
-            out.write(reinterpret_cast<const char*>(&n.max_x), sizeof(n.max_x));
-            out.write(reinterpret_cast<const char*>(&n.max_y), sizeof(n.max_y));
-            out.write(reinterpret_cast<const char*>(&i), sizeof(i));
+        for (const auto& n : ram_nodes_) {
+            out.write(reinterpret_cast<const char*>(&n.k_magic), sizeof(n.k_magic));
         }
 
-        DrawProgressBar(100, "r-tree.bin ready!");
+        DrawProgressBar(100, "k_magic.bin ready!");
+        std::println("");
+        return {};
+    } catch (const std::exception& e) {
+        return std::unexpected(std::format("DumpKMagic failed: {}", e.what()));
+    }
+}
+
+std::expected<void, std::string> BinaryDumper::DumpRTree() {
+    try {
+        if (ram_nodes_.empty()) return std::unexpected("RAM nodes are empty.");
+        DrawProgressBar(0, "Building BVH R-Tree in RAM...");
+
+        std::vector<FlatBVHNode> bvh_tree;
+        bvh_tree.reserve(ram_nodes_.size() * 2); // Резерв для бинарного дерева
+
+        // Массив индексов для сортировки при построении дерева
+        std::vector<uint32_t> indices(ram_nodes_.size());
+        std::iota(indices.begin(), indices.end(), 0);
+
+        // Рекурсивная лямбда построения BVH
+        auto build_bvh = [&ram_nodes = ram_nodes_, &indices, &bvh_tree](this auto& self, uint32_t start, uint32_t end) -> uint32_t {
+            uint32_t node_idx = static_cast<uint32_t>(bvh_tree.size());
+            bvh_tree.push_back(FlatBVHNode{});
+            FlatBVHNode& node = bvh_tree[node_idx];
+            node.left_child = 0xFFFFFFFF;
+            node.right_child = 0xFFFFFFFF;
+            node.node_id = 0xFFFFFFFF;
+            node._padding = 0;
+
+            // Считаем BBox текущего кластера
+            node.min_x = 180.0f; node.min_y = 90.0f;
+            node.max_x = -180.0f; node.max_y = -90.0f;
+            for (uint32_t i = start; i < end; ++i) {
+                const auto& n = ram_nodes[indices[i]];
+                if (n.min_x < node.min_x) node.min_x = n.min_x;
+                if (n.min_y < node.min_y) node.min_y = n.min_y;
+                if (n.max_x > node.max_x) node.max_x = n.max_x;
+                if (n.max_y > node.max_y) node.max_y = n.max_y;
+            }
+
+            uint32_t count = end - start;
+            if (count == 1) {
+                // Лист
+                node.node_id = indices[start];
+                return node_idx;
+            }
+
+            // Находим самую длинную ось для сплита
+            float span_x = node.max_x - node.min_x;
+            float span_y = node.max_y - node.min_y;
+            int axis = (span_x > span_y) ? 0 : 1;
+
+            // Сортируем индексы по центру выбранной оси
+            std::sort(indices.begin() + start, indices.begin() + end, [&](uint32_t a, uint32_t b) {
+                const auto& na = ram_nodes[a];
+                const auto& nb = ram_nodes[b];
+                if (axis == 0) return (na.min_x + na.max_x) < (nb.min_x + nb.max_x);
+                return (na.min_y + na.max_y) < (nb.min_y + nb.max_y);
+            });
+
+            uint32_t mid = start + count / 2;
+            uint32_t left_child = self(start, mid);
+            uint32_t right_child = self(mid, end);
+
+            // ВАЖНО: ссылки могут инвалидироваться при push_back, поэтому переполучаем node
+            bvh_tree[node_idx].left_child = left_child;
+            bvh_tree[node_idx].right_child = right_child;
+
+            return node_idx;
+        };
+
+        DrawProgressBar(30, "Splitting Bounding Boxes...");
+        build_bvh(0, static_cast<uint32_t>(indices.size()));
+
+        DrawProgressBar(70, "Writing r-tree.bin...");
+        std::ofstream out("/app/data/r-tree.bin", std::ios::binary);
+        if (!out) return std::unexpected("Cannot write r-tree.bin");
+
+        uint32_t total_nodes = static_cast<uint32_t>(bvh_tree.size());
+        out.write(reinterpret_cast<const char*>(&total_nodes), sizeof(total_nodes));
+        out.write(reinterpret_cast<const char*>(bvh_tree.data()), bvh_tree.size() * sizeof(FlatBVHNode));
+
+        DrawProgressBar(100, "In-Memory BVH R-Tree generated!");
         std::println("");
         return {};
     } catch (const std::exception& e) {
