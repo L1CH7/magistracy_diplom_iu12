@@ -342,7 +342,7 @@ SELECT
     component,
     COUNT(*) AS node_count,
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_total
-FROM pgr_connectedComponents(
+FROM pgr_strongComponents(
     'SELECT id, source_id AS source, target_id AS target, cost, reverse_cost
      FROM graphs.edges
      WHERE cost != -1 OR reverse_cost != -1'
@@ -352,7 +352,7 @@ ORDER BY node_count DESC
 LIMIT 5;
 )";
 
-// Используется алгоритм Тарьяна (pgr_connectedComponents) для поиска кластеров.
+// Используется алгоритм Тарьяна (pgr_strongComponents) для поиска кластеров.
 // В graphs.edges есть FK (source_id, target_id) → graphs.nodes ON DELETE CASCADE,
 // поэтому удаление узла автоматически удаляет все связанные рёбра.
 constexpr std::string_view ISOLATE_LCC_SQL = R"(
@@ -360,7 +360,7 @@ constexpr std::string_view ISOLATE_LCC_SQL = R"(
 CREATE TEMP TABLE temp_valid_nodes AS
 WITH components AS (
     SELECT component, node 
-    FROM pgr_connectedComponents('SELECT id, source_id as source, target_id as target, cost, reverse_cost FROM graphs.edges')
+    FROM pgr_strongComponents('SELECT id, source_id as source, target_id as target, cost, reverse_cost FROM graphs.edges')
 ),
 component_sizes AS (
     SELECT component, count(*) as size FROM components GROUP BY component
@@ -691,7 +691,7 @@ SELECT
     component,
     COUNT(*) AS node_count,
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_total
-FROM pgr_connectedComponents(
+FROM pgr_strongComponents(
     'SELECT id, from_eb_node AS source, to_eb_node AS target, 1.0 AS cost FROM graphs.eb_edges'
 )
 GROUP BY component
@@ -704,7 +704,7 @@ constexpr std::string_view ISOLATE_EB_LCC_SQL = R"(
 CREATE TEMP TABLE temp_valid_eb_nodes AS
 WITH components AS (
     SELECT component, node 
-    FROM pgr_connectedComponents('SELECT id, from_eb_node as source, to_eb_node as target, 1.0 as cost FROM graphs.eb_edges')
+    FROM pgr_strongComponents('SELECT id, from_eb_node as source, to_eb_node as target, 1.0 as cost FROM graphs.eb_edges')
 ),
 component_sizes AS (
     SELECT component, count(*) as size FROM components GROUP BY component
