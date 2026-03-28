@@ -2,7 +2,6 @@
 #include <vector>
 #include <string>
 #include <chrono>
-#include <format>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -10,14 +9,15 @@
 #include <csignal>
 #include <atomic>
 #include <poll.h>
+#include <sstream>
+#include <expected>
+#include <sys/wait.h>
+#include <iomanip>
 #include "common/logger.hpp"
-#include "router/compute/td_alt_router.hpp"
-#include "router/control/graph_loader.hpp"
-#include "common/mmap_region.hpp"
+#include "router/control/router_manager.hpp"
 #include "common/graph_types.hpp"
 
 using namespace traffic;
-using namespace traffic::router;
 
 static std::atomic<bool> keep_running(true);
 
@@ -34,32 +34,30 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    traffic::core::logging::init_logger();
+    LOG_INFO("=== Traffic Core Supervisor Server starting (C++26) ===");
+
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
 
     std::string data_dir = argv[1];
     
-    // 1. Initialize MappedGraph
-    control::MappedGraph mapped_graph;
     try {
-        if (!mapped_graph.load(data_dir)) {
-            throw std::runtime_error("Failed to load graph from " + data_dir);
-        }
+        traffic::router::control::RouterManager manager;
+        LOG_INFO("Supervisor: Loading graphs from directory: {}", data_dir);
         
-        const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph.csr_region->data());
-        traffic::NodeID num_nodes;
-        std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
-
-        TdAltRouter router(mapped_graph.view, num_nodes);
-
-        // 2. Assign Landmarks (if loaded)
-        if (mapped_graph.landmarks_region) {
-            router.get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph.landmarks_region->data()));
+        auto load_status = manager.LoadGraphs(data_dir);
+        if (!load_status) {
+            LOG_FATAL("SUPERVISOR: CRITICAL GRAPH LOAD FAILURE: {}", load_status.error());
+            return 1;
         }
+        LOG_INFO("Supervisor: Graphs loaded. Nodes: {}, Edges: {}", manager.num_nodes(), manager.num_edges());
 
-        // 3. TCP Server (Port 5555)
         int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (server_fd == -1) throw std::runtime_error("Socket failed");
+        if (server_fd == -1) {
+            LOG_FATAL("SUPERVISOR: Failed to create socket: {}", strerror(errno));
+            return 1;
+        }
 
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -70,62 +68,166 @@ int main(int argc, char** argv) {
         address.sin_port = htons(5555);
 
         if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+            LOG_FATAL("SUPERVISOR: Bind failed on port 5555. Address already in use?");
             close(server_fd);
-            throw std::runtime_error("Bind failed. Port 5555 might be busy.");
+            return 1;
         }
         
-        if (listen(server_fd, 3) < 0) {
+        if (listen(server_fd, 100) < 0) {
+            LOG_FATAL("SUPERVISOR: Listen failed: {}", strerror(errno));
             close(server_fd);
-            throw std::runtime_error("Listen failed");
+            return 1;
         }
 
-        std::cout << "Поднят сервер на порту 5555" << std::endl;
-        std::cout << "Ожидание запросов (Ctrl+C для выхода)..." << std::endl;
+        LOG_INFO("Supervisor: TCP Server is listening on 0.0.0.0:5555");
+        std::cout << "Ожидание запросов..." << std::endl;
 
-        struct pollfd fds[1];
-        fds[0].fd = server_fd;
-        fds[0].events = POLLIN;
+        struct pollfd fds_poll[1];
+        fds_poll[0].fd = server_fd;
+        fds_poll[0].events = POLLIN;
 
         while (keep_running) {
-            // Ожидаем активности на сокете 500мс, чтобы не блокировать вечно и проверять keep_running
-            int ret = poll(fds, 1, 500);
-            
-            if (ret < 0) {
+            int poll_ret = poll(fds_poll, 1, 500);
+            if (poll_ret < 0) {
                 if (errno == EINTR) continue;
+                LOG_ERROR("SUPERVISOR: Poll error: {}", strerror(errno));
                 break;
             }
-            if (ret == 0) continue; // Timeout, check keep_running
+            if (poll_ret == 0) continue;
 
             int client_fd = accept(server_fd, nullptr, nullptr);
-            if (client_fd < 0) continue;
-
-            char buffer[1024] = {0};
-            int bytes_read = read(client_fd, buffer, 1024);
-            if (bytes_read > 0) {
-                traffic::NodeID start_node, target_node;
-                if (sscanf(buffer, "%u %u", &start_node, &target_node) == 2) {
-                    auto start_time = std::chrono::high_resolution_clock::now();
-                    auto result = router.find_path(start_node, target_node);
-                    auto end_time = std::chrono::high_resolution_clock::now();
-                    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-
-                    std::string response = std::format("Weight: {} | Time: {}us | Path size: {}\n", 
-                                                    result.total_weight, duration.count(), result.path.size());
-                    
-                    send(client_fd, response.c_str(), response.size(), 0);
-                } else {
-                    const char* err = "Invalid format. Expected: <start_node> <target_node>\n";
-                    send(client_fd, err, strlen(err), 0);
-                }
+            if (client_fd < 0) {
+                LOG_WARN("SUPERVISOR: Failed to accept connection: {}", strerror(errno));
+                continue;
             }
-            close(client_fd);
+
+            char read_buf[8192] = {0}; 
+            ssize_t n_read = read(client_fd, read_buf, sizeof(read_buf) - 1);
+            
+            if (n_read > 0) {
+                std::string input_query(read_buf);
+                LOG_DEBUG("SUPERVISOR: Incoming request detected ({} bytes)", n_read);
+
+                pid_t worker_pid = fork();
+                
+                if (worker_pid == 0) {
+                    // --- CHILD PROCESS (Worker) ---
+                    std::signal(SIGINT, SIG_DFL);
+                    
+                    // Restart Quill Backend in the child process because threads are not inherited
+                    quill::BackendOptions backend_options;
+                    quill::Backend::start(backend_options);
+
+                    std::stringstream ss_query(input_query);
+                    std::string command;
+                    ss_query >> command;
+
+                    auto start_time = std::chrono::high_resolution_clock::now();
+                    std::expected<traffic::RouteResponse, std::string> route_result = std::unexpected("Unknown command");
+
+                    try {
+                        if (command == "ll") {
+                            int n_pts = 0;
+                            if (ss_query >> n_pts && n_pts >= 2) {
+                                std::vector<std::pair<float, float>> coords;
+                                coords.reserve(n_pts);
+                                for (int i = 0; i < n_pts; ++i) {
+                                    float x, y;
+                                    if (ss_query >> x >> y) {
+                                        coords.push_back({x, y});
+                                    }
+                                }
+                                if (coords.size() >= 2) {
+                                    LOG_INFO("Worker {}: Routing ll with {} points", getpid(), coords.size());
+                                    route_result = manager.RouteMultipointByCoords(coords);
+                                } else {
+                                    route_result = std::unexpected("Insufficient valid coordinates");
+                                }
+                            }
+                        } else if (command == "id") {
+                            int n_ids = 0;
+                            if (ss_query >> n_ids && n_ids >= 2) {
+                                std::vector<traffic::RoutePoint> wps;
+                                wps.reserve(n_ids);
+                                for (int i = 0; i < n_ids; ++i) {
+                                    traffic::NodeID id;
+                                    float off;
+                                    if (ss_query >> id >> off) {
+                                        wps.push_back({id, off});
+                                    }
+                                }
+                                if (wps.size() >= 2) {
+                                    LOG_INFO("Worker {}: Routing id with {} points", getpid(), wps.size());
+                                    route_result = manager.RouteMultipoint(wps);
+                                } else {
+                                    route_result = std::unexpected("Insufficient valid waypoints");
+                                }
+                            }
+                        } else {
+                            // Legacy or single-pair support
+                            std::stringstream ss_legacy(input_query);
+                            float x1, y1, x2, y2;
+                            if (ss_legacy >> x1 >> y1 >> x2 >> y2) {
+                                route_result = manager.RouteByCoords(x1, y1, x2, y2);
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("Worker CRASH: {}", e.what());
+                        _exit(1);
+                    }
+
+                    auto end_time = std::chrono::high_resolution_clock::now();
+                    float ms = std::chrono::duration<float, std::milli>(end_time - start_time).count();
+
+                    std::stringstream ss_resp;
+                    if (route_result) {
+                        LOG_DEBUG("Worker: SUCCESS. Time: {}s, Latency: {:.3f}ms", route_result->total_time, ms);
+                        ss_resp << "SUCCESS | Time: " << route_result->total_time << "s | "
+                                << "Distance: " << std::fixed << std::setprecision(1) << route_result->total_length_m << "m | "
+                                << "Latency: " << std::fixed << std::setprecision(3) << ms << "ms | "
+                                << "Segments: " << route_result->path.size() << "\n";
+                    } else {
+                        LOG_ERROR("Worker: FAILED. Error: {}", route_result.error());
+                        ss_resp << "ERROR | " << route_result.error() << " | Latency: " << std::fixed << std::setprecision(3) << ms << "ms\n";
+                    }
+                    
+                    std::string final_msg = ss_resp.str();
+                    send(client_fd, final_msg.c_str(), (int)final_msg.size(), 0);
+
+                    close(client_fd);
+                    _exit(0); 
+                    
+                } else if (worker_pid > 0) {
+                    // --- PARENT PROCESS (Supervisor) ---
+                    close(client_fd);
+                    int w_status;
+                    waitpid(worker_pid, &w_status, 0);
+                    
+                    if (WIFSIGNALED(w_status)) {
+                        int w_sig = WTERMSIG(w_status);
+                        LOG_FATAL("SUPERVISOR ALERT: Worker process CRASHED! Signal: {} ({}). Query: {}", 
+                                 w_sig, (w_sig == 11 ? "SIGSEGV" : "ABNORMAL"), 
+                                 input_query.substr(0, 60));
+                    } else if (WIFEXITED(w_status) && WEXITSTATUS(w_status) != 0) {
+                        LOG_ERROR("SUPERVISOR ERROR: Worker exited with failure code {}. Query: {}", 
+                                  WEXITSTATUS(w_status), input_query.substr(0, 60));
+                    } else {
+                        LOG_TRACE("SUPERVISOR: Worker {} finished successfully", worker_pid);
+                    }
+                } else {
+                    LOG_FATAL("SUPERVISOR: System error: fork() failed!");
+                    close(client_fd);
+                }
+            } else {
+                close(client_fd);
+            }
         }
 
         close(server_fd);
-        std::cout << "Сервер остановлен успешно." << std::endl;
+        LOG_INFO("=== Traffic Core Supervisor Server shutting down cleanly ===");
 
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        LOG_FATAL("SUPERVISOR FATAL: System Exception: {}", e.what());
         return 1;
     }
 

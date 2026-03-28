@@ -4,6 +4,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <cstdint>
 
 namespace traffic::common {
 
@@ -19,11 +20,27 @@ public:
             region_ = std::make_unique<MmapRegion>(filepath);
             if (region_->empty()) return false;
             
+            size_t size = region_->size();
             const uint8_t* data = static_cast<const uint8_t*>(region_->data());
             
+            if (size < sizeof(uint32_t) * 2) return false;
             num_edges_ = *reinterpret_cast<const uint32_t*>(data);
-            offsets_ = reinterpret_cast<const uint32_t*>(data + sizeof(uint32_t));
-            points_ = reinterpret_cast<const Point2D*>(data + sizeof(uint32_t) + (num_edges_ + 1) * sizeof(uint32_t));
+            uint32_t total_points = *reinterpret_cast<const uint32_t*>(data + sizeof(uint32_t));
+            
+            size_t min_offsets_size = sizeof(uint32_t) * 2 + (num_edges_ + 1) * sizeof(uint32_t);
+            if (size < min_offsets_size) return false;
+
+            offsets_ = reinterpret_cast<const uint32_t*>(data + sizeof(uint32_t) * 2);
+            
+            uint32_t verified_total_points = offsets_[num_edges_];
+            if (verified_total_points != total_points) {
+                // Warning: data inconsistent, but we can continue or return error
+            }
+
+            size_t total_required_size = min_offsets_size + verified_total_points * sizeof(Point2D);
+            if (size < total_required_size) return false;
+
+            points_ = reinterpret_cast<const Point2D*>(data + min_offsets_size);
             return true;
         } catch (...) { return false; }
     }

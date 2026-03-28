@@ -27,6 +27,7 @@ struct RoutePoint {
 // Финальный ответ роутера
 struct RouteResponse { 
     uint32_t total_time;     // Итоговое время маршрута
+    float total_length_m = 0.0f; // Физическая длина маршрута в метрах
     std::vector<NodeID> path; // Последовательность ID ребер
 };
 

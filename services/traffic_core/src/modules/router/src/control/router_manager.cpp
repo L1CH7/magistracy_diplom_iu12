@@ -3,8 +3,27 @@
 #include <format>
 #include <filesystem>
 #include <cstring>
+#include <cmath>
+#include <numbers>
 
 namespace traffic::router::control {
+
+namespace {
+    // Быстрая равнопромежуточная проекция (Equirectangular approximation)
+    // x = lon, y = lat
+    inline float GeoDistance(float lon1, float lat1, float lon2, float lat2) noexcept {
+        constexpr float R = 6371000.0f; // Радиус Земли в метрах
+        constexpr float DEG_TO_RAD = std::numbers::pi_v<float> / 180.0f;
+        
+        float lat1_rad = lat1 * DEG_TO_RAD;
+        float lat2_rad = lat2 * DEG_TO_RAD;
+        float d_lon = (lon2 - lon1) * DEG_TO_RAD;
+        float d_lat = lat2_rad - lat1_rad;
+        
+        float x = d_lon * std::cos((lat1_rad + lat2_rad) * 0.5f);
+        return R * std::sqrt(x * x + d_lat * d_lat);
+    }
+}
 
 RouterManager::RouterManager() = default;
 RouterManager::~RouterManager() = default;
@@ -25,12 +44,26 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
     }
 
     if (mapped_graph_.rtree_region) {
+        size_t rtree_size = mapped_graph_.rtree_region->size();
         const uint8_t* rtree_ptr = static_cast<const uint8_t*>(mapped_graph_.rtree_region->data());
+        
+        if (rtree_size < sizeof(uint32_t)) {
+            return std::unexpected("r-tree.bin is too small (no header)");
+        }
+
         uint32_t rtree_nodes_count;
         std::memcpy(&rtree_nodes_count, rtree_ptr, sizeof(rtree_nodes_count));
+        
+        size_t expected_rtree_size = sizeof(uint32_t) + rtree_nodes_count * sizeof(traffic::FlatBVHNode);
+        if (rtree_size < expected_rtree_size) {
+            return std::unexpected(std::format("r-tree.bin is truncated: has {} nodes, expected {} from file size", 
+                                             rtree_nodes_count, (rtree_size - 4) / sizeof(traffic::FlatBVHNode)));
+        }
+
         const traffic::FlatBVHNode* rtree_nodes = reinterpret_cast<const traffic::FlatBVHNode*>(rtree_ptr + sizeof(rtree_nodes_count));
         spatial_index_ = std::make_unique<traffic::common::SpatialIndex>(
             rtree_nodes, rtree_nodes_count, mapped_graph_.geometry_store.get());
+        LOG_INFO("Spatial index loaded: {} nodes", rtree_nodes_count);
     }
 
     return {};
@@ -51,7 +84,23 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
     return router_->find_path(start_node_idx, target_node_idx);
 }
 
-static constexpr float DUMMY_EDGE_TIME = 10.0f;
+float RouterManager::CalculateEdgeLength(traffic::NodeID edge_id) const {
+    if (!mapped_graph_.geometry_store) return 0.0f;
+    auto geom = mapped_graph_.geometry_store->get_geometry(edge_id);
+    if (geom.size() < 2) return 0.0f;
+    
+    float len = 0.0f;
+    for (size_t i = 0; i < geom.size() - 1; ++i) {
+        len += GeoDistance(geom[i].x, geom[i].y, geom[i+1].x, geom[i+1].y);
+    }
+    return len;
+}
+
+float RouterManager::CalculateEdgeTime(traffic::NodeID edge_id) const {
+    float len = CalculateEdgeLength(edge_id);
+    if (len == 0.0f) return 10.0f; // Фоллбек
+    return len / 13.8f; // ~50 км/ч
+}
 
 std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTwo(
     traffic::RoutePoint start, 
@@ -60,12 +109,15 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
 ) {
     if (!router_) return std::unexpected(std::string("Router not initialized"));
 
+    float start_time_full = CalculateEdgeTime(start.edge_id);
+    float target_time_full = CalculateEdgeTime(target.edge_id);
+
     // 1. Случай: Старт и Финиш на одном ребре
     if (start.edge_id == target.edge_id && start.offset <= target.offset) {
         traffic::RouteResponse res;
         res.path = {start.edge_id};
-        // Заглушка: DUMMY_EDGE_TIME секунд на все ребро. Считаем пропорционально пройденному пути.
-        res.total_time = static_cast<uint32_t>((target.offset - start.offset) * DUMMY_EDGE_TIME);
+        res.total_time = static_cast<uint32_t>((target.offset - start.offset) * start_time_full);
+        res.total_length_m = (target.offset - start.offset) * CalculateEdgeLength(start.edge_id);
         return res;
     }
 
@@ -74,16 +126,21 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
     if (!res) return std::unexpected(res.error());
 
     // 3. Корректировка времени (Partial Edges)
-    // TdAltRouter считает полное время всех ребер в path.
-    // Нам нужно: прибавить время от старта до конца первого ребра, 
-    // и вычесть время, которое мы НЕ проедем в конце целевого ребра.
-    // Пока используем константу DUMMY_EDGE_TIME как время проезда целого ребра.
-    uint32_t start_penalty = static_cast<uint32_t>((1.0f - start.offset) * DUMMY_EDGE_TIME);
-    uint32_t target_discount = static_cast<uint32_t>((1.0f - target.offset) * DUMMY_EDGE_TIME);
+    uint32_t start_penalty = static_cast<uint32_t>((1.0f - start.offset) * start_time_full);
+    uint32_t target_discount = static_cast<uint32_t>((1.0f - target.offset) * target_time_full);
 
     traffic::RouteResponse final_res;
     final_res.total_time = res->total_weight + start_penalty - target_discount;
     final_res.path = std::move(res->path);
+    
+    // Суммируем реальную длину всего пути
+    final_res.total_length_m = 0.0f;
+    for (size_t i = 0; i < final_res.path.size(); ++i) {
+        float edge_len = CalculateEdgeLength(final_res.path[i]);
+        if (i == 0) edge_len *= (1.0f - start.offset);
+        if (i == final_res.path.size() - 1 && final_res.path.size() > 1) edge_len *= target.offset;
+        final_res.total_length_m += edge_len;
+    }
     
     return final_res;
 }
@@ -98,6 +155,7 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
 
     traffic::RouteResponse global_res;
     global_res.total_time = 0;
+    global_res.total_length_m = 0.0f;
     uint32_t current_time = start_time;
 
     for (size_t i = 0; i < waypoints.size() - 1; ++i) {
@@ -105,6 +163,7 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
         if (!segment_res) return segment_res;
 
         global_res.total_time += segment_res->total_time;
+        global_res.total_length_m += segment_res->total_length_m;
         current_time += segment_res->total_time;
 
         // Конкатенация пути с дедупликацией на стыках
