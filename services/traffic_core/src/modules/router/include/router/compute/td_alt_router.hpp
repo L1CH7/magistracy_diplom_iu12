@@ -106,6 +106,8 @@ public:
         return result;
     }
 
+    [[nodiscard]] uint32_t num_nodes() const noexcept { return static_cast<uint32_t>(node_states_.size()); }
+
 private:
     traffic::GraphView view_;
     ALTHeuristicModule heuristic_module_;

@@ -31,7 +31,7 @@ public:
             return;
         }
 
-        ptr_ = mmap(nullptr, size_, PROT_READ, MAP_PRIVATE, fd_, 0);
+        ptr_ = mmap(nullptr, size_, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd_, 0);
         if (ptr_ == MAP_FAILED) {
             close(fd_);
             throw std::system_error(errno, std::generic_category(), "Failed to mmap " + filepath);

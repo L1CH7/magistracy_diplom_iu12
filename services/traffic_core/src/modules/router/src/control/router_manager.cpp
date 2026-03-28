@@ -32,6 +32,12 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
     uint32_t start_time
 ) {
     if (!router_) return std::unexpected(std::string("Router not initialized"));
+    
+    if (start_node_idx >= router_->num_nodes() || target_node_idx >= router_->num_nodes()) {
+        return std::unexpected(std::format("Node index out of range: start={}, target={}, max={}", 
+                                          start_node_idx, target_node_idx, router_->num_nodes()));
+    }
+
     return router_->find_path(start_node_idx, target_node_idx);
 }
 
