@@ -29,7 +29,8 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
         uint32_t rtree_nodes_count;
         std::memcpy(&rtree_nodes_count, rtree_ptr, sizeof(rtree_nodes_count));
         const traffic::FlatBVHNode* rtree_nodes = reinterpret_cast<const traffic::FlatBVHNode*>(rtree_ptr + sizeof(rtree_nodes_count));
-        spatial_index_ = std::make_unique<traffic::common::SpatialIndex>(rtree_nodes, rtree_nodes_count);
+        spatial_index_ = std::make_unique<traffic::common::SpatialIndex>(
+            rtree_nodes, rtree_nodes_count, mapped_graph_.geometry_store.get());
     }
 
     return {};

@@ -2,6 +2,7 @@
 
 #include "common/graph_types.hpp"
 #include "common/mmap_region.hpp"
+#include "common/geometry_store.hpp"
 #include <memory>
 #include <filesystem>
 #include <string>
@@ -10,9 +11,10 @@
 namespace traffic::router::control {
 
 struct MappedGraph {
-    std::unique_ptr<common::MmapRegion> csr_region;
-    std::unique_ptr<common::MmapRegion> landmarks_region;
-    std::unique_ptr<common::MmapRegion> rtree_region;
+    std::unique_ptr<traffic::common::MmapRegion> csr_region;
+    std::unique_ptr<traffic::common::MmapRegion> landmarks_region;
+    std::unique_ptr<traffic::common::MmapRegion> rtree_region;
+    std::unique_ptr<traffic::common::GeometryStore> geometry_store;
     GraphView view;
 
     bool load(const std::string& data_dir) {
@@ -53,7 +55,16 @@ struct MappedGraph {
             // Load R-Tree if it exists
             auto rtree_path = base / "r-tree.bin";
             if (fs::exists(rtree_path)) {
-                rtree_region = std::make_unique<common::MmapRegion>(rtree_path.string());
+                rtree_region = std::make_unique<traffic::common::MmapRegion>(rtree_path.string());
+            }
+
+            // Load Geometry Store if it exists
+            auto geom_path = base / "geometry_flat.bin";
+            if (fs::exists(geom_path)) {
+                geometry_store = std::make_unique<traffic::common::GeometryStore>();
+                if (!geometry_store->load(geom_path.string())) {
+                    geometry_store.reset();
+                }
             }
             
             return true;
