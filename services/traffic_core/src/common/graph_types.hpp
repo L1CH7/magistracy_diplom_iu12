@@ -18,6 +18,18 @@ struct RoutingResult {
     std::vector<NodeID> path;
 };
 
+// Точка маршрута (привязка к конкретному ребру и смещение на нем)
+struct RoutePoint { 
+    NodeID edge_id; 
+    float offset; // Доля пройденного пути по ребру (от 0.0f до 1.0f)
+};
+
+// Финальный ответ роутера
+struct RouteResponse { 
+    uint32_t total_time;     // Итоговое время маршрута
+    std::vector<NodeID> path; // Последовательность ID ребер
+};
+
 // Структура для R-Tree (32 байта, половина кэш-линии)
 #pragma pack(push, 1)
 struct FlatBVHNode {
