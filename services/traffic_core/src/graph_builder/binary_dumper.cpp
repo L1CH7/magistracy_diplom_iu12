@@ -473,24 +473,57 @@ std::expected<void, std::string> BinaryDumper::DumpSpatialGrid() {
             }
         }
 
-        DrawProgressBar(70, "Flattening Grid to SoA Arrays...");
-        // 3. Упаковываем динамические векторы в два плоских массива (Offsets и Data)
+        DrawProgressBar(70, "Flattening Grid to AVX2 SoA Blocks...");
+        // 3. Упаковываем в блоки по 8 для SIMD
         std::vector<uint32_t> cell_offsets(rows * cols + 1, 0);
-        std::vector<uint32_t> cell_nodes;
+        std::vector<float> soa_data; // min_x[8], min_y[8], max_x[8], max_y[8], ids[8]
         
-        uint32_t current_offset = 0;
+        uint32_t current_block_offset = 0;
         for (size_t i = 0; i < grid.size(); ++i) {
-            cell_offsets[i] = current_offset;
-            cell_nodes.insert(cell_nodes.end(), grid[i].begin(), grid[i].end());
-            current_offset += static_cast<uint32_t>(grid[i].size());
-        }
-        cell_offsets.back() = current_offset;
+            cell_offsets[i] = current_block_offset;
+            auto& cell_edges = grid[i];
+            
+            // Дополняем до кратности 8
+            while (cell_edges.size() % 8 != 0 || cell_edges.empty()) {
+                cell_edges.push_back(traffic::INVALID_NODE);
+                if (cell_edges.size() % 8 == 0) break;
+            }
 
-        DrawProgressBar(90, "Writing spatial_grid.bin...");
+            for (size_t b = 0; b < cell_edges.size(); b += 8) {
+                // Записываем блок SoA (5 массивов по 8 элементов)
+                // 1-4: BBoxes
+                for (int j = 0; j < 8; ++j) {
+                    uint32_t id = cell_edges[b + j];
+                    soa_data.push_back(id == traffic::INVALID_NODE ? 1e18f : ram_nodes_[id].min_x);
+                }
+                for (int j = 0; j < 8; ++j) {
+                    uint32_t id = cell_edges[b + j];
+                    soa_data.push_back(id == traffic::INVALID_NODE ? 1e18f : ram_nodes_[id].min_y);
+                }
+                for (int j = 0; j < 8; ++j) {
+                    uint32_t id = cell_edges[b + j];
+                    soa_data.push_back(id == traffic::INVALID_NODE ? -1e18f : ram_nodes_[id].max_x);
+                }
+                for (int j = 0; j < 8; ++j) {
+                    uint32_t id = cell_edges[b + j];
+                    soa_data.push_back(id == traffic::INVALID_NODE ? -1e18f : ram_nodes_[id].max_y);
+                }
+                // 5: Edge IDs
+                for (int j = 0; j < 8; ++j) {
+                    uint32_t id = cell_edges[b + j];
+                    uint32_t raw_id = (id == traffic::INVALID_NODE) ? 0xFFFFFFFF : id;
+                    soa_data.push_back(*reinterpret_cast<float*>(&raw_id)); // Bit-cast to float for unified storage
+                }
+                current_block_offset += 8;
+            }
+        }
+        cell_offsets.back() = current_block_offset;
+
+        DrawProgressBar(90, "Writing spatial_grid.bin (AVX2-Ready)...");
         std::ofstream out("/app/data/spatial_grid.bin", std::ios::binary);
         if (!out) return std::unexpected("Cannot write spatial_grid.bin");
 
-        // 4. Заголовок бинарного файла (Метаданные сетки)
+        // 4. Заголовок
         out.write(reinterpret_cast<const char*>(&min_x), sizeof(min_x));
         out.write(reinterpret_cast<const char*>(&min_y), sizeof(min_y));
         out.write(reinterpret_cast<const char*>(&max_x), sizeof(max_x));
@@ -499,11 +532,22 @@ std::expected<void, std::string> BinaryDumper::DumpSpatialGrid() {
         out.write(reinterpret_cast<const char*>(&cols), sizeof(cols));
         out.write(reinterpret_cast<const char*>(&rows), sizeof(rows));
         
-        // 5. Дамп плоских массивов
-        uint32_t total_nodes_in_cells = static_cast<uint32_t>(cell_nodes.size());
-        out.write(reinterpret_cast<const char*>(&total_nodes_in_cells), sizeof(total_nodes_in_cells));
+        uint32_t total_padded_nodes = static_cast<uint32_t>(soa_data.size() / 5);
+        out.write(reinterpret_cast<const char*>(&total_padded_nodes), sizeof(total_padded_nodes));
+        
+        // 5. Офсеты (они указывают на начало SoA-блока в элементах, кратно 8)
         out.write(reinterpret_cast<const char*>(cell_offsets.data()), cell_offsets.size() * sizeof(uint32_t));
-        out.write(reinterpret_cast<const char*>(cell_nodes.data()), cell_nodes.size() * sizeof(uint32_t));
+
+        // 6. Выравнивание (Padding до 32 байт для AVX2)
+        size_t current_pos = static_cast<size_t>(out.tellp());
+        size_t alignment_needed = (32 - (current_pos % 32)) % 32;
+        if (alignment_needed > 0) {
+            std::vector<char> pad(alignment_needed, 0);
+            out.write(pad.data(), pad.size());
+        }
+
+        // 7. SoA Data
+        out.write(reinterpret_cast<const char*>(soa_data.data()), soa_data.size() * sizeof(float));
 
         DrawProgressBar(100, "Flat Spatial Grid generated successfully!");
         std::println("");
