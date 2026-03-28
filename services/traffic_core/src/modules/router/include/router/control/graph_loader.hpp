@@ -13,7 +13,7 @@ namespace traffic::router::control {
 struct MappedGraph {
     std::unique_ptr<traffic::common::MmapRegion> csr_region;
     std::unique_ptr<traffic::common::MmapRegion> landmarks_region;
-    std::unique_ptr<traffic::common::MmapRegion> rtree_region;
+    std::unique_ptr<traffic::common::MmapRegion> spatial_grid_region;
     std::unique_ptr<traffic::common::GeometryStore> geometry_store;
     traffic::GraphView view;
 
@@ -52,10 +52,10 @@ struct MappedGraph {
                 landmarks_region = std::make_unique<common::MmapRegion>(lm_path.string());
             }
 
-            // Load R-Tree if it exists
-            auto rtree_path = base / "r-tree.bin";
-            if (fs::exists(rtree_path)) {
-                rtree_region = std::make_unique<traffic::common::MmapRegion>(rtree_path.string());
+            // Load Spatial Grid if it exists
+            auto grid_path = base / "spatial_grid.bin";
+            if (fs::exists(grid_path)) {
+                spatial_grid_region = std::make_unique<traffic::common::MmapRegion>(grid_path.string());
             }
 
             // Load Geometry Store if it exists

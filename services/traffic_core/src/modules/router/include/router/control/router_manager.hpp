@@ -4,7 +4,7 @@
 #include "router/compute/td_alt_router.hpp"
 #include "router/control/graph_loader.hpp"
 #include "common/mmap_region.hpp"
-#include "common/spatial_index.hpp"
+#include "common/spatial_grid.hpp"
 #include <string>
 #include <expected>
 #include <memory>
@@ -78,7 +78,7 @@ private:
 
     MappedGraph mapped_graph_;
     std::unique_ptr<router::TdAltRouter> router_;
-    std::unique_ptr<traffic::common::SpatialIndex> spatial_index_;
+    std::unique_ptr<traffic::common::SpatialGrid> spatial_grid_;
 };
 
 } // namespace traffic::router::control

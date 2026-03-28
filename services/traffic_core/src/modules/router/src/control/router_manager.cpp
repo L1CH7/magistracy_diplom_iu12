@@ -26,27 +26,12 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
         router_->get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()));
     }
 
-    if (mapped_graph_.rtree_region) {
-        size_t rtree_size = mapped_graph_.rtree_region->size();
-        const uint8_t* rtree_ptr = static_cast<const uint8_t*>(mapped_graph_.rtree_region->data());
-        
-        if (rtree_size < sizeof(uint32_t)) {
-            return std::unexpected("r-tree.bin is too small (no header)");
+    if (mapped_graph_.spatial_grid_region) {
+        spatial_grid_ = std::make_unique<traffic::common::SpatialGrid>();
+        if (!spatial_grid_->load("/app/data/spatial_grid.bin", mapped_graph_.geometry_store.get())) {
+            return std::unexpected("Failed to load spatial_grid.bin");
         }
-
-        uint32_t rtree_nodes_count;
-        std::memcpy(&rtree_nodes_count, rtree_ptr, sizeof(rtree_nodes_count));
-        
-        size_t expected_rtree_size = sizeof(uint32_t) + rtree_nodes_count * sizeof(traffic::FlatBVHNode);
-        if (rtree_size < expected_rtree_size) {
-            return std::unexpected(std::format("r-tree.bin is truncated: has {} nodes, expected {} from file size", 
-                                             rtree_nodes_count, (rtree_size - 4) / sizeof(traffic::FlatBVHNode)));
-        }
-
-        const traffic::FlatBVHNode* rtree_nodes = reinterpret_cast<const traffic::FlatBVHNode*>(rtree_ptr + sizeof(rtree_nodes_count));
-        spatial_index_ = std::make_unique<traffic::common::SpatialIndex>(
-            rtree_nodes, static_cast<traffic::PointCount>(rtree_nodes_count), mapped_graph_.geometry_store.get());
-        LOG_INFO("Spatial index loaded: {} nodes", rtree_nodes_count);
+        LOG_INFO("Spatial grid loaded successfully (O(1) lookup enabled)");
     }
 
     return {};
@@ -168,10 +153,10 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteByCoords(
     float dst_x, float dst_y, 
     uint32_t start_time
 ) {
-    if (!spatial_index_) return std::unexpected(std::string("Spatial index not loaded"));
+    if (!spatial_grid_) return std::unexpected(std::string("Spatial grid not loaded"));
 
-    auto start_pt = spatial_index_->MapToEdge(src_x, src_y);
-    auto target_pt = spatial_index_->MapToEdge(dst_x, dst_y);
+    auto start_pt = spatial_grid_->MapToEdge(src_x, src_y);
+    auto target_pt = spatial_grid_->MapToEdge(dst_x, dst_y);
 
     if (start_pt.edge_id == traffic::INVALID_NODE || target_pt.edge_id == traffic::INVALID_NODE) {
         return std::unexpected(std::string("Failed to map coordinates to graph"));
@@ -184,14 +169,14 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
     const std::vector<std::pair<float, float>>& coords, 
     uint32_t start_time
 ) {
-    if (!spatial_index_) return std::unexpected(std::string("Spatial index not loaded"));
+    if (!spatial_grid_) return std::unexpected(std::string("Spatial grid not loaded"));
     if (coords.size() < 2) return std::unexpected(std::string("At least 2 coordinates required"));
 
     std::vector<traffic::RoutePoint> waypoints;
     waypoints.reserve(coords.size());
 
     for (const auto& cp : coords) {
-        auto wp = spatial_index_->MapToEdge(cp.first, cp.second);
+        auto wp = spatial_grid_->MapToEdge(cp.first, cp.second);
         if (wp.edge_id == traffic::INVALID_NODE) {
             return std::unexpected(std::format("Failed to map waypoint ({}, {}) to graph", cp.first, cp.second));
         }
