@@ -41,4 +41,77 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
     return router_->find_path(start_node_idx, target_node_idx);
 }
 
+std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTwo(
+    traffic::RoutePoint start, 
+    traffic::RoutePoint target, 
+    uint32_t start_time
+) {
+    if (!router_) return std::unexpected(std::string("Router not initialized"));
+
+    // 1. Случай: Старт и Финиш на одном ребре
+    if (start.edge_id == target.edge_id && start.offset <= target.offset) {
+        traffic::RouteResponse res;
+        res.path = {start.edge_id};
+        // Заглушка: 10 секунд на все ребро. Считаем пропорционально пройденному пути.
+        res.total_time = static_cast<uint32_t>((target.offset - start.offset) * 10.0f);
+        return res;
+    }
+
+    // 2. Обычный межреберный маршрут
+    auto res = Route(start.edge_id, target.edge_id, start_time);
+    if (!res) return std::unexpected(res.error());
+
+    // 3. Корректировка времени (Partial Edges)
+    // TdAltRouter считает полное время всех ребер в path.
+    // Нам нужно: прибавить время от старта до конца первого ребра, 
+    // и вычесть время, которое мы НЕ проедем в конце целевого ребра.
+    // Пока используем константу 10.0f как время проезда целого ребра.
+    uint32_t start_penalty = static_cast<uint32_t>((1.0f - start.offset) * 10.0f);
+    uint32_t target_discount = static_cast<uint32_t>((1.0f - target.offset) * 10.0f);
+
+    traffic::RouteResponse final_res;
+    final_res.total_time = res->total_weight + start_penalty - target_discount;
+    final_res.path = std::move(res->path);
+    
+    return final_res;
+}
+
+std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoint(
+    const std::vector<traffic::RoutePoint>& waypoints, 
+    uint32_t start_time
+) {
+    if (waypoints.size() < 2) {
+        return std::unexpected(std::string("At least 2 waypoints required"));
+    }
+
+    traffic::RouteResponse global_res;
+    global_res.total_time = 0;
+    uint32_t current_time = start_time;
+
+    for (size_t i = 0; i < waypoints.size() - 1; ++i) {
+        auto segment_res = RouteBetweenTwo(waypoints[i], waypoints[i+1], current_time);
+        if (!segment_res) return segment_res;
+
+        global_res.total_time += segment_res->total_time;
+        current_time += segment_res->total_time;
+
+        // Конкатенация пути с дедупликацией на стыках
+        if (global_res.path.empty()) {
+            global_res.path = std::move(segment_res->path);
+        } else {
+            const auto& segment_path = segment_res->path;
+            size_t start_idx = 0;
+            // Конец предыдущего плеча совпадает с началом следующего
+            if (!segment_path.empty() && segment_path.front() == global_res.path.back()) {
+                start_idx = 1;
+            }
+            global_res.path.insert(global_res.path.end(), 
+                                 segment_path.begin() + start_idx, 
+                                 segment_path.end());
+        }
+    }
+
+    return global_res;
+}
+
 } // namespace traffic::router::control

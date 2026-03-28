@@ -8,6 +8,7 @@
 #include <expected>
 #include <memory>
 #include <cstdint>
+#include <vector>
 
 namespace traffic::router::control {
 
@@ -25,6 +26,19 @@ public:
     std::expected<traffic::RoutingResult, std::string> Route(
         uint32_t start_node_idx, 
         uint32_t target_node_idx, 
+        uint32_t start_time = 0
+    );
+
+    // Маршрут между двумя точками с учетом смещения (offset) на начальном и конечном ребрах
+    std::expected<traffic::RouteResponse, std::string> RouteBetweenTwo(
+        traffic::RoutePoint start, 
+        traffic::RoutePoint target, 
+        uint32_t start_time = 0
+    );
+
+    // Маршрут через N точек (waypoints)
+    std::expected<traffic::RouteResponse, std::string> RouteMultipoint(
+        const std::vector<traffic::RoutePoint>& waypoints, 
         uint32_t start_time = 0
     );
 
