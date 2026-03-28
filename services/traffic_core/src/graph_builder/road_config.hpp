@@ -20,7 +20,7 @@ constexpr float MU_FRICTION = 0.6f;          // Коэффициент сцеп�
 constexpr float G_ACCEL = 9.81f;
 constexpr float PI      = 3.14159265f;
 
-constexpr uint32_t TURN_IMPASSABLE = std::numeric_limits<uint32_t>::max();
+constexpr traffic::PathWeight TURN_IMPASSABLE = traffic::INF_WEIGHT;
 
 struct RoadTypeConfig
 {

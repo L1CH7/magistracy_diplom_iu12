@@ -20,11 +20,16 @@
 using namespace traffic;
 
 static std::atomic<bool> keep_running(true);
+static std::atomic<int> signal_count(0);
 
 void signal_handler(int sig) {
     if (sig == SIGINT || sig == SIGTERM) {
+        if (++signal_count > 2) {
+            std::cerr << "\nПолучено более 3 сигналов. Принудительный выход..." << std::endl;
+            _exit(1);
+        }
         keep_running = false;
-        std::cout << "\nПолучен сигнал завершения. Останавливаем сервер..." << std::endl;
+        std::cout << "\nПолучен сигнал завершения. Останавливаем сервер (нажмите Ctrl+C еще 2 раза для форсированного выхода)..." << std::endl;
     }
 }
 
@@ -61,6 +66,7 @@ int main(int argc, char** argv) {
 
         int opt = 1;
         setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
         sockaddr_in address{};
         address.sin_family = AF_INET;
@@ -114,9 +120,8 @@ int main(int argc, char** argv) {
                     // --- CHILD PROCESS (Worker) ---
                     std::signal(SIGINT, SIG_DFL);
                     
-                    // Restart Quill Backend in the child process because threads are not inherited
-                    quill::BackendOptions backend_options;
-                    quill::Backend::start(backend_options);
+                    // Мы НЕ запускаем Quill Backend в ребенке, так как потоки не наследуются
+                    // и это гарантированно ведет к дедлокам при наличии открытых мьютексов.
 
                     std::stringstream ss_query(input_query);
                     std::string command;
@@ -138,7 +143,7 @@ int main(int argc, char** argv) {
                                     }
                                 }
                                 if (coords.size() >= 2) {
-                                    LOG_INFO("Worker {}: Routing ll with {} points", getpid(), coords.size());
+                                    std::cout << "[Worker " << getpid() << "] Routing ll with " << coords.size() << " points\n";
                                     route_result = manager.RouteMultipointByCoords(coords);
                                 } else {
                                     route_result = std::unexpected("Insufficient valid coordinates");
@@ -150,14 +155,14 @@ int main(int argc, char** argv) {
                                 std::vector<traffic::RoutePoint> wps;
                                 wps.reserve(n_ids);
                                 for (int i = 0; i < n_ids; ++i) {
-                                    traffic::NodeID id;
+                                    traffic::EdgeID id;
                                     float off;
                                     if (ss_query >> id >> off) {
                                         wps.push_back({id, off});
                                     }
                                 }
                                 if (wps.size() >= 2) {
-                                    LOG_INFO("Worker {}: Routing id with {} points", getpid(), wps.size());
+                                    std::cout << "[Worker " << getpid() << "] Routing id with " << wps.size() << " points\n";
                                     route_result = manager.RouteMultipoint(wps);
                                 } else {
                                     route_result = std::unexpected("Insufficient valid waypoints");
@@ -172,7 +177,7 @@ int main(int argc, char** argv) {
                             }
                         }
                     } catch (const std::exception& e) {
-                        LOG_ERROR("Worker CRASH: {}", e.what());
+                        std::cerr << "[Worker CRASH] " << e.what() << "\n";
                         _exit(1);
                     }
 
@@ -181,13 +186,13 @@ int main(int argc, char** argv) {
 
                     std::stringstream ss_resp;
                     if (route_result) {
-                        LOG_DEBUG("Worker: SUCCESS. Time: {}s, Latency: {:.3f}ms", route_result->total_time, ms);
+                        std::cout << "[Worker " << getpid() << "] SUCCESS. Time: " << route_result->total_time << "s, Latency: " << ms << "ms\n";
                         ss_resp << "SUCCESS | Time: " << route_result->total_time << "s | "
                                 << "Distance: " << std::fixed << std::setprecision(1) << route_result->total_length_m << "m | "
                                 << "Latency: " << std::fixed << std::setprecision(3) << ms << "ms | "
                                 << "Segments: " << route_result->path.size() << "\n";
                     } else {
-                        LOG_ERROR("Worker: FAILED. Error: {}", route_result.error());
+                        std::cerr << "[Worker " << getpid() << "] FAILED. Error: " << route_result.error() << "\n";
                         ss_resp << "ERROR | " << route_result.error() << " | Latency: " << std::fixed << std::setprecision(3) << ms << "ms\n";
                     }
                     

@@ -7,11 +7,15 @@ namespace traffic {
 
 using NodeID = uint32_t;
 using EdgeID = uint32_t;
+using BVHNodeID = uint32_t;
+using PointCount = uint32_t;
 using EdgeWeight = uint16_t; // Вес одного сегмента (в CSR) - 2 байта
 using PathWeight = uint32_t; // Накопленный вес маршрута (g_score) - 4 байта
+using SegmentOffset = float; // Доля пройденного пути по ребру (0.0f - 1.0f)
 
 constexpr PathWeight INF_WEIGHT = 0xFFFFFFFF;
 constexpr NodeID INVALID_NODE = 0xFFFFFFFF;
+constexpr BVHNodeID INVALID_BVH_NODE = 0xFFFFFFFF;
 
 struct RoutingResult {
     PathWeight total_weight = INF_WEIGHT;
@@ -20,24 +24,24 @@ struct RoutingResult {
 
 // Точка маршрута (привязка к конкретному ребру и смещение на нем)
 struct RoutePoint { 
-    NodeID edge_id; 
-    float offset; // Доля пройденного пути по ребру (от 0.0f до 1.0f)
+    EdgeID edge_id; 
+    SegmentOffset offset; 
 };
 
 // Финальный ответ роутера
 struct RouteResponse { 
     uint32_t total_time;     // Итоговое время маршрута
     float total_length_m = 0.0f; // Физическая длина маршрута в метрах
-    std::vector<NodeID> path; // Последовательность ID ребер
+    std::vector<EdgeID> path; // Последовательность ID ребер
 };
 
 // Структура для R-Tree (32 байта, половина кэш-линии)
 #pragma pack(push, 1)
 struct FlatBVHNode {
     float min_x, min_y, max_x, max_y;
-    uint32_t left_child;
-    uint32_t right_child;
-    uint32_t node_id;
+    BVHNodeID left_child;
+    BVHNodeID right_child;
+    EdgeID node_id; // Store EdgeID in leaf nodes
     uint32_t _padding;
 };
 #pragma pack(pop)
@@ -79,8 +83,8 @@ struct GraphView {
     };
 
     [[nodiscard]] inline EdgeRange get_edges(NodeID u) const noexcept {
-        uint32_t start = row_ptr[u];
-        uint32_t end   = row_ptr[u + 1];
+        const uint32_t start = row_ptr[u];
+        const uint32_t end   = row_ptr[u + 1];
         return { {col_ind + start, static_weights + start}, {col_ind + end, static_weights + end} };
     }
 };

@@ -23,27 +23,27 @@ public:
 private:
     struct CSR 
     {
-        uint32_t n = 0;
-        uint32_t m = 0;
-        std::vector<uint32_t> ptr;
-        std::vector<NodeID> col;
-        std::vector<uint32_t> time;
+        traffic::PointCount n = 0;
+        traffic::EdgeID m = 0;
+        std::vector<traffic::EdgeID> ptr;
+        std::vector<traffic::NodeID> col;
+        std::vector<traffic::EdgeWeight> time;
     };
 
     std::expected<CSR, std::string> LoadCSR( const std::string & path );
     
-    std::vector<uint32_t> RunDijkstra( uint32_t start, const CSR & graph );
+    std::vector<traffic::PathWeight> RunDijkstra( traffic::NodeID start, const CSR & graph );
     
     // Strategy: Farthest Node (Generates boundary candidates)
-    std::vector<uint32_t> GenerateFarthestCandidates( const CSR & graph, int count );
+    std::vector<traffic::NodeID> GenerateFarthestCandidates( const CSR & graph, int count );
     
     // Strategy: Avoid (Generates candidates in sparse areas)
-    std::vector<uint32_t> GenerateAvoidCandidates( const CSR & graph, int count, const std::vector<uint32_t> & existing_pool );
+    std::vector<traffic::NodeID> GenerateAvoidCandidates( const CSR & graph, int count, const std::vector<traffic::NodeID> & existing_pool );
 
     // Strategy: MaxCover Stochastic Optimization
-    std::vector<uint32_t> OptimizeMaxCover( const std::vector<std::vector<uint32_t>> & to_L,
-                                            const std::vector<std::vector<uint32_t>> & from_L,
-                                            uint32_t num_nodes,
+    std::vector<traffic::NodeID> OptimizeMaxCover( const std::vector<std::vector<traffic::PathWeight>> & to_L,
+                                            const std::vector<std::vector<traffic::PathWeight>> & from_L,
+                                            traffic::PointCount num_nodes,
                                             int num_landmarks );
 };
 

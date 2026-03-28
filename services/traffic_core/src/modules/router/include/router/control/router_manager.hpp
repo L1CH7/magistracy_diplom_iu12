@@ -59,11 +59,11 @@ public:
     const traffic::GraphView& get_view() const { return mapped_graph_.view; }
 
     // Helpers for benchmarking
-    uint32_t num_nodes() const noexcept { return router_ ? router_->num_nodes() : 0; }
-    uint32_t num_edges() const noexcept { return mapped_graph_.geometry_store ? mapped_graph_.geometry_store->num_edges() : 0; }
+    traffic::PointCount num_nodes() const noexcept { return router_ ? router_->num_nodes() : 0; }
+    traffic::EdgeID num_edges() const noexcept { return mapped_graph_.geometry_store ? mapped_graph_.geometry_store->num_edges() : 0; }
     
     // Returns coords of the first point of the given edge
-    std::pair<float, float> get_edge_coords(traffic::NodeID edge_id) const noexcept {
+    std::pair<float, float> get_edge_coords(traffic::EdgeID edge_id) const noexcept {
         if (!mapped_graph_.geometry_store) return {0.0f, 0.0f};
         auto geom = mapped_graph_.geometry_store->get_geometry(edge_id);
         if (geom.empty()) return {0.0f, 0.0f};
@@ -72,9 +72,9 @@ public:
 
 private:
     // Вычисляет длину ребра в метрах на основе его реальной геометрии
-    float CalculateEdgeLength(traffic::NodeID edge_id) const;
+    float CalculateEdgeLength(traffic::EdgeID edge_id) const;
     // Оценивает время проезда по ребру (для вычисления смещений)
-    float CalculateEdgeTime(traffic::NodeID edge_id) const;
+    float CalculateEdgeTime(traffic::EdgeID edge_id) const;
 
     MappedGraph mapped_graph_;
     std::unique_ptr<router::TdAltRouter> router_;

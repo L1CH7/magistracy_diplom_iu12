@@ -14,11 +14,11 @@ static constexpr uint32_t VALUES_PER_LANDMARK = 2; // to_L and from_L
 
 class ALTHeuristicModule {
 public:
-    void set_landmarks(const uint16_t* ptr) { landmarks_ptr_ = ptr; }
-    const uint16_t* get_landmark_ptr() const { return landmarks_ptr_; }
+    void set_landmarks(const traffic::EdgeWeight* ptr) { landmarks_ptr_ = ptr; }
+    const traffic::EdgeWeight* get_landmark_ptr() const { return landmarks_ptr_; }
 
 private:
-    const uint16_t* landmarks_ptr_ = nullptr;
+    const traffic::EdgeWeight* landmarks_ptr_ = nullptr;
 };
 
 /**
@@ -28,7 +28,7 @@ private:
 struct alignas(64) NodeState {
     traffic::PathWeight g_score      = traffic::INF_WEIGHT;
     traffic::NodeID     parent_node  = traffic::INVALID_NODE;
-    uint32_t            visit_id     = 0;
+    traffic::PointCount visit_id     = 0;
 };
 
 class TdAltRouter {
@@ -50,8 +50,8 @@ public:
             return res;
         }
         
-        const uint16_t* landmarks = heuristic_module_.get_landmark_ptr();
-        const uint16_t* target_l_ptr = (landmarks && target != traffic::INVALID_NODE) ? 
+        const traffic::EdgeWeight* landmarks = heuristic_module_.get_landmark_ptr();
+        const traffic::EdgeWeight* target_l_ptr = (landmarks && target != traffic::INVALID_NODE) ? 
                                        (landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)) : nullptr;
         
         ALTHeuristic alt;
@@ -87,7 +87,7 @@ public:
                     node_states_[v].visit_id = current_visit_id_;
 
                     traffic::PathWeight h_v = (landmarks && target_l_ptr) ? 
-                                       alt.get_heuristic_avx2(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK), target_l_ptr) : 0;
+                                       alt.get_heuristic_avx2(reinterpret_cast<const uint16_t*>(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), reinterpret_cast<const uint16_t*>(target_l_ptr)) : 0;
                     pq_.push({new_g + h_v, v});
                 }
             }
@@ -116,7 +116,7 @@ private:
     ALTHeuristicModule heuristic_module_;
     std::vector<NodeState> node_states_;
     PriorityQueue pq_;
-    uint32_t current_visit_id_ = 0;
+    traffic::PointCount current_visit_id_ = 0;
 };
 
 } // namespace traffic::router

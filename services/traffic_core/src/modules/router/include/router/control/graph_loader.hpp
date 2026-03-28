@@ -15,7 +15,7 @@ struct MappedGraph {
     std::unique_ptr<traffic::common::MmapRegion> landmarks_region;
     std::unique_ptr<traffic::common::MmapRegion> rtree_region;
     std::unique_ptr<traffic::common::GeometryStore> geometry_store;
-    GraphView view;
+    traffic::GraphView view;
 
     bool load(const std::string& data_dir) {
         try {

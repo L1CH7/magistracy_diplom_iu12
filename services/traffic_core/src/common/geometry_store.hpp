@@ -1,6 +1,6 @@
 #pragma once
-#include "common/graph_types.hpp"
-#include "common/mmap_region.hpp"
+#include "graph_types.hpp"
+#include "mmap_region.hpp"
 #include <memory>
 #include <span>
 #include <string>
@@ -23,16 +23,16 @@ public:
             size_t size = region_->size();
             const uint8_t* data = static_cast<const uint8_t*>(region_->data());
             
-            if (size < sizeof(uint32_t) * 2) return false;
-            num_edges_ = *reinterpret_cast<const uint32_t*>(data);
-            uint32_t total_points = *reinterpret_cast<const uint32_t*>(data + sizeof(uint32_t));
+            if (size < sizeof(traffic::EdgeID) * 2) return false;
+            num_edges_ = *reinterpret_cast<const traffic::EdgeID*>(data);
+            traffic::PointCount total_points = *reinterpret_cast<const traffic::PointCount*>(data + sizeof(traffic::EdgeID));
             
-            size_t min_offsets_size = sizeof(uint32_t) * 2 + (num_edges_ + 1) * sizeof(uint32_t);
+            size_t min_offsets_size = sizeof(traffic::EdgeID) * 2 + (num_edges_ + 1) * sizeof(uint32_t);
             if (size < min_offsets_size) return false;
 
-            offsets_ = reinterpret_cast<const uint32_t*>(data + sizeof(uint32_t) * 2);
+            offsets_ = reinterpret_cast<const uint32_t*>(data + sizeof(traffic::EdgeID) * 2);
             
-            uint32_t verified_total_points = offsets_[num_edges_];
+            traffic::PointCount verified_total_points = offsets_[num_edges_];
             if (verified_total_points != total_points) {
                 // Warning: data inconsistent, but we can continue or return error
             }
@@ -45,18 +45,18 @@ public:
         } catch (...) { return false; }
     }
 
-    [[nodiscard]] std::span<const Point2D> get_geometry(NodeID edge_id) const noexcept {
+    [[nodiscard]] std::span<const Point2D> get_geometry(traffic::EdgeID edge_id) const noexcept {
         if (!points_ || edge_id >= num_edges_) return {};
-        uint32_t start = offsets_[edge_id];
-        uint32_t end = offsets_[edge_id + 1];
+        const uint32_t start = offsets_[edge_id];
+        const uint32_t end = offsets_[edge_id + 1];
         return {points_ + start, end - start};
     }
 
-    [[nodiscard]] uint32_t num_edges() const noexcept { return num_edges_; }
+    [[nodiscard]] traffic::EdgeID num_edges() const noexcept { return num_edges_; }
 
 private:
     std::unique_ptr<MmapRegion> region_;
-    uint32_t num_edges_ = 0;
+    traffic::EdgeID num_edges_ = 0;
     const uint32_t* offsets_ = nullptr;
     const Point2D* points_ = nullptr;
 };

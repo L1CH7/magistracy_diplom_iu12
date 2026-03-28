@@ -2,7 +2,7 @@
 
 #include "geometry_store.hpp"
 #include "graph_types.hpp"
-#include "logger.hpp"
+#include <iostream>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -17,7 +17,7 @@ namespace traffic::common {
  */
 class SpatialIndex {
 public:
-  SpatialIndex(const FlatBVHNode *nodes, uint32_t num_nodes,
+  SpatialIndex(const FlatBVHNode *nodes, traffic::PointCount num_nodes,
                const GeometryStore *geom_store)
       : nodes_(nodes), num_nodes_(num_nodes), geom_store_(geom_store) {}
 
@@ -27,28 +27,26 @@ public:
    * @param py Широта (Y)
    * @return RoutePoint с ID ребра и смещением (0.0 - 1.0)
    */
-  [[nodiscard]] RoutePoint MapToEdge(float px, float py) const noexcept {
-    LOG_DEBUG("MapToEdge: query point ({}, {})", px, py);
+  [[nodiscard]] traffic::RoutePoint MapToEdge(float px, float py) const noexcept {
     if (num_nodes_ == 0 || !nodes_) {
-      LOG_ERROR("MapToEdge: index is empty or null!");
+      std::cerr << "[SpatialIndex] ERROR: index is empty or null!\n";
       return {traffic::INVALID_NODE, 0.0f};
     }
 
     float min_dist_sq = std::numeric_limits<float>::max();
-    traffic::NodeID best_node_id = traffic::INVALID_NODE;
-    float best_offset = 0.0f;
+    traffic::EdgeID best_node_id = traffic::INVALID_NODE;
+    traffic::SegmentOffset best_offset = 0.0f;
 
     // Стек для обхода дерева (фиксированный размер)
-    static constexpr size_t MAX_STACK_SIZE = 128;
-    uint32_t stack[MAX_STACK_SIZE];
+    static constexpr size_t MAX_STACK_SIZE = 512;
+    traffic::BVHNodeID stack[MAX_STACK_SIZE];
     uint32_t stack_ptr = 0;
     stack[stack_ptr++] = 0;
 
     while (stack_ptr > 0) {
-      uint32_t curr_idx = stack[--stack_ptr];
+      traffic::BVHNodeID curr_idx = stack[--stack_ptr];
       if (curr_idx >= num_nodes_) {
-        LOG_ERROR("SpatialIndex: node index {} out of bounds (max {})",
-                  curr_idx, num_nodes_);
+        std::cerr << "[SpatialIndex] ERROR: node index " << curr_idx << " out of bounds\n";
         continue;
       }
 
@@ -64,14 +62,10 @@ public:
       if (node.node_id != traffic::INVALID_NODE) {
         // Leaf Node
         if (!geom_store_) {
-          LOG_ERROR("SpatialIndex: GeometryStore is null!");
           continue;
         }
         auto geom = geom_store_->get_geometry(node.node_id);
         if (geom.size() < 2 || geom.size() > 1000000) {
-          if (geom.size() > 1000000) {
-            LOG_ERROR("SpatialIndex: Detected corrupt geometry size {} for node {}", geom.size(), node.node_id);
-          }
           continue;
         }
 
@@ -104,36 +98,34 @@ public:
                             : 0.0f;
         }
       } else {
-        // Internal Node
+        // Внутренний узел: добавляем дочерние элементы в стек с эвристикой Branch-and-Bound
         if (stack_ptr + 2 >= MAX_STACK_SIZE) {
-          LOG_WARN("SpatialIndex: stack full (ptr={}, max={})", stack_ptr,
-                   MAX_STACK_SIZE);
-          continue;
+          std::cerr << "[SpatialIndex] WARN: R-Tree stack overflow! Skipping branch.\n";
+          continue; 
         }
 
-        if (node.left_child != traffic::INVALID_NODE) {
-          if (node.left_child < num_nodes_)
-            stack[stack_ptr++] = node.left_child;
-          else
-            LOG_ERROR("SpatialIndex: left_child {} out of bounds",
-                      node.left_child);
-        }
-        if (node.right_child != traffic::INVALID_NODE) {
-          if (node.right_child < num_nodes_)
-            stack[stack_ptr++] = node.right_child;
-          else
-            LOG_ERROR("SpatialIndex: right_child {} out of bounds",
-                      node.right_child);
+        auto get_bbox_dist_sq = [px, py](const FlatBVHNode& n) {
+          float dx = std::max({0.0f, n.min_x - px, px - n.max_x});
+          float dy = std::max({0.0f, n.min_y - py, py - n.max_y});
+          return dx * dx + dy * dy;
+        };
+
+        float dist_left = (node.left_child != traffic::INVALID_NODE && node.left_child < num_nodes_) ? 
+                          get_bbox_dist_sq(nodes_[node.left_child]) : std::numeric_limits<float>::max();
+        float dist_right = (node.right_child != traffic::INVALID_NODE && node.right_child < num_nodes_) ? 
+                           get_bbox_dist_sq(nodes_[node.right_child]) : std::numeric_limits<float>::max();
+
+        // Кладем в стек сначала более дальнего ребенка, чтобы ближний оказался на вершине стека
+        if (dist_left < dist_right) {
+          if (dist_right < min_dist_sq && node.right_child != traffic::INVALID_NODE) stack[stack_ptr++] = node.right_child;
+          if (dist_left < min_dist_sq && node.left_child != traffic::INVALID_NODE)  stack[stack_ptr++] = node.left_child;
+        } else {
+          if (dist_left < min_dist_sq && node.left_child != traffic::INVALID_NODE)  stack[stack_ptr++] = node.left_child;
+          if (dist_right < min_dist_sq && node.right_child != traffic::INVALID_NODE) stack[stack_ptr++] = node.right_child;
         }
       }
     }
 
-    if (best_node_id != traffic::INVALID_NODE) {
-      LOG_DEBUG("MapToEdge SUCCESS: point ({}, {}) -> edge {}, offset {:.3f}",
-                px, py, best_node_id, best_offset);
-    } else {
-      LOG_WARN("MapToEdge FAILED for point ({}, {})", px, py);
-    }
 
     return {best_node_id, best_offset};
   }
@@ -166,7 +158,7 @@ private:
   }
 
   const FlatBVHNode *nodes_ = nullptr;
-  uint32_t num_nodes_ = 0;
+  traffic::PointCount num_nodes_ = 0;
   const GeometryStore *geom_store_ = nullptr;
 };
 

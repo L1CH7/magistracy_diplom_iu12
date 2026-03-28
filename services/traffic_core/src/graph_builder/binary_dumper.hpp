@@ -11,11 +11,11 @@ namespace traffic::graph_builder
 
 // RamEdge и RamNode используют типы из graph_types.hpp
 struct RamEdge {
-    NodeID   from_node;     // Перемапленный индекс
-    NodeID   to_node;       // Перемапленный индекс
+    traffic::EdgeID from_node;     // Перемапленный индекс (eb_node_id)
+    traffic::EdgeID to_node;       // Перемапленный индекс (eb_node_id)
     float    angle_deg;     // Угол поворота
-    uint16_t turn_penalty_sec; // Вычисленный кинематический штраф
-    EdgeWeight static_weight; // Итоговый вес (СТРОГО uint16_t)
+    traffic::EdgeWeight turn_penalty_sec; // Вычисленный кинематический штраф
+    traffic::EdgeWeight static_weight;    // Итоговый вес (eb_edge_weight)
 };
 
 // FlatBVHNode теперь берется из ../common/graph_types.hpp

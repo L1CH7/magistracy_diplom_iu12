@@ -34,7 +34,7 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
     }
 
     const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
-    traffic::NodeID num_nodes;
+    traffic::PointCount num_nodes;
     std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
 
     router_ = std::make_unique<TdAltRouter>(mapped_graph_.view, num_nodes);
@@ -62,7 +62,7 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
 
         const traffic::FlatBVHNode* rtree_nodes = reinterpret_cast<const traffic::FlatBVHNode*>(rtree_ptr + sizeof(rtree_nodes_count));
         spatial_index_ = std::make_unique<traffic::common::SpatialIndex>(
-            rtree_nodes, rtree_nodes_count, mapped_graph_.geometry_store.get());
+            rtree_nodes, static_cast<traffic::PointCount>(rtree_nodes_count), mapped_graph_.geometry_store.get());
         LOG_INFO("Spatial index loaded: {} nodes", rtree_nodes_count);
     }
 
@@ -84,7 +84,7 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
     return router_->find_path(start_node_idx, target_node_idx);
 }
 
-float RouterManager::CalculateEdgeLength(traffic::NodeID edge_id) const {
+float RouterManager::CalculateEdgeLength(traffic::EdgeID edge_id) const {
     if (!mapped_graph_.geometry_store) return 0.0f;
     auto geom = mapped_graph_.geometry_store->get_geometry(edge_id);
     if (geom.size() < 2) return 0.0f;
@@ -96,7 +96,7 @@ float RouterManager::CalculateEdgeLength(traffic::NodeID edge_id) const {
     return len;
 }
 
-float RouterManager::CalculateEdgeTime(traffic::NodeID edge_id) const {
+float RouterManager::CalculateEdgeTime(traffic::EdgeID edge_id) const {
     float len = CalculateEdgeLength(edge_id);
     if (len == 0.0f) return 10.0f; // Фоллбек
     return len / 13.8f; // ~50 км/ч
