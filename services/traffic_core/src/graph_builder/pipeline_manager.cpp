@@ -125,6 +125,13 @@ std::expected<void, std::string> PipelineManager::RunPipeline()
         if( IsStageComplete( "edge_based_graph" ) )
         {
             if( auto r = sql.PrintGraphStats( true ); !r ) return std::unexpected( r.error() );
+
+            // 8. Isolate EB-LCC (Cleaning fragments after TR)
+            if( overwrite_ || !IsStageComplete( "eb_lcc_isolated" ) )
+            {
+                if( auto r = sql.IsolateEbLCC(); !r ) return std::unexpected( r.error() );
+                RecordStageComplete( "eb_lcc_isolated" );
+            }
         }
     }
     else

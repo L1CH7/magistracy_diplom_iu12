@@ -20,6 +20,7 @@ public:
     std::expected<void, std::string> PopulateAttributes();
     std::expected<void, std::string> IsolateLCC();
     std::expected<void, std::string> BuildEdgeBasedGraph();
+    std::expected<void, std::string> IsolateEbLCC();
     
     std::expected<void, std::string> PrintGraphStats( bool include_eb );
 
@@ -27,6 +28,7 @@ private:
     void ExecuteQuery( std::string_view query_name, std::string_view sql );
     int64_t GetTableCount( std::string_view table_name );
     void LogLccDistribution();
+    void LogEbLccDistribution();
 
 private:
     std::string conn_str_;

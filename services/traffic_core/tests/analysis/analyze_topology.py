@@ -1,90 +1,65 @@
 import asyncio
 import asyncpg
-from services.common.config import load_settings
+import os
+
+# Manual DSN since we are outside the container usually
+DSN = "postgresql://postgres:postgres@localhost:5432/nav_mas"
 
 async def main():
-    settings = load_settings()
-    dsn = f"postgresql://{settings.db.user}:{settings.db.password}@{settings.db.host}:{settings.db.port}/{settings.db.name}"
+    print(f"Connecting to {DSN}...")
+    try:
+        conn = await asyncpg.connect(DSN)
+    except Exception as e:
+        print(f"Failed to connect: {e}")
+        return
     
-    print(f"Connecting to {dsn}...")
-    conn = await asyncpg.connect(dsn)
+    print("\n--- Edge-Based Topology Analysis (with Turn Restrictions) ---")
     
-    print("Analyzing Connected Components (this might take a moment)...")
-    
-    # 1. Get Component Distribution
+    # Считаем компоненты в EB-графе
+    # Узлы - это eb_nodes (направленные сегменты), ребра - eb_edges (маневры)
     query_components = """
         SELECT component, count(*) as size
         FROM pgr_connectedComponents(
-            'SELECT id, source_id as source, target_id as target, 
-             cost, reverse_cost 
-             FROM graphs.edges'
+            'SELECT id, from_eb_node as source, to_eb_node as target, 1.0 as cost 
+             FROM graphs.eb_edges'
         )
         GROUP BY component
         ORDER BY size DESC
+        LIMIT 20;
     """
     
-    output_lines = []
-    def log(msg):
-        print(msg)
-        output_lines.append(str(msg))
-
     try:
         rows = await conn.fetch(query_components)
+        total_eb_nodes = await conn.fetchval("SELECT count(*) FROM graphs.eb_nodes")
         
-        total_nodes = sum(r['size'] for r in rows)
         if not rows:
-             log("No components found!")
+             print("No components found in graphs.eb_edges! Did you run the builder?")
              return
 
-        main_component = rows[0]
-        islands = rows[1:]
+        print(f"Total EB-Nodes: {total_eb_nodes}")
+        print(f"Components Found: {len(rows)} (top 20 shown)")
+        print(f"{'Comp ID':<10} | {'Size':<10} | {'% of Total'}")
+        print("-" * 35)
         
-        log(f"\nTotal Nodes Processed: {total_nodes}")
-        log(f"Components Found: {len(rows)}")
-        log(f"Main Component Size: {main_component['size']} ({main_component['size']/total_nodes*100:.2f}%)")
-        log(f"Number of Isolated Islands: {len(islands)}")
-        
-        if islands:
-            log("\n--- Top 10 Largest Islands ---")
-            for i, r in enumerate(islands[:10]):
-                log(f"Island {r['component']}: {r['size']} nodes")
-                
-            # 2. Get Details for a specific Island
-            target_component = islands[0]['component']
-            log(f"\n--- Coordinates for Island {target_component} (Size: {islands[0]['size']}) ---")
+        for r in rows:
+            pct = (r['size'] / total_eb_nodes) * 100
+            print(f"{r['component']:<10} | {r['size']:<10} | {pct:.2f}%")
             
-            # Join with nodes table to get geometry
-            query_island_nodes = """
-                WITH comp AS (
-                    SELECT node 
-                    FROM pgr_connectedComponents(
-                        'SELECT id, source_id as source, target_id as target, 
-                         cost, reverse_cost 
-                         FROM graphs.edges'
-                    )
-                    WHERE component = $1
-                )
-                SELECT n.id, ST_Y(n.geom) as lat, ST_X(n.geom) as lon
-                FROM graphs.nodes n
-                JOIN comp c ON n.id = c.node
-                LIMIT 5
-            """
-            
-            island_nodes = await conn.fetch(query_island_nodes, target_component)
-            for node in island_nodes:
-                log(f"Node {node['id']}: {node['lat']}, {node['lon']}")
+        if len(rows) > 1:
+            main_pct = (rows[0]['size'] / total_eb_nodes) * 100
+            if main_pct < 100:
+                print(f"\n[WARNING] Edge-Based graph is FRAGMENTED!")
+                print(f"Main component covers only {main_pct:.2f}% of nodes.")
+                print("Turn Restrictions or oneway gaps likely created these fragments.")
+            else:
+                print("\n[SUCCESS] Edge-Based graph is fully connected.")
+        else:
+            print("\n[SUCCESS] Edge-Based graph is fully connected (1 component).")
 
-        # Write to file
-        import os
-        os.makedirs('/app/benchmarks/router/components', exist_ok=True)
-        with open('/app/benchmarks/router/components/topology_report.txt', 'w') as f:
-            f.write('\n'.join(output_lines))
-        print("\nReport saved to benchmarks/router/components/topology_report.txt")
-                
     except Exception as e:
         print(f"Analysis failed: {e}")
-        
-    await conn.close()
+    finally:
+        await conn.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

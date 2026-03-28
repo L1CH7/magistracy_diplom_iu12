@@ -344,6 +344,33 @@ void SqlOrchestrator::LogLccDistribution()
     }
 }
 
+void SqlOrchestrator::LogEbLccDistribution()
+{
+    try
+    {
+        pqxx::connection conn( conn_str_ );
+        pqxx::nontransaction work( conn );
+        auto res = work.exec( LOG_EB_LCC_DISTRIBUTION_SQL );
+
+        std::println( "\n=== TOP-10 EB-CONNECTED COMPONENTS (before EB-LCC isolation) ===" );
+        std::println( "{:<12} {:>12} {:>10}", "Component", "Nodes", "% of total" );
+        std::println( "{:-<36}", "" );
+        for( size_t i = 0; i < res.size(); ++i )
+        {
+            auto row = res[ i ];
+            std::println( "{:<12} {:>12} {:>9.2f}%",
+                          row[ 0 ].as<int64_t>(),
+                          row[ 1 ].as<int64_t>(),
+                          row[ 2 ].as<double>() );
+        }
+        std::println( "=========================================================" );
+    }
+    catch( const std::exception & e )
+    {
+        std::println( stderr, "LogEbLccDistribution failed: {}", e.what() );
+    }
+}
+
 std::expected<void, std::string> SqlOrchestrator::IsolateLCC()
 {
     try
@@ -400,12 +427,36 @@ std::expected<void, std::string> SqlOrchestrator::BuildEdgeBasedGraph()
         }
 
         int64_t eb_edges = GetTableCount( "graphs.eb_edges" );
-        std::println( "   EB-Edges created: {} legal maneuvers", eb_edges );
+        std::println( "   EB-Edges created:   {} legal maneuvers", eb_edges );
         return {};
     }
     catch( const std::exception & e )
     {
         return std::unexpected( std::format( "BuildEdgeBasedGraph failed: {}", e.what() ) );
+    }
+}
+
+std::expected<void, std::string> SqlOrchestrator::IsolateEbLCC()
+{
+    try
+    {
+        std::println( "\n-> Step 7: Isolating EB-LCC (Cleaning fragments created by TR)" );
+        LogEbLccDistribution();
+
+        pqxx::connection conn( conn_str_ );
+        pqxx::work       work( conn );
+
+        std::println( "-> Deleting isolated EB-nodes..." );
+        work.exec( ISOLATE_EB_LCC_SQL );
+        work.commit();
+
+        DrawProgressBar( 100, "Isolated Largest Edge-Based Connected Component!" );
+        std::println( "" );
+        return {};
+    }
+    catch( const std::exception & e )
+    {
+        return std::unexpected( std::format( "IsolateEbLCC failed: {}", e.what() ) );
     }
 }
 

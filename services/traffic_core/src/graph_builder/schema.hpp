@@ -682,4 +682,48 @@ FROM classified;
 ANALYZE graphs.eb_edges;
 )";
 
+// ============================================================================
+// STAGE 7: ИЗОЛЯЦИЯ EB-ГРАФА (Очистка фрагментов после TR)
+// ============================================================================
+
+constexpr std::string_view LOG_EB_LCC_DISTRIBUTION_SQL = R"(
+SELECT
+    component,
+    COUNT(*) AS node_count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS pct_total
+FROM pgr_connectedComponents(
+    'SELECT id, from_eb_node AS source, to_eb_node AS target, 1.0 AS cost FROM graphs.eb_edges'
+)
+GROUP BY component
+ORDER BY node_count DESC
+LIMIT 10;
+)";
+
+constexpr std::string_view ISOLATE_EB_LCC_SQL = R"(
+-- 1. Находим узлы самой большой компоненты в Edge-Based графе
+CREATE TEMP TABLE temp_valid_eb_nodes AS
+WITH components AS (
+    SELECT component, node 
+    FROM pgr_connectedComponents('SELECT id, from_eb_node as source, to_eb_node as target, 1.0 as cost FROM graphs.eb_edges')
+),
+component_sizes AS (
+    SELECT component, count(*) as size FROM components GROUP BY component
+),
+largest AS (
+    SELECT component FROM component_sizes ORDER BY size DESC LIMIT 1
+)
+SELECT node FROM components WHERE component = (SELECT component FROM largest);
+
+CREATE UNIQUE INDEX idx_temp_valid_eb_nodes ON temp_valid_eb_nodes(node);
+
+-- 2. Удаляем все направленные сегменты, которые не входят в GCC
+DELETE FROM graphs.eb_nodes 
+WHERE NOT EXISTS (SELECT 1 FROM temp_valid_eb_nodes WHERE node = id);
+
+-- 3. Cleanup
+DROP TABLE temp_valid_eb_nodes;
+ANALYZE graphs.eb_nodes;
+ANALYZE graphs.eb_edges;
+)";
+
 } // namespace traffic::graph_builder
