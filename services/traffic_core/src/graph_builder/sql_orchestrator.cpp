@@ -180,7 +180,7 @@ std::expected<void, std::string> SqlOrchestrator::GridNoding()
                         floor((ST_Y(ST_Centroid(geom)) - {2}) / NULLIF({3}, 0))::int as gy,
                         count(*)::int as cnt
                     FROM graphs.edge_candidates
-                    WHERE is_ground = TRUE AND geom IS NOT NULL
+                    WHERE geom IS NOT NULL
                     GROUP BY 1, 2
                 ) t
                 WHERE gx IS NOT NULL AND gy IS NOT NULL
@@ -243,8 +243,7 @@ std::expected<void, std::string> SqlOrchestrator::GridNoding()
         DrawProgressBar( 100, "Noding Grid Tiles Complete!" );
         std::println( "" );
 
-        std::println( "-> Sub-step 2/3: Merging results and copying bridges..." );
-        ExecuteQuery( "Copy Bridges", std::string( COPY_BRIDGES_SQL ) );
+        std::println( "-> Sub-step 2/3: Partitioned noding complete." );
 
         std::println( "-> Sub-step 3/3: Building GiST/B-Tree Indexes & Analyzing (this may take a while)..." );
         ExecuteQuery( "Index Merged", std::string( INDEX_MERGED_SQL ) );

@@ -65,7 +65,8 @@ CREATE TABLE graphs.edges (
     current_load     INT      DEFAULT 0,
     effective_speed_kmh FLOAT DEFAULT 60.0,
     cost             FLOAT,
-    reverse_cost     FLOAT
+    reverse_cost     FLOAT,
+    z_layer          INT DEFAULT 0
 );
 CREATE INDEX idx_graphs_edges_source ON graphs.edges(source_id);
 CREATE INDEX idx_graphs_edges_target ON graphs.edges(target_id);
@@ -76,7 +77,6 @@ CREATE INDEX idx_graphs_edges_geom   ON graphs.edges USING GIST(geometry);
 // STAGE 1: ИЗВЛЕЧЕНИЕ КАНДИДАТОВ (с фильтрами доступа и барьеров)
 // ============================================================================
 constexpr std::string_view INIT_CANDIDATES_SQL = R"(
-DROP TABLE IF EXISTS graphs.edge_candidates CASCADE;
 CREATE TABLE graphs.edge_candidates (
     id       BIGINT,
     tags     JSONB,
@@ -87,7 +87,7 @@ CREATE TABLE graphs.edge_candidates (
     source   INT,
     target   INT,
     geom     GEOMETRY(LineString, 4326),
-    is_ground BOOLEAN
+    z_layer  INT DEFAULT 0
 );
 )";
 
@@ -99,7 +99,7 @@ CREATE TABLE graphs.edge_candidates (
 //   4. ST_SnapToGrid(0.000001 ≈ ~10 см) — гарантированное совпадение
 //      вершин на границах тайлов после Grid Noding
 constexpr std::string_view INSERT_CANDIDATES_BATCH_SQL = R"(
-INSERT INTO graphs.edge_candidates (id, tags, highway, maxspeed, lanes, oneway, geom, is_ground)
+INSERT INTO graphs.edge_candidates (id, tags, highway, maxspeed, lanes, oneway, geom, z_layer)
 SELECT
     id,
     tags,
@@ -116,13 +116,14 @@ SELECT
         ST_Segmentize(geom::geography, 50)::geometry,
         0.00001
     ) AS geom,
-    CASE
-        WHEN tags->>'bridge'  IS NOT NULL                    THEN FALSE
-        WHEN tags->>'tunnel'  IS NOT NULL                    THEN FALSE
-        WHEN tags->>'layer'   IS NOT NULL
-             AND tags->>'layer' != '0'                       THEN FALSE
-        ELSE TRUE
-    END AS is_ground
+    COALESCE(
+        (tags->>'layer')::int,
+        CASE 
+            WHEN tags->>'bridge' IS NOT NULL THEN 1
+            WHEN tags->>'tunnel' IS NOT NULL THEN -1
+            ELSE 0
+        END
+    ) AS z_layer
 FROM osm.ways
 WHERE
     tags ? 'highway'
@@ -149,7 +150,7 @@ LIMIT {} OFFSET {};
 constexpr std::string_view INDEX_CANDIDATES_SQL = R"(
 CREATE INDEX idx_ec_geom     ON graphs.edge_candidates USING GIST(geom);
 CREATE INDEX idx_ec_id       ON graphs.edge_candidates(id);
-CREATE INDEX idx_ec_ground   ON graphs.edge_candidates(is_ground);
+CREATE INDEX idx_ec_z_layer  ON graphs.edge_candidates(z_layer);
 ANALYZE graphs.edge_candidates;
 )";
 
@@ -159,12 +160,13 @@ ANALYZE graphs.edge_candidates;
 constexpr std::string_view INIT_MERGED_SQL = R"(
 DROP TABLE IF EXISTS graphs.edge_candidates_merged CASCADE;
 CREATE TABLE graphs.edge_candidates_merged (
-    id     SERIAL PRIMARY KEY,
-    old_id BIGINT,
-    sub_id INT    DEFAULT 1,
-    source INT,
-    target INT,
-    geom   GEOMETRY(LineString, 4326)
+    id      SERIAL PRIMARY KEY,
+    old_id  BIGINT,
+    sub_id  INT    DEFAULT 1,
+    source  INT,
+    target  INT,
+    geom    GEOMETRY(LineString, 4326),
+    z_layer INT    DEFAULT 0
 );
 CREATE INDEX idx_ecm_geom ON graphs.edge_candidates_merged USING GIST(geom);
 )";
@@ -177,32 +179,32 @@ CREATE INDEX idx_ecm_geom ON graphs.edge_candidates_merged USING GIST(geom);
 constexpr std::string_view GRID_NODING_TILE_SQL = R"(
 WITH
 selection AS (
-    SELECT id, geom FROM graphs.edge_candidates
-    WHERE is_ground = TRUE
-      AND geom && ST_Expand(ST_MakeEnvelope({0}, {1}, {2}, {3}, 4326), 0.001)
+    SELECT id, geom, z_layer FROM graphs.edge_candidates
+    WHERE geom && ST_Expand(ST_MakeEnvelope({0}, {1}, {2}, {3}, 4326), 0.001)
 ),
 noded_geoms AS (
-    SELECT (ST_Dump(ST_Node(ST_Collect(geom)))).geom AS geom
+    -- Группируем по z_layer, чтобы ST_Node разрезал только внутри одного уровня
+    SELECT (ST_Dump(ST_Node(ST_Collect(geom)))).geom AS geom, z_layer
     FROM selection
+    GROUP BY z_layer
 ),
--- ST_SnapToGrid финализирует точность - вершины двух соседних тайлов,
--- которые были "почти одинаковыми", становятся математически идентичными
 snapped AS (
-    SELECT ST_SnapToGrid(geom, 0.00001) AS geom FROM noded_geoms
+    SELECT ST_SnapToGrid(geom, 0.00001) AS geom, z_layer FROM noded_geoms
     WHERE ST_Contains(ST_MakeEnvelope({0}, {1}, {2}, {3}, 4326), ST_Centroid(geom))
 )
-INSERT INTO graphs.edge_candidates_merged (old_id, geom)
+INSERT INTO graphs.edge_candidates_merged (old_id, geom, z_layer)
 SELECT DISTINCT ON (s.geom)
     e.id,
-    s.geom
+    s.geom,
+    s.z_layer
 FROM snapped s
-JOIN selection e ON ST_Intersects(s.geom, e.geom)
-               AND ST_Length(ST_Intersection(s.geom, e.geom)) > 0.9 * ST_Length(s.geom);
+JOIN selection e ON s.z_layer = e.z_layer 
+                AND ST_Intersects(s.geom, e.geom)
+                AND ST_Length(ST_Intersection(s.geom, e.geom)) > 0.9 * ST_Length(s.geom);
 )";
 
 constexpr std::string_view COPY_BRIDGES_SQL = R"(
-INSERT INTO graphs.edge_candidates_merged (old_id, geom)
-SELECT id, ST_SnapToGrid(geom, 0.00001) FROM graphs.edge_candidates WHERE is_ground = FALSE;
+SELECT 1; -- Больше не используется, всё нодируется с группировкой по слоям в GridNoding
 )";
 
 constexpr std::string_view INDEX_MERGED_SQL = R"(
@@ -282,7 +284,7 @@ TRUNCATE graphs.edges CASCADE;
 INSERT INTO graphs.edges (
     osm_way_id, source_id, target_id, geometry,
     length_m, speed_limit_kmh, lanes, oneway, highway_type,
-    osm_tags, max_speed, effective_speed_kmh, duration, is_open, cost, reverse_cost
+    osm_tags, max_speed, effective_speed_kmh, duration, is_open, cost, reverse_cost, z_layer
 )
 WITH calculated AS (
     SELECT
@@ -298,7 +300,7 @@ WITH calculated AS (
             ELSE 30.0
         END                               AS spd_limit,
         COALESCE(ec.lanes, 1)             AS lanes,
-        ec.oneway, ec.highway, ec.tags
+        ec.oneway, ec.highway, ec.tags, n.z_layer
     FROM graphs.edge_candidates_merged n
     JOIN graphs.edge_candidates ec ON n.old_id = ec.id
     WHERE n.source IS NOT NULL AND n.target IS NOT NULL
@@ -319,7 +321,8 @@ SELECT
     TRUE,
     -- cost=-1 означает "запрещено", pgr-конвенция
     CASE WHEN oneway = -1 THEN -1.0 ELSE t_free END,
-    CASE WHEN oneway =  1 THEN -1.0 ELSE t_free END
+    CASE WHEN oneway =  1 THEN -1.0 ELSE t_free END,
+    z_layer
 FROM with_time;
 )";
 
