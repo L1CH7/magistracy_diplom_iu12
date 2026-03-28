@@ -303,9 +303,31 @@ class OSMPBFImporter:
         # Шаг 0: Управление индексами
         await self._manage_indices('drop')
         
-        # Шаг 1: Очистка
+        # Шаг 1: Очистка и Инициализация
         conn = await asyncpg.connect(**db_settings)
+        await conn.execute("CREATE SCHEMA IF NOT EXISTS osm;")
         await conn.execute("SET search_path TO osm, public")
+        
+        # Убеждаемся, что таблицы существуют (self-healing)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS osm.barriers (
+                id BIGSERIAL PRIMARY KEY,
+                osm_id BIGINT NOT NULL,
+                geom geometry(Geometry, 4326) NOT NULL,
+                tags JSONB NOT NULL DEFAULT '{}'::jsonb,
+                barrier_type VARCHAR(50),
+                type VARCHAR(10) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS osm.turn_restrictions (
+                osm_id BIGINT PRIMARY KEY,
+                tags JSONB NOT NULL DEFAULT '{}'::jsonb,
+                members JSONB NOT NULL DEFAULT '[]'::jsonb
+            );
+        """)
+        
         await conn.execute("TRUNCATE osm.ways, osm.nodes, osm.barriers, osm.turn_restrictions RESTART IDENTITY CASCADE;")
         await conn.close()
 
