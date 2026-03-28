@@ -51,7 +51,7 @@ struct alignas(8) PQElement {
 
 // Zero-overhead CSR View
 struct GraphView {
-    const uint32_t*   row_ptr;
+    const EdgeID*     row_ptr;
     const NodeID*     col_ind;
     const EdgeWeight* static_weights;
 

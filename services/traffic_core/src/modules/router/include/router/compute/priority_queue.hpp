@@ -9,6 +9,7 @@ namespace traffic::router {
  * @brief Branchless 4-ary Heap for high-performance priority queue operations.
  */
 class PriorityQueue {
+    static constexpr size_t K = 4;
 public:
     inline void push(traffic::PQElement element) {
         heap_.push_back(element);
@@ -34,7 +35,7 @@ private:
     inline void sift_up(size_t idx) {
         traffic::PQElement val = heap_[idx];
         while (idx > 0) {
-            size_t parent = (idx - 1) / 4;
+            size_t parent = (idx - 1) / K;
             if (heap_[parent].weight <= val.weight) break;
             heap_[idx] = heap_[parent];
             idx = parent;
@@ -47,14 +48,14 @@ private:
         traffic::PQElement val = heap_[idx];
 
         while (true) {
-            size_t first_child = idx * 4 + 1;
+            size_t first_child = idx * K + 1;
             if (first_child >= size) break;
 
             size_t min_child = first_child;
             traffic::PathWeight min_weight = heap_[first_child].weight;
 
             #pragma GCC unroll 3
-            for (size_t offset = 1; offset < 4; ++offset) {
+            for (size_t offset = 1; offset < K; ++offset) {
                 size_t child_idx = first_child + offset;
                 bool valid = (child_idx < size);
                 traffic::PathWeight cw = valid ? heap_[child_idx].weight : traffic::INF_WEIGHT;

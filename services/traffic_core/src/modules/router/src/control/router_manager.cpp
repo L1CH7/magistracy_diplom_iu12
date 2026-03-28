@@ -14,8 +14,9 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
         return std::unexpected(std::string("Failed to mmap CSR graph from ") + data_dir);
     }
 
-    const uint32_t* header = reinterpret_cast<const uint32_t*>(mapped_graph_.csr_region->data());
-    uint32_t num_nodes = header[0];
+    const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
+    traffic::NodeID num_nodes;
+    std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
 
     router_ = std::make_unique<TdAltRouter>(mapped_graph_.view, num_nodes);
 
@@ -25,8 +26,9 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
 
     if (mapped_graph_.rtree_region) {
         const uint8_t* rtree_ptr = static_cast<const uint8_t*>(mapped_graph_.rtree_region->data());
-        uint32_t rtree_nodes_count = *reinterpret_cast<const uint32_t*>(rtree_ptr);
-        const FlatBVHNode* rtree_nodes = reinterpret_cast<const FlatBVHNode*>(rtree_ptr + 4);
+        uint32_t rtree_nodes_count;
+        std::memcpy(&rtree_nodes_count, rtree_ptr, sizeof(rtree_nodes_count));
+        const traffic::FlatBVHNode* rtree_nodes = reinterpret_cast<const traffic::FlatBVHNode*>(rtree_ptr + sizeof(rtree_nodes_count));
         spatial_index_ = std::make_unique<traffic::common::SpatialIndex>(rtree_nodes, rtree_nodes_count);
     }
 
@@ -34,8 +36,8 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
 }
 
 std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
-    uint32_t start_node_idx, 
-    uint32_t target_node_idx, 
+    traffic::NodeID start_node_idx, 
+    traffic::NodeID target_node_idx, 
     uint32_t start_time
 ) {
     if (!router_) return std::unexpected(std::string("Router not initialized"));
@@ -48,6 +50,8 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
     return router_->find_path(start_node_idx, target_node_idx);
 }
 
+static constexpr float DUMMY_EDGE_TIME = 10.0f;
+
 std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTwo(
     traffic::RoutePoint start, 
     traffic::RoutePoint target, 
@@ -59,8 +63,8 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
     if (start.edge_id == target.edge_id && start.offset <= target.offset) {
         traffic::RouteResponse res;
         res.path = {start.edge_id};
-        // Заглушка: 10 секунд на все ребро. Считаем пропорционально пройденному пути.
-        res.total_time = static_cast<uint32_t>((target.offset - start.offset) * 10.0f);
+        // Заглушка: DUMMY_EDGE_TIME секунд на все ребро. Считаем пропорционально пройденному пути.
+        res.total_time = static_cast<uint32_t>((target.offset - start.offset) * DUMMY_EDGE_TIME);
         return res;
     }
 
@@ -72,9 +76,9 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
     // TdAltRouter считает полное время всех ребер в path.
     // Нам нужно: прибавить время от старта до конца первого ребра, 
     // и вычесть время, которое мы НЕ проедем в конце целевого ребра.
-    // Пока используем константу 10.0f как время проезда целого ребра.
-    uint32_t start_penalty = static_cast<uint32_t>((1.0f - start.offset) * 10.0f);
-    uint32_t target_discount = static_cast<uint32_t>((1.0f - target.offset) * 10.0f);
+    // Пока используем константу DUMMY_EDGE_TIME как время проезда целого ребра.
+    uint32_t start_penalty = static_cast<uint32_t>((1.0f - start.offset) * DUMMY_EDGE_TIME);
+    uint32_t target_discount = static_cast<uint32_t>((1.0f - target.offset) * DUMMY_EDGE_TIME);
 
     traffic::RouteResponse final_res;
     final_res.total_time = res->total_weight + start_penalty - target_discount;
@@ -131,7 +135,7 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteByCoords(
     auto start_pt = spatial_index_->MapToEdge(src_x, src_y);
     auto target_pt = spatial_index_->MapToEdge(dst_x, dst_y);
 
-    if (start_pt.edge_id == INVALID_NODE || target_pt.edge_id == INVALID_NODE) {
+    if (start_pt.edge_id == traffic::INVALID_NODE || target_pt.edge_id == traffic::INVALID_NODE) {
         return std::unexpected(std::string("Failed to map coordinates to graph"));
     }
 
@@ -150,7 +154,7 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
 
     for (const auto& cp : coords) {
         auto wp = spatial_index_->MapToEdge(cp.first, cp.second);
-        if (wp.edge_id == INVALID_NODE) {
+        if (wp.edge_id == traffic::INVALID_NODE) {
             return std::unexpected(std::format("Failed to map waypoint ({}, {}) to graph", cp.first, cp.second));
         }
         waypoints.push_back(wp);

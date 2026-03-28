@@ -14,6 +14,7 @@
 #include "router/compute/td_alt_router.hpp"
 #include "router/control/graph_loader.hpp"
 #include "common/mmap_region.hpp"
+#include "common/graph_types.hpp"
 
 using namespace traffic;
 using namespace traffic::router;
@@ -45,8 +46,9 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Failed to load graph from " + data_dir);
         }
         
-        const uint32_t* header = reinterpret_cast<const uint32_t*>(mapped_graph.csr_region->data());
-        uint32_t num_nodes = header[0];
+        const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph.csr_region->data());
+        traffic::NodeID num_nodes;
+        std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
 
         TdAltRouter router(mapped_graph.view, num_nodes);
 
@@ -100,7 +102,7 @@ int main(int argc, char** argv) {
             char buffer[1024] = {0};
             int bytes_read = read(client_fd, buffer, 1024);
             if (bytes_read > 0) {
-                NodeID start_node, target_node;
+                traffic::NodeID start_node, target_node;
                 if (sscanf(buffer, "%u %u", &start_node, &target_node) == 2) {
                     auto start_time = std::chrono::high_resolution_clock::now();
                     auto result = router.find_path(start_node, target_node);

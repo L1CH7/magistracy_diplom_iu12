@@ -9,6 +9,9 @@
 
 namespace traffic::router {
 
+static constexpr uint32_t DEFAULT_PQ_CAPACITY = 2048;
+static constexpr uint32_t VALUES_PER_LANDMARK = 2; // to_L and from_L
+
 class ALTHeuristicModule {
 public:
     void set_landmarks(const uint16_t* ptr) { landmarks_ptr_ = ptr; }
@@ -30,11 +33,11 @@ struct alignas(64) NodeState {
 
 class TdAltRouter {
 public:
-    explicit TdAltRouter(traffic::GraphView view, uint32_t max_nodes) 
+    explicit TdAltRouter(traffic::GraphView view, traffic::NodeID max_nodes) 
         : view_(view) 
     {
         node_states_.resize(max_nodes);
-        pq_.reserve(2048);
+        pq_.reserve(DEFAULT_PQ_CAPACITY);
     }
 
     ALTHeuristicModule& get_heuristic() { return heuristic_module_; }
@@ -49,7 +52,7 @@ public:
         
         const uint16_t* landmarks = heuristic_module_.get_landmark_ptr();
         const uint16_t* target_l_ptr = (landmarks && target != traffic::INVALID_NODE) ? 
-                                       (landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * 2)) : nullptr;
+                                       (landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)) : nullptr;
         
         ALTHeuristic alt;
         current_visit_id_++;
@@ -68,7 +71,7 @@ public:
 
             // f_curr > g + h
             traffic::PathWeight g_u = node_states_[u].g_score;
-            traffic::PathWeight h_u = (landmarks && target_l_ptr) ? alt.get_heuristic_avx2(landmarks + (u * TRAFFIC_TOTAL_LANDMARKS * 2), target_l_ptr) : 0;
+            traffic::PathWeight h_u = (landmarks && target_l_ptr) ? alt.get_heuristic_avx2(landmarks + (u * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK), target_l_ptr) : 0;
             
             if (f_curr > g_u + h_u) continue;
 
@@ -84,7 +87,7 @@ public:
                     node_states_[v].visit_id = current_visit_id_;
 
                     traffic::PathWeight h_v = (landmarks && target_l_ptr) ? 
-                                       alt.get_heuristic_avx2(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * 2), target_l_ptr) : 0;
+                                       alt.get_heuristic_avx2(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK), target_l_ptr) : 0;
                     pq_.push({new_g + h_v, v});
                 }
             }
@@ -106,7 +109,7 @@ public:
         return result;
     }
 
-    [[nodiscard]] uint32_t num_nodes() const noexcept { return static_cast<uint32_t>(node_states_.size()); }
+    [[nodiscard]] traffic::NodeID num_nodes() const noexcept { return static_cast<traffic::NodeID>(node_states_.size()); }
 
 private:
     traffic::GraphView view_;

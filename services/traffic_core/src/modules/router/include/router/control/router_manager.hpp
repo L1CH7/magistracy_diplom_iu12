@@ -25,8 +25,8 @@ public:
     std::expected<void, std::string> LoadGraphs(const std::string& data_dir);
     
     std::expected<traffic::RoutingResult, std::string> Route(
-        uint32_t start_node_idx, 
-        uint32_t target_node_idx, 
+        traffic::NodeID start_node_idx, 
+        traffic::NodeID target_node_idx, 
         uint32_t start_time = 0
     );
 

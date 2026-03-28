@@ -34,13 +34,15 @@ struct MappedGraph {
             if (csr_region->empty()) return false;
 
             const uint8_t* ptr = static_cast<const uint8_t*>(csr_region->data());
-            uint32_t num_nodes, num_edges;
-            std::memcpy(&num_nodes, ptr, 4);
-            std::memcpy(&num_edges, ptr + 4, 4);
+            traffic::NodeID num_nodes;
+            traffic::EdgeID num_edges;
+            std::memcpy(&num_nodes, ptr, sizeof(num_nodes));
+            std::memcpy(&num_edges, ptr + sizeof(num_nodes), sizeof(num_edges));
 
-            view.row_ptr = reinterpret_cast<const uint32_t*>(ptr + 8);
-            view.col_ind = reinterpret_cast<const NodeID*>(ptr + 8 + (num_nodes + 1) * 4);
-            view.static_weights = reinterpret_cast<const EdgeWeight*>(ptr + 8 + (num_nodes + 1) * 4 + num_edges * 4);
+            size_t header_offset = sizeof(num_nodes) + sizeof(num_edges);
+            view.row_ptr = reinterpret_cast<const traffic::EdgeID*>(ptr + header_offset);
+            view.col_ind = reinterpret_cast<const traffic::NodeID*>(ptr + header_offset + (num_nodes + 1) * sizeof(traffic::EdgeID));
+            view.static_weights = reinterpret_cast<const traffic::EdgeWeight*>(ptr + header_offset + (num_nodes + 1) * sizeof(traffic::EdgeID) + num_edges * sizeof(traffic::NodeID));
 
             // Optional: Load landmarks if they exist
             auto lm_path = base / "landmarks.bin";

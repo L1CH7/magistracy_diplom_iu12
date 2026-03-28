@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/graph_types.hpp"
+#include "graph_types.hpp"
 #include <cmath>
 #include <algorithm>
 #include <utility>
@@ -24,14 +24,15 @@ public:
      * @return RoutePoint с ID ребра и смещением (0.0 - 1.0)
      */
     [[nodiscard]] RoutePoint MapToEdge(float px, float py) const noexcept {
-        if (num_nodes_ == 0 || !nodes_) return {INVALID_NODE, 0.0f};
+        if (num_nodes_ == 0 || !nodes_) return {traffic::INVALID_NODE, 0.0f};
 
         float min_dist_sq = std::numeric_limits<float>::max();
-        NodeID best_node_id = INVALID_NODE;
+        traffic::NodeID best_node_id = traffic::INVALID_NODE;
         float best_offset = 0.0f;
 
         // Стек для обхода дерева (фиксированный размер для исключения аллокаций)
-        uint32_t stack[64];
+        static constexpr size_t MAX_STACK_SIZE = 64;
+        uint32_t stack[MAX_STACK_SIZE];
         uint32_t stack_ptr = 0;
         stack[stack_ptr++] = 0; // Корень всегда в начале массива
 
@@ -47,7 +48,7 @@ public:
             // Если даже BBox дальше, чем уже найденная точка, скипаем всю ветку
             if (bbox_dist_sq >= min_dist_sq) continue;
 
-            if (node.node_id != INVALID_NODE) {
+            if (node.node_id != traffic::INVALID_NODE) {
                 // Лист: выполняем расчет проекции. 
                 // ВАЖНО: Пока нет геометрии всех точек ребра, считаем проекцию на диагональ BBox.
                 auto [dist_sq, offset] = ProjectPointOnSegment(px, py, node.min_x, node.min_y, node.max_x, node.max_y);
@@ -58,10 +59,8 @@ public:
                 }
             } else {
                 // Внутренний узел: добавляем дочерние элементы в стек
-                // Для ускорения можно было бы сначала класть в стек более далекого ребенка,
-                // чтобы первым обрабатывать более близкого (эвристика), но для плоского обхода достаточно и так.
-                if (node.left_child != 0xFFFFFFFF) stack[stack_ptr++] = node.left_child;
-                if (node.right_child != 0xFFFFFFFF) stack[stack_ptr++] = node.right_child;
+                if (node.left_child != traffic::INVALID_NODE) stack[stack_ptr++] = node.left_child;
+                if (node.right_child != traffic::INVALID_NODE) stack[stack_ptr++] = node.right_child;
             }
         }
 
