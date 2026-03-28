@@ -429,92 +429,87 @@ std::expected<void, std::string> BinaryDumper::DumpKMagic() {
     }
 }
 
-std::expected<void, std::string> BinaryDumper::DumpRTree() {
+std::expected<void, std::string> BinaryDumper::DumpSpatialGrid() {
     try {
         if (ram_nodes_.empty()) return std::unexpected("RAM nodes are empty.");
-        DrawProgressBar(0, "Calculating R-Tree Topology (BFS Layout)...");
+        DrawProgressBar(0, "Calculating Global BBox for Spatial Grid...");
 
-        // 1. Расчет топологии (число узлов на уровнях)
-        std::vector<uint32_t> layer_sizes;
-        uint32_t current_count = static_cast<uint32_t>(ram_nodes_.size());
-        layer_sizes.push_back(current_count);
-        uint32_t total_nodes = current_count;
-
-        while (current_count > 1) {
-            current_count = (current_count + 1) / 2;
-            layer_sizes.push_back(current_count);
-            total_nodes += current_count;
+        // 1. Вычисляем глобальный BBox графа
+        float min_x = 180.0f, min_y = 90.0f;
+        float max_x = -180.0f, max_y = -90.0f;
+        for (const auto& n : ram_nodes_) {
+            if (n.min_x < min_x) min_x = n.min_x;
+            if (n.min_y < min_y) min_y = n.min_y;
+            if (n.max_x > max_x) max_x = n.max_x;
+            if (n.max_y > max_y) max_y = n.max_y;
         }
 
-        DrawProgressBar(20, "Allocating BVH Tree Surface...");
-        // Единственная крупная аллокация
-        std::vector<FlatBVHNode> bvh_tree(total_nodes);
+        // Добавим padding (отступ), чтобы пограничные точки не вылетали за индексы массива
+        min_x -= 0.001f; min_y -= 0.001f;
+        max_x += 0.001f; max_y += 0.001f;
 
-        // 2. Офсеты уровней в плоском массиве (корень = 0)
-        std::vector<uint32_t> layer_offsets(layer_sizes.size());
-        uint32_t current_offset = 0;
-        for (int l = static_cast<int>(layer_sizes.size()) - 1; l >= 0; --l) {
-            layer_offsets[l] = current_offset;
-            current_offset += layer_sizes[l];
-        }
+        // Размер ячейки: 0.005 градусов (примерно 500x300 метров для Москвы)
+        constexpr float CELL_SIZE = 0.005f; 
+        uint32_t cols = static_cast<uint32_t>(std::ceil((max_x - min_x) / CELL_SIZE));
+        uint32_t rows = static_cast<uint32_t>(std::ceil((max_y - min_y) / CELL_SIZE));
 
-        DrawProgressBar(40, "Building Leaves (Layer H)...");
-        // 3. Слой листьев (уже отсортированы по Z-кривой)
-        uint32_t leaf_layer_offset = layer_offsets[0];
+        DrawProgressBar(20, std::format("Allocating Spatial Grid {}x{}...", cols, rows));
+        std::vector<std::vector<uint32_t>> grid(rows * cols);
+
+        DrawProgressBar(40, "Populating Grid Cells with Edge IDs...");
+        // 2. Раскидываем дороги по ячейкам, с которыми пересекается их BBox
         for (uint32_t i = 0; i < ram_nodes_.size(); ++i) {
-            FlatBVHNode& node = bvh_tree[leaf_layer_offset + i];
-            node.min_x = ram_nodes_[i].min_x; node.min_y = ram_nodes_[i].min_y;
-            node.max_x = ram_nodes_[i].max_x; node.max_y = ram_nodes_[i].max_y;
-            node.left_child = 0xFFFFFFFF;
-            node.right_child = 0xFFFFFFFF;
-            node.node_id = i; 
-            node._padding = 0;
-        }
+            const auto& n = ram_nodes_[i];
+            
+            uint32_t c_min = static_cast<uint32_t>(std::max(0.0f, (n.min_x - min_x) / CELL_SIZE));
+            uint32_t c_max = static_cast<uint32_t>(std::min(cols - 1.0f, (n.max_x - min_x) / CELL_SIZE));
+            uint32_t r_min = static_cast<uint32_t>(std::max(0.0f, (n.min_y - min_y) / CELL_SIZE));
+            uint32_t r_max = static_cast<uint32_t>(std::min(rows - 1.0f, (n.max_y - min_y) / CELL_SIZE));
 
-        DrawProgressBar(60, "Building Upper Layers (BFS Iteration)...");
-        // 4. Построение дерева снизу-вверх
-        for (uint32_t l = 1; l < layer_sizes.size(); ++l) {
-            uint32_t current_layer_offset = layer_offsets[l];
-            uint32_t child_layer_offset = layer_offsets[l-1];
-            uint32_t child_layer_size = layer_sizes[l-1];
-
-            for (uint32_t i = 0; i < layer_sizes[l]; ++i) {
-                FlatBVHNode& parent = bvh_tree[current_layer_offset + i];
-                uint32_t left_idx = child_layer_offset + (i * 2);
-                uint32_t right_idx = left_idx + 1;
-
-                const auto& left = bvh_tree[left_idx];
-                parent.min_x = left.min_x; parent.min_y = left.min_y;
-                parent.max_x = left.max_x; parent.max_y = left.max_y;
-                parent.left_child = left_idx;
-
-                if (i * 2 + 1 < child_layer_size) {
-                    const auto& right = bvh_tree[right_idx];
-                    parent.min_x = std::min(parent.min_x, right.min_x);
-                    parent.min_y = std::min(parent.min_y, right.min_y);
-                    parent.max_x = std::max(parent.max_x, right.max_x);
-                    parent.max_y = std::max(parent.max_y, right.max_y);
-                    parent.right_child = right_idx;
-                } else {
-                    parent.right_child = 0xFFFFFFFF;
+            for (uint32_t r = r_min; r <= r_max; ++r) {
+                for (uint32_t c = c_min; c <= c_max; ++c) {
+                    grid[r * cols + c].push_back(i);
                 }
-                parent.node_id = 0xFFFFFFFF;
-                parent._padding = 0;
             }
         }
 
-        DrawProgressBar(80, "Writing r-tree.bin...");
-        std::ofstream out("/app/data/r-tree.bin", std::ios::binary);
-        if (!out) return std::unexpected("Cannot write r-tree.bin");
+        DrawProgressBar(70, "Flattening Grid to SoA Arrays...");
+        // 3. Упаковываем динамические векторы в два плоских массива (Offsets и Data)
+        std::vector<uint32_t> cell_offsets(rows * cols + 1, 0);
+        std::vector<uint32_t> cell_nodes;
+        
+        uint32_t current_offset = 0;
+        for (size_t i = 0; i < grid.size(); ++i) {
+            cell_offsets[i] = current_offset;
+            cell_nodes.insert(cell_nodes.end(), grid[i].begin(), grid[i].end());
+            current_offset += static_cast<uint32_t>(grid[i].size());
+        }
+        cell_offsets.back() = current_offset;
 
-        out.write(reinterpret_cast<const char*>(&total_nodes), sizeof(total_nodes));
-        out.write(reinterpret_cast<const char*>(bvh_tree.data()), bvh_tree.size() * sizeof(FlatBVHNode));
+        DrawProgressBar(90, "Writing spatial_grid.bin...");
+        std::ofstream out("/app/data/spatial_grid.bin", std::ios::binary);
+        if (!out) return std::unexpected("Cannot write spatial_grid.bin");
 
-        DrawProgressBar(100, "BFS R-Tree generated successfully!");
+        // 4. Заголовок бинарного файла (Метаданные сетки)
+        out.write(reinterpret_cast<const char*>(&min_x), sizeof(min_x));
+        out.write(reinterpret_cast<const char*>(&min_y), sizeof(min_y));
+        out.write(reinterpret_cast<const char*>(&max_x), sizeof(max_x));
+        out.write(reinterpret_cast<const char*>(&max_y), sizeof(max_y));
+        out.write(reinterpret_cast<const char*>(&CELL_SIZE), sizeof(CELL_SIZE));
+        out.write(reinterpret_cast<const char*>(&cols), sizeof(cols));
+        out.write(reinterpret_cast<const char*>(&rows), sizeof(rows));
+        
+        // 5. Дамп плоских массивов
+        uint32_t total_nodes_in_cells = static_cast<uint32_t>(cell_nodes.size());
+        out.write(reinterpret_cast<const char*>(&total_nodes_in_cells), sizeof(total_nodes_in_cells));
+        out.write(reinterpret_cast<const char*>(cell_offsets.data()), cell_offsets.size() * sizeof(uint32_t));
+        out.write(reinterpret_cast<const char*>(cell_nodes.data()), cell_nodes.size() * sizeof(uint32_t));
+
+        DrawProgressBar(100, "Flat Spatial Grid generated successfully!");
         std::println("");
         return {};
     } catch (const std::exception& e) {
-        return std::unexpected(std::format("DumpRTree failed: {}", e.what()));
+        return std::unexpected(std::format("DumpSpatialGrid failed: {}", e.what()));
     }
 }
 

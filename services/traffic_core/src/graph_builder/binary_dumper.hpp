@@ -47,7 +47,7 @@ public:
     std::expected<void, std::string> DumpExtendedAttributes(); // ВМЕСТО DumpAttributes
     std::expected<void, std::string> DumpCSR();
     std::expected<void, std::string> DumpKMagic();
-    std::expected<void, std::string> DumpRTree();
+    std::expected<void, std::string> DumpSpatialGrid();
 
 private:
     std::string conn_str_;
