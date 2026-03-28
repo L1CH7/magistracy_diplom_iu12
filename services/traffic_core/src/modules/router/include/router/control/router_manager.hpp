@@ -4,6 +4,7 @@
 #include "router/compute/td_alt_router.hpp"
 #include "router/control/graph_loader.hpp"
 #include "common/mmap_region.hpp"
+#include "common/spatial_index.hpp"
 #include <string>
 #include <expected>
 #include <memory>
@@ -42,11 +43,25 @@ public:
         uint32_t start_time = 0
     );
 
+    // Маршрут между двумя координатами
+    std::expected<traffic::RouteResponse, std::string> RouteByCoords(
+        float src_x, float src_y, 
+        float dst_x, float dst_y, 
+        uint32_t start_time = 0
+    );
+
+    // Маршрут через N координат (waypoints)
+    std::expected<traffic::RouteResponse, std::string> RouteMultipointByCoords(
+        const std::vector<std::pair<float, float>>& coords, 
+        uint32_t start_time = 0
+    );
+
     const traffic::GraphView& get_view() const { return mapped_graph_.view; }
 
 private:
     MappedGraph mapped_graph_;
     std::unique_ptr<router::TdAltRouter> router_;
+    std::unique_ptr<traffic::common::SpatialIndex> spatial_index_;
 };
 
 } // namespace traffic::router::control

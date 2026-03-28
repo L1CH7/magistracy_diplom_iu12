@@ -23,6 +23,13 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
         router_->get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()));
     }
 
+    if (mapped_graph_.rtree_region) {
+        const uint8_t* rtree_ptr = static_cast<const uint8_t*>(mapped_graph_.rtree_region->data());
+        uint32_t rtree_nodes_count = *reinterpret_cast<const uint32_t*>(rtree_ptr);
+        const FlatBVHNode* rtree_nodes = reinterpret_cast<const FlatBVHNode*>(rtree_ptr + 4);
+        spatial_index_ = std::make_unique<traffic::common::SpatialIndex>(rtree_nodes, rtree_nodes_count);
+    }
+
     return {};
 }
 
@@ -112,6 +119,44 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
     }
 
     return global_res;
+}
+
+std::expected<traffic::RouteResponse, std::string> RouterManager::RouteByCoords(
+    float src_x, float src_y, 
+    float dst_x, float dst_y, 
+    uint32_t start_time
+) {
+    if (!spatial_index_) return std::unexpected(std::string("Spatial index not loaded"));
+
+    auto start_pt = spatial_index_->MapToEdge(src_x, src_y);
+    auto target_pt = spatial_index_->MapToEdge(dst_x, dst_y);
+
+    if (start_pt.edge_id == INVALID_NODE || target_pt.edge_id == INVALID_NODE) {
+        return std::unexpected(std::string("Failed to map coordinates to graph"));
+    }
+
+    return RouteBetweenTwo(start_pt, target_pt, start_time);
+}
+
+std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipointByCoords(
+    const std::vector<std::pair<float, float>>& coords, 
+    uint32_t start_time
+) {
+    if (!spatial_index_) return std::unexpected(std::string("Spatial index not loaded"));
+    if (coords.size() < 2) return std::unexpected(std::string("At least 2 coordinates required"));
+
+    std::vector<traffic::RoutePoint> waypoints;
+    waypoints.reserve(coords.size());
+
+    for (const auto& cp : coords) {
+        auto wp = spatial_index_->MapToEdge(cp.first, cp.second);
+        if (wp.edge_id == INVALID_NODE) {
+            return std::unexpected(std::format("Failed to map waypoint ({}, {}) to graph", cp.first, cp.second));
+        }
+        waypoints.push_back(wp);
+    }
+
+    return RouteMultipoint(waypoints, start_time);
 }
 
 } // namespace traffic::router::control
