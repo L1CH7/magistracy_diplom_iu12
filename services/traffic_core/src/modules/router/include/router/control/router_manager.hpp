@@ -66,8 +66,8 @@ public:
     std::pair<float, float> get_edge_coords(traffic::EdgeID edge_id) const noexcept {
         if (!mapped_graph_.geometry_store) return {0.0f, 0.0f};
         auto geom = mapped_graph_.geometry_store->get_geometry(edge_id);
-        if (geom.empty()) return {0.0f, 0.0f};
-        return {geom[0].x, geom[0].y};
+        if (geom.points.empty()) return {0.0f, 0.0f};
+        return {geom.points[0].x, geom.points[0].y};
     }
 
 private:

@@ -17,6 +17,17 @@ namespace traffic::graph_builder
 
 namespace
 {
+inline float GeoDistance(float lon1, float lat1, float lon2, float lat2) noexcept {
+    constexpr float R = 6371000.0f;
+    constexpr float DEG_TO_RAD = 3.14159265f / 180.0f;
+    float lat1_rad = lat1 * DEG_TO_RAD;
+    float lat2_rad = lat2 * DEG_TO_RAD;
+    float d_lon = (lon2 - lon1) * DEG_TO_RAD;
+    float d_lat = lat2_rad - lat1_rad;
+    float x = d_lon * std::cos((lat1_rad + lat2_rad) * 0.5f);
+    return R * std::sqrt(x * x + d_lat * d_lat);
+}
+
 void DrawProgressBar( int percent, std::string_view message )
 {
     constexpr int bar_width = 50;
@@ -332,33 +343,63 @@ std::expected<void, std::string> BinaryDumper::DumpExtendedAttributes() {
 
         std::vector<uint32_t> geom_offsets;
         geom_offsets.reserve(num_nodes + 1);
-        std::vector<float> all_coords;
-        all_coords.reserve(num_nodes * 10); // Эвристика
+        std::vector<float> all_coords; // Только X, Y (горячие данные)
+        std::vector<float> all_lens;   // Только accum_len (холодные данные)
+        all_coords.reserve(num_nodes * 20);
+        all_lens.reserve(num_nodes * 10);
 
         uint32_t current_offset = 0;
         for (const auto& n : ram_nodes_) {
             geom_offsets.push_back(current_offset);
-            if (n.wkb_geom.size() < 13) continue; // Минимум Линейка
+            if (n.wkb_geom.size() < 13) continue;
 
-            // Простеший парсер WKB (LineString)
-            // byte_order(1), type(4), count(4)
             uint32_t pt_count = 0;
             std::memcpy(&pt_count, &n.wkb_geom[5], 4);
             
             const double* pts = reinterpret_cast<const double*>(&n.wkb_geom[9]);
+            float current_accum = 0.0f;
+            float prev_x = 0.0f, prev_y = 0.0f;
+            
             for (uint32_t i = 0; i < pt_count; ++i) {
-                all_coords.push_back(static_cast<float>(pts[i*2]));   // x
-                all_coords.push_back(static_cast<float>(pts[i*2+1])); // y
+                float px = static_cast<float>(pts[i*2]);
+                float py = static_cast<float>(pts[i*2+1]);
+                if (i > 0) current_accum += GeoDistance(prev_x, prev_y, px, py);
+                
+                all_coords.push_back(px);
+                all_coords.push_back(py);
+                all_lens.push_back(current_accum);
+                
+                prev_x = px;
+                prev_y = py;
             }
             current_offset += pt_count;
         }
         geom_offsets.push_back(current_offset);
 
-        uint32_t total_points = static_cast<uint32_t>(all_coords.size() / 2);
+        uint32_t total_points = static_cast<uint32_t>(all_lens.size());
         out_geom.write(reinterpret_cast<const char*>(&num_nodes), sizeof(num_nodes));
         out_geom.write(reinterpret_cast<const char*>(&total_points), sizeof(total_points));
         out_geom.write(reinterpret_cast<const char*>(geom_offsets.data()), geom_offsets.size() * sizeof(uint32_t));
+
+        // Выравнивание до 8 байт для массива координат (Point2D)
+        size_t current_bytes = sizeof(num_nodes) + sizeof(total_points) + geom_offsets.size() * sizeof(uint32_t);
+        size_t padding = (8 - (current_bytes % 8)) % 8;
+        if (padding > 0) {
+            uint64_t pad_val = 0;
+            out_geom.write(reinterpret_cast<const char*>(&pad_val), padding);
+        }
+
         out_geom.write(reinterpret_cast<const char*>(all_coords.data()), all_coords.size() * sizeof(float));
+
+        // Выравнивание до 8 байт для массива длин
+        current_bytes += padding + all_coords.size() * sizeof(float);
+        padding = (8 - (current_bytes % 8)) % 8;
+        if (padding > 0) {
+            uint64_t pad_val = 0;
+            out_geom.write(reinterpret_cast<const char*>(&pad_val), padding);
+        }
+
+        out_geom.write(reinterpret_cast<const char*>(all_lens.data()), all_lens.size() * sizeof(float));
 
         DrawProgressBar(100, "Extended attributes and geometry ready!");
         std::println("");
@@ -391,79 +432,85 @@ std::expected<void, std::string> BinaryDumper::DumpKMagic() {
 std::expected<void, std::string> BinaryDumper::DumpRTree() {
     try {
         if (ram_nodes_.empty()) return std::unexpected("RAM nodes are empty.");
-        DrawProgressBar(0, "Building BVH R-Tree in RAM...");
+        DrawProgressBar(0, "Calculating R-Tree Topology (BFS Layout)...");
 
-        std::vector<FlatBVHNode> bvh_tree;
-        bvh_tree.reserve(ram_nodes_.size() * 2); // Резерв для бинарного дерева
+        // 1. Расчет топологии (число узлов на уровнях)
+        std::vector<uint32_t> layer_sizes;
+        uint32_t current_count = static_cast<uint32_t>(ram_nodes_.size());
+        layer_sizes.push_back(current_count);
+        uint32_t total_nodes = current_count;
 
-        // Массив индексов для сортировки при построении дерева
-        std::vector<uint32_t> indices(ram_nodes_.size());
-        std::iota(indices.begin(), indices.end(), 0);
+        while (current_count > 1) {
+            current_count = (current_count + 1) / 2;
+            layer_sizes.push_back(current_count);
+            total_nodes += current_count;
+        }
 
-        // Рекурсивная лямбда построения BVH
-        auto build_bvh = [&ram_nodes = ram_nodes_, &indices, &bvh_tree](this auto& self, uint32_t start, uint32_t end) -> uint32_t {
-            uint32_t node_idx = static_cast<uint32_t>(bvh_tree.size());
-            bvh_tree.push_back(FlatBVHNode{});
-            FlatBVHNode& node = bvh_tree[node_idx];
+        DrawProgressBar(20, "Allocating BVH Tree Surface...");
+        // Единственная крупная аллокация
+        std::vector<FlatBVHNode> bvh_tree(total_nodes);
+
+        // 2. Офсеты уровней в плоском массиве (корень = 0)
+        std::vector<uint32_t> layer_offsets(layer_sizes.size());
+        uint32_t current_offset = 0;
+        for (int l = static_cast<int>(layer_sizes.size()) - 1; l >= 0; --l) {
+            layer_offsets[l] = current_offset;
+            current_offset += layer_sizes[l];
+        }
+
+        DrawProgressBar(40, "Building Leaves (Layer H)...");
+        // 3. Слой листьев (уже отсортированы по Z-кривой)
+        uint32_t leaf_layer_offset = layer_offsets[0];
+        for (uint32_t i = 0; i < ram_nodes_.size(); ++i) {
+            FlatBVHNode& node = bvh_tree[leaf_layer_offset + i];
+            node.min_x = ram_nodes_[i].min_x; node.min_y = ram_nodes_[i].min_y;
+            node.max_x = ram_nodes_[i].max_x; node.max_y = ram_nodes_[i].max_y;
             node.left_child = 0xFFFFFFFF;
             node.right_child = 0xFFFFFFFF;
-            node.node_id = 0xFFFFFFFF;
+            node.node_id = i; 
             node._padding = 0;
+        }
 
-            // Считаем BBox текущего кластера
-            node.min_x = 180.0f; node.min_y = 90.0f;
-            node.max_x = -180.0f; node.max_y = -90.0f;
-            for (uint32_t i = start; i < end; ++i) {
-                const auto& n = ram_nodes[indices[i]];
-                if (n.min_x < node.min_x) node.min_x = n.min_x;
-                if (n.min_y < node.min_y) node.min_y = n.min_y;
-                if (n.max_x > node.max_x) node.max_x = n.max_x;
-                if (n.max_y > node.max_y) node.max_y = n.max_y;
+        DrawProgressBar(60, "Building Upper Layers (BFS Iteration)...");
+        // 4. Построение дерева снизу-вверх
+        for (uint32_t l = 1; l < layer_sizes.size(); ++l) {
+            uint32_t current_layer_offset = layer_offsets[l];
+            uint32_t child_layer_offset = layer_offsets[l-1];
+            uint32_t child_layer_size = layer_sizes[l-1];
+
+            for (uint32_t i = 0; i < layer_sizes[l]; ++i) {
+                FlatBVHNode& parent = bvh_tree[current_layer_offset + i];
+                uint32_t left_idx = child_layer_offset + (i * 2);
+                uint32_t right_idx = left_idx + 1;
+
+                const auto& left = bvh_tree[left_idx];
+                parent.min_x = left.min_x; parent.min_y = left.min_y;
+                parent.max_x = left.max_x; parent.max_y = left.max_y;
+                parent.left_child = left_idx;
+
+                if (i * 2 + 1 < child_layer_size) {
+                    const auto& right = bvh_tree[right_idx];
+                    parent.min_x = std::min(parent.min_x, right.min_x);
+                    parent.min_y = std::min(parent.min_y, right.min_y);
+                    parent.max_x = std::max(parent.max_x, right.max_x);
+                    parent.max_y = std::max(parent.max_y, right.max_y);
+                    parent.right_child = right_idx;
+                } else {
+                    parent.right_child = 0xFFFFFFFF;
+                }
+                parent.node_id = 0xFFFFFFFF;
+                parent._padding = 0;
             }
+        }
 
-            uint32_t count = end - start;
-            if (count == 1) {
-                // Лист
-                node.node_id = indices[start];
-                return node_idx;
-            }
-
-            // Находим самую длинную ось для сплита
-            float span_x = node.max_x - node.min_x;
-            float span_y = node.max_y - node.min_y;
-            int axis = (span_x > span_y) ? 0 : 1;
-
-            // Сортируем индексы по центру выбранной оси
-            std::sort(indices.begin() + start, indices.begin() + end, [&](uint32_t a, uint32_t b) {
-                const auto& na = ram_nodes[a];
-                const auto& nb = ram_nodes[b];
-                if (axis == 0) return (na.min_x + na.max_x) < (nb.min_x + nb.max_x);
-                return (na.min_y + na.max_y) < (nb.min_y + nb.max_y);
-            });
-
-            uint32_t mid = start + count / 2;
-            uint32_t left_child = self(start, mid);
-            uint32_t right_child = self(mid, end);
-
-            // ВАЖНО: ссылки могут инвалидироваться при push_back, поэтому переполучаем node
-            bvh_tree[node_idx].left_child = left_child;
-            bvh_tree[node_idx].right_child = right_child;
-
-            return node_idx;
-        };
-
-        DrawProgressBar(30, "Splitting Bounding Boxes...");
-        build_bvh(0, static_cast<uint32_t>(indices.size()));
-
-        DrawProgressBar(70, "Writing r-tree.bin...");
+        DrawProgressBar(80, "Writing r-tree.bin...");
         std::ofstream out("/app/data/r-tree.bin", std::ios::binary);
         if (!out) return std::unexpected("Cannot write r-tree.bin");
 
-        uint32_t total_nodes = static_cast<uint32_t>(bvh_tree.size());
         out.write(reinterpret_cast<const char*>(&total_nodes), sizeof(total_nodes));
         out.write(reinterpret_cast<const char*>(bvh_tree.data()), bvh_tree.size() * sizeof(FlatBVHNode));
 
-        DrawProgressBar(100, "In-Memory BVH R-Tree generated!");
+        DrawProgressBar(100, "BFS R-Tree generated successfully!");
         std::println("");
         return {};
     } catch (const std::exception& e) {

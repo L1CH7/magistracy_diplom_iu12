@@ -8,23 +8,6 @@
 
 namespace traffic::router::control {
 
-namespace {
-    // Быстрая равнопромежуточная проекция (Equirectangular approximation)
-    // x = lon, y = lat
-    inline float GeoDistance(float lon1, float lat1, float lon2, float lat2) noexcept {
-        constexpr float R = 6371000.0f; // Радиус Земли в метрах
-        constexpr float DEG_TO_RAD = std::numbers::pi_v<float> / 180.0f;
-        
-        float lat1_rad = lat1 * DEG_TO_RAD;
-        float lat2_rad = lat2 * DEG_TO_RAD;
-        float d_lon = (lon2 - lon1) * DEG_TO_RAD;
-        float d_lat = lat2_rad - lat1_rad;
-        
-        float x = d_lon * std::cos((lat1_rad + lat2_rad) * 0.5f);
-        return R * std::sqrt(x * x + d_lat * d_lat);
-    }
-}
-
 RouterManager::RouterManager() = default;
 RouterManager::~RouterManager() = default;
 
@@ -87,13 +70,8 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
 float RouterManager::CalculateEdgeLength(traffic::EdgeID edge_id) const {
     if (!mapped_graph_.geometry_store) return 0.0f;
     auto geom = mapped_graph_.geometry_store->get_geometry(edge_id);
-    if (geom.size() < 2) return 0.0f;
-    
-    float len = 0.0f;
-    for (size_t i = 0; i < geom.size() - 1; ++i) {
-        len += GeoDistance(geom[i].x, geom[i].y, geom[i+1].x, geom[i+1].y);
-    }
-    return len;
+    if (geom.accum_lens.size() < 2) return 0.0f;
+    return geom.accum_lens.back();
 }
 
 float RouterManager::CalculateEdgeTime(traffic::EdgeID edge_id) const {
