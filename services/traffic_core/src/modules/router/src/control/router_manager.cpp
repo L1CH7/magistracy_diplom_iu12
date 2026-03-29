@@ -10,6 +10,14 @@ namespace traffic::router::control {
 
 RouterManager::RouterManager() = default;
 RouterManager::~RouterManager() = default;
+ 
+traffic::PointCount RouterManager::num_nodes() const noexcept {
+    if (!mapped_graph_.csr_region) return 0;
+    const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
+    traffic::PointCount num_nodes;
+    std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
+    return num_nodes;
+}
 
 std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& data_dir) {
     if (!mapped_graph_.load(data_dir)) {
@@ -19,12 +27,6 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
     const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
     traffic::PointCount num_nodes;
     std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
-
-    router_ = std::make_unique<TdAltRouter>(mapped_graph_.view, num_nodes);
-
-    if (mapped_graph_.landmarks_region) {
-        router_->get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()));
-    }
 
     if (mapped_graph_.spatial_grid_region) {
         spatial_grid_ = std::make_unique<traffic::common::SpatialGrid>();
@@ -42,14 +44,31 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
     traffic::NodeID target_node_idx, 
     uint32_t start_time
 ) {
-    if (!router_) return std::unexpected(std::string("Router not initialized"));
+    if (!mapped_graph_.csr_region) return std::unexpected(std::string("Graphs not loaded"));
+
+    // Получаем количество узлов из уже загруженного графа
+    const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
+    traffic::PointCount num_nodes;
+    std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
+
+    // Изолированный роутер для каждого системного потока (Thread-Local Storage)
+    thread_local std::unique_ptr<TdAltRouter> tl_router = nullptr;
+
+    // Ленивая инициализация (сработает ровно 1 раз для каждого потока в пуле)
+    if (!tl_router) {
+        tl_router = std::make_unique<TdAltRouter>(mapped_graph_.view, num_nodes);
+        if (mapped_graph_.landmarks_region) {
+            tl_router->get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()));
+        }
+    }
     
-    if (start_node_idx >= router_->num_nodes() || target_node_idx >= router_->num_nodes()) {
+    if (start_node_idx >= num_nodes || target_node_idx >= num_nodes) {
         return std::unexpected(std::format("Node index out of range: start={}, target={}, max={}", 
-                                          start_node_idx, target_node_idx, router_->num_nodes()));
+                                          start_node_idx, target_node_idx, num_nodes));
     }
 
-    return router_->find_path_with_telemetry(start_node_idx, target_node_idx);
+    // Теперь вызов абсолютно потокобезопасен
+    return tl_router->find_path_with_telemetry(start_node_idx, target_node_idx);
 }
 
 float RouterManager::CalculateEdgeLength(traffic::EdgeID edge_id) const {
@@ -70,7 +89,6 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
     traffic::RoutePoint target, 
     uint32_t start_time
 ) {
-    if (!router_) return std::unexpected(std::string("Router not initialized"));
 
     float start_time_full = CalculateEdgeTime(start.edge_id);
     float target_time_full = CalculateEdgeTime(target.edge_id);

@@ -59,7 +59,8 @@ public:
     const traffic::GraphView& get_view() const { return mapped_graph_.view; }
 
     // Helpers for benchmarking
-    traffic::PointCount num_nodes() const noexcept { return router_ ? router_->num_nodes() : 0; }
+    // Helpers for benchmarking
+    traffic::PointCount num_nodes() const noexcept;
     traffic::EdgeID num_edges() const noexcept { return mapped_graph_.geometry_store ? mapped_graph_.geometry_store->num_edges() : 0; }
     
     // Returns coords of the first point of the given edge
@@ -77,7 +78,6 @@ private:
     float CalculateEdgeTime(traffic::EdgeID edge_id) const;
 
     MappedGraph mapped_graph_;
-    std::unique_ptr<router::TdAltRouter> router_;
     std::unique_ptr<traffic::common::SpatialGrid> spatial_grid_;
 };
 

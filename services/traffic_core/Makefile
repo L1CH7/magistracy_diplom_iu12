@@ -22,3 +22,8 @@ run-router: build-release
 		traffic_core /app/data
 
 test-router: run-router
+
+throughput-bench: build-builder
+	docker run --rm --init --network host \
+		-v $(shell pwd)/data:/app/data \
+		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark /app/data

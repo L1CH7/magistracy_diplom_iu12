@@ -34,7 +34,23 @@ public:
 
         for( unsigned i = 0; i < num_threads; ++i )
         {
-            workers_.emplace_back( [this]() {
+            workers_.emplace_back( [this, i, use_affinity, avoid_os_cores]() {
+#ifdef __linux__
+                if( use_affinity )
+                {
+                    unsigned core_id = i;
+                    if( avoid_os_cores )
+                    {
+                        core_id += 2;
+                    }
+                    
+                    cpu_set_t cpuset;
+                    CPU_ZERO( &cpuset );
+                    CPU_SET( core_id % std::thread::hardware_concurrency(), &cpuset );
+                    
+                    pthread_setaffinity_np( pthread_self(), sizeof( cpu_set_t ), &cpuset );
+                }
+#endif
                 while( true )
                 {
                     std::function< void() > task;
@@ -52,28 +68,6 @@ public:
                     }
                 }
             } );
-
-            if( use_affinity )
-            {
-#ifdef __linux__
-                // Пропускаем 0 и 1 ядро если requested
-                unsigned core_id = i;
-                if( avoid_os_cores )
-                {
-                    core_id += 2;
-                }
-                
-                cpu_set_t cpuset;
-                CPU_ZERO( &cpuset );
-                CPU_SET( core_id % std::thread::hardware_concurrency(), &cpuset );
-                
-                int rc = pthread_setaffinity_np( workers_.back().native_handle(), sizeof( cpu_set_t ), &cpuset );
-                if( rc != 0 )
-                {
-                    std::println( stderr, "Failed to set thread affinity for core {}", core_id );
-                }
-#endif
-            }
         }
     }
 

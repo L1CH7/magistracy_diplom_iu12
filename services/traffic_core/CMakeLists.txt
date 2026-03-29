@@ -50,3 +50,17 @@ target_link_libraries(traffic_core PRIVATE
 # EXECUTABLE: GRAPH BUILDER (Offline)
 # ============================
 add_subdirectory(src/graph_builder)
+
+# ============================
+# EXECUTABLE: BENCHMARKS
+# ============================
+add_executable(throughput_benchmark
+    tests/throughput_benchmark.cpp
+)
+
+target_include_directories(throughput_benchmark PRIVATE src)
+target_link_libraries(throughput_benchmark PRIVATE
+    quill::quill
+    concurrentqueue
+    traffic_router
+)
