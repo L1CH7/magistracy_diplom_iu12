@@ -64,3 +64,17 @@ target_link_libraries(throughput_benchmark PRIVATE
     concurrentqueue
     traffic_router
 )
+
+# ============================
+# EXECUTABLE: UNIT TESTS
+# ============================
+add_executable(test_dynamic_routing
+    tests/test_dynamic_routing.cpp
+)
+
+target_include_directories(test_dynamic_routing PRIVATE src)
+target_link_libraries(test_dynamic_routing PRIVATE
+    quill::quill
+    concurrentqueue
+    traffic_router
+)

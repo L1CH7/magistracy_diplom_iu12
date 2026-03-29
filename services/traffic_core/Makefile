@@ -27,3 +27,8 @@ throughput-bench: build-builder
 	docker run --rm --init --network host \
 		-v $(shell pwd)/data:/app/data \
 		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark /app/data
+
+test-dynamic: build-builder
+	docker run --rm --init --network host \
+		-v $(shell pwd)/data:/app/data \
+		traffic_core_builder /app/services/traffic_core/build/test_dynamic_routing
