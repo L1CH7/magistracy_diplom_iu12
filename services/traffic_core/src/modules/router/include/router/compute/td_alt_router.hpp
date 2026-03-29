@@ -76,6 +76,11 @@ public:
         const traffic::EdgeWeight* target_l_ptr = (landmarks && target != traffic::INVALID_NODE) ?
             (landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)) : nullptr;
         
+        PreloadedTarget preloaded_target;
+        if (target_l_ptr) {
+            preloaded_target.load(reinterpret_cast<const uint16_t*>(target_l_ptr));
+        }
+        
         current_visit_id_++;
         
         hot_states_[source].g_score = 0;
@@ -86,7 +91,7 @@ public:
         if (target_l_ptr) {
             h_source = alt.get_heuristic_avx2(
                 reinterpret_cast<const uint16_t*>(landmarks + (source * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
-                reinterpret_cast<const uint16_t*>(target_l_ptr)
+                preloaded_target
             );
             h_source = (h_source * WA_STAR_NUM) / WA_STAR_DEN;
         }
@@ -105,7 +110,7 @@ public:
             if (target_l_ptr) {
                 h_u = alt.get_heuristic_avx2(
                     reinterpret_cast<const uint16_t*>(landmarks + (u * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
-                    reinterpret_cast<const uint16_t*>(target_l_ptr)
+                    preloaded_target
                 );
                 h_u = (h_u * WA_STAR_NUM) / WA_STAR_DEN;
             }
@@ -113,9 +118,20 @@ public:
 
             _mm_prefetch(reinterpret_cast<const char*>(&view_.row_ptr[u + 1]), _MM_HINT_T0);
 
-            for (auto edge : view_.get_edges(u)) {
-                traffic::NodeID v = edge.to;
-                traffic::PathWeight w = edge.w;
+            auto edges = view_.get_edges(u);
+            auto it = edges.begin();
+            auto end = edges.end();
+
+            while (it != end) {
+                traffic::NodeID v = (*it).to;
+                traffic::PathWeight w = (*it).w;
+
+                // Software Lookahead Prefetching: тянем hot_states_ для следующего соседа
+                auto next_it = it;
+                ++next_it;
+                if (next_it != end) {
+                    _mm_prefetch(reinterpret_cast<const char*>(&hot_states_[(*next_it).to]), _MM_HINT_T0);
+                }
 
                 if constexpr (TrafficEnabled) {
                     traffic::AbsoluteTime arrival_time = start_time + g_u;
@@ -147,12 +163,13 @@ public:
                     if (target_l_ptr) {
                         h_v = alt.get_heuristic_avx2(
                             reinterpret_cast<const uint16_t*>(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
-                            reinterpret_cast<const uint16_t*>(target_l_ptr)
+                            preloaded_target
                         );
                         h_v = (h_v * WA_STAR_NUM) / WA_STAR_DEN;
                     }
                     pq_.push({new_g + h_v, v});
                 }
+                ++it;
             }
         }
 

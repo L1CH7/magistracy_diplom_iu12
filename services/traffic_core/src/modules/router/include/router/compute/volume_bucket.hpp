@@ -8,7 +8,7 @@ namespace traffic::router::compute {
 constexpr uint32_t BUCKET_INTERVAL_SEC = TRAFFIC_SLOT_SEC;
 constexpr uint32_t NUM_BUCKETS = TRAFFIC_NUM_BUCKETS;
 
-struct VolumeBucket {
+struct alignas(64) VolumeBucket {
     std::atomic<traffic::VolumeCount> volumes[NUM_BUCKETS];
     
     VolumeBucket() {
