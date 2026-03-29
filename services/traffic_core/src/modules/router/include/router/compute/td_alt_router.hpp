@@ -8,6 +8,7 @@
 #include "alt_heuristics.hpp"
 #include <x86intrin.h>
 #include "volume_bucket.hpp"
+
 namespace traffic::router::compute {
 
 static constexpr uint32_t DEFAULT_PQ_CAPACITY = 2048;
@@ -31,13 +32,11 @@ private:
 };
 
 /**
- * @brief NodeState holds dynamic search data. 
- * Aligned to 64 bytes for cache efficiency.
+ * @brief HotNodeState holds performance-critical data for the A* hot loop.
  */
-struct alignas(64) NodeState {
-    traffic::PathWeight g_score      = traffic::INF_WEIGHT;
-    traffic::NodeID     parent_node  = traffic::INVALID_NODE;
-    traffic::PointCount visit_id     = 0;
+struct HotNodeState {
+    traffic::PathWeight g_score  = traffic::INF_WEIGHT;
+    traffic::PointCount visit_id = 0;
 };
 
 class TdAltRouter {
@@ -45,7 +44,8 @@ public:
     explicit TdAltRouter(traffic::GraphView view, traffic::NodeID max_nodes) 
         : view_(view) 
     {
-        node_states_.resize(max_nodes);
+        hot_states_.resize(max_nodes);
+        cold_parents_.resize(max_nodes, traffic::INVALID_NODE);
         pq_.reserve(DEFAULT_PQ_CAPACITY);
     }
 
@@ -149,12 +149,12 @@ public:
 
         current_visit_id_++;
         
-        node_states_[source].g_score = 0;
-        node_states_[source].visit_id = current_visit_id_;
-        node_states_[source].parent_node = traffic::INVALID_NODE;
+        hot_states_[source].g_score = 0;
+        hot_states_[source].visit_id = current_visit_id_;
+        cold_parents_[source] = traffic::INVALID_NODE;
         
         pq_.clear();
-        pq_.push({calc_heuristic(source), source}); // Используем эвристику для первого узла
+        pq_.push({calc_heuristic(source), source}); 
 
         while (!pq_.empty()) {
             auto [f_curr, u] = pq_.pop();
@@ -162,7 +162,7 @@ public:
 
             if (u == target) break;
 
-            traffic::PathWeight g_u = node_states_[u].g_score;
+            traffic::PathWeight g_u = hot_states_[u].g_score;
             traffic::PathWeight h_u = calc_heuristic(u);
             if (f_curr > g_u + h_u) continue;
 
@@ -172,14 +172,12 @@ public:
                 traffic::NodeID v = edge.to;
                 traffic::PathWeight w = edge.w;
 
-                // Zero-cost ветвление на этапе компиляции
                 if constexpr (TrafficEnabled) {
                     traffic::AbsoluteTime arrival_time = start_time + g_u;
                     uint32_t local_sec = arrival_time % traffic::router::compute::BUCKET_INTERVAL_SEC;
                     uint32_t t_idx = (arrival_time / traffic::router::compute::BUCKET_INTERVAL_SEC) % traffic::router::compute::NUM_BUCKETS;
                     uint32_t next_t_idx = (t_idx + 1) % traffic::router::compute::NUM_BUCKETS;
 
-                    // Relaxed memory order для скорости
                     uint32_t v1 = buckets[v].volumes[t_idx].load(std::memory_order_relaxed);
                     uint32_t v2 = buckets[v].volumes[next_t_idx].load(std::memory_order_relaxed);
 
@@ -195,10 +193,10 @@ public:
                 }
 
                 traffic::PathWeight new_g = g_u + w;
-                if (node_states_[v].visit_id != current_visit_id_ || new_g < node_states_[v].g_score) {
-                    node_states_[v].g_score = new_g;
-                    node_states_[v].parent_node = u;
-                    node_states_[v].visit_id = current_visit_id_;
+                if (hot_states_[v].visit_id != current_visit_id_ || new_g < hot_states_[v].g_score) {
+                    hot_states_[v].g_score = new_g;
+                    hot_states_[v].visit_id = current_visit_id_;
+                    cold_parents_[v] = u;
                     
                     traffic::PathWeight h_v = calc_heuristic(v);
                     pq_.push({new_g + h_v, v});
@@ -211,18 +209,18 @@ public:
             result.route_cycles = __rdtsc() - start_cycles;
         }
 
-        if (node_states_[target].visit_id != current_visit_id_) {
+        if (hot_states_[target].visit_id != current_visit_id_) {
             result.total_weight = traffic::INF_WEIGHT;
             return result;
         }
 
-        result.total_weight = node_states_[target].g_score;
+        result.total_weight = hot_states_[target].g_score;
         traffic::NodeID curr = target;
         
         while (curr != traffic::INVALID_NODE) {
             result.path.push_back(curr);
-            result.etas.push_back(start_time + node_states_[curr].g_score);
-            curr = node_states_[curr].parent_node;
+            result.etas.push_back(start_time + hot_states_[curr].g_score);
+            curr = cold_parents_[curr];
         }
         std::reverse(result.path.begin(), result.path.end());
         std::reverse(result.etas.begin(), result.etas.end());
@@ -230,12 +228,13 @@ public:
         return result;
     }
 
-    [[nodiscard]] traffic::NodeID num_nodes() const noexcept { return static_cast<traffic::NodeID>(node_states_.size()); }
+    [[nodiscard]] traffic::NodeID num_nodes() const noexcept { return static_cast<traffic::NodeID>(hot_states_.size()); }
 
 private:
     traffic::GraphView view_;
     ALTHeuristicModule heuristic_module_;
-    std::vector<NodeState> node_states_;
+    std::vector<HotNodeState> hot_states_;
+    std::vector<traffic::NodeID> cold_parents_;
     PriorityQueue pq_;
     traffic::PointCount current_visit_id_ = 0;
 };
