@@ -1,61 +1,72 @@
 #pragma once
-
-#include "types.hpp"
+#include "common/graph_types.hpp"
 #include <atomic>
+#include <vector>
 
 namespace traffic::router {
 
-// Жестко закодированные константы планирования времени (DoD)
-constexpr TimeSec BUCKET_INTERVAL_SEC = 300; // 5 минут на одну корзинку
-constexpr uint32_t NUM_BUCKETS = 288;        // 24 часа = 288 пятиминуток
+// Используем макросы из CMake (см. cmake/options.cmake)
+constexpr uint32_t BUCKET_INTERVAL_SEC = TRAFFIC_SLOT_SEC;
+constexpr uint32_t NUM_BUCKETS = TRAFFIC_NUM_BUCKETS;
 
-// Структура резервирования емкости ребра
-// ALIGN_CACHE_LINE устраняет False Sharing между рабочими потоками 
-// (каждое ребро лежит в отдельной или нескольких целых кэш-линиях ОЗУ).
-struct ALIGN_CACHE_LINE VolumeBucket {
-    std::atomic<uint16_t> volumes[NUM_BUCKETS];
-
+struct VolumeBucket {
+    std::atomic<traffic::VolumeCount> volumes[NUM_BUCKETS];
+    
     VolumeBucket() {
-        for (uint32_t i = 0; i < NUM_BUCKETS; ++i) {
+        for (int i = 0; i < NUM_BUCKETS; ++i) {
             volumes[i].store(0, std::memory_order_relaxed);
         }
     }
-
-    // Запрет копирования ради безопасности атомарных элементов
-    VolumeBucket(const VolumeBucket&) = delete;
-    VolumeBucket& operator=(const VolumeBucket&) = delete;
-
-    // Перемещение для std::vector
-    VolumeBucket(VolumeBucket&& other) noexcept {
-        for (uint32_t i = 0; i < NUM_BUCKETS; ++i) {
+    
+    // Copy constructor and assignment needed for std::vector, but atomics are not copyable
+    VolumeBucket(const VolumeBucket& other) {
+        for (int i = 0; i < NUM_BUCKETS; ++i) {
             volumes[i].store(other.volumes[i].load(std::memory_order_relaxed), std::memory_order_relaxed);
         }
     }
-
-    // Lock-Free резервирование (Router -> predict)
-    inline void add_volume(TimeSec time_of_entry, uint16_t amount) noexcept {
-        uint32_t bucket_idx = (time_of_entry / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
-        volumes[bucket_idx].fetch_add(amount, std::memory_order_relaxed);
-    }
-
-    // Lock-Free уменьшение (Simulator -> fact correction)
-    inline void sub_volume(TimeSec time_of_entry, uint16_t amount) noexcept {
-        uint32_t bucket_idx = (time_of_entry / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
-        uint16_t current = volumes[bucket_idx].load(std::memory_order_relaxed);
-        // Защита от underflow 
-        while (current >= amount && !volumes[bucket_idx].compare_exchange_weak(current, current - amount, std::memory_order_relaxed)) {
-            // Spinlock retry if interrupted
+    
+    VolumeBucket& operator=(const VolumeBucket& other) {
+        if (this != &other) {
+            for (int i = 0; i < NUM_BUCKETS; ++i) {
+                volumes[i].store(other.volumes[i].load(std::memory_order_relaxed), std::memory_order_relaxed);
+            }
         }
-        if (current < amount) {
-            volumes[bucket_idx].store(0, std::memory_order_relaxed);
-        }
+        return *this;
     }
 
-    // Быстрое Lock-Free чтение (LERP/BPR Engine)
-    [[nodiscard]] inline uint16_t get_volume(TimeSec time_of_entry) const noexcept {
-        uint32_t bucket_idx = (time_of_entry / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
-        return volumes[bucket_idx].load(std::memory_order_relaxed);
+    inline void add_volume(traffic::AbsoluteTime eta, traffic::VolumeCount count) noexcept {
+        uint32_t idx = (eta / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
+        volumes[idx].fetch_add(count, std::memory_order_relaxed);
     }
+    
+    inline void sub_volume(traffic::AbsoluteTime eta, traffic::VolumeCount count) noexcept {
+        uint32_t idx = (eta / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
+        volumes[idx].fetch_sub(count, std::memory_order_relaxed);
+    }
+};
+
+class VolumeManager {
+public:
+    explicit VolumeManager(traffic::PointCount num_nodes) : buckets_(num_nodes) {}
+
+    // Доступ для Read-Only горячего цикла
+    [[nodiscard]] const VolumeBucket* data() const noexcept { return buckets_.data(); }
+
+    void advance_time(traffic::AbsoluteTime old_time, traffic::AbsoluteTime new_time) noexcept {
+        uint32_t old_idx = (old_time / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
+        uint32_t new_idx = (new_time / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
+        if (old_idx == new_idx) return;
+
+        uint32_t cur = old_idx;
+        while (cur != new_idx) {
+            for (auto& b : buckets_) {
+                b.volumes[cur].store(0, std::memory_order_relaxed);
+            }
+            cur = (cur + 1) % NUM_BUCKETS;
+        }
+    }
+private:
+    std::vector<VolumeBucket> buckets_;
 };
 
 } // namespace traffic::router

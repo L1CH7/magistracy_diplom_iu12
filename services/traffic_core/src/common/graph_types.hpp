@@ -13,14 +13,22 @@ using EdgeWeight = uint16_t; // Вес одного сегмента (в CSR) - 
 using PathWeight = uint32_t; // Накопленный вес маршрута (g_score) - 4 байта
 using SegmentOffset = float; // Доля пройденного пути по ребру (0.0f - 1.0f)
 
+// Строгие алиасы для DOD
+using AbsoluteTime = uint32_t;  // Секунды от начала симуляции (или 00:00)
+using VolumeCount  = uint16_t;  // Количество машин в корзинке
+using CpuCycles    = uint64_t;  // Аппаратные такты (RDTSC)
+
 constexpr PathWeight INF_WEIGHT = 0xFFFFFFFF;
 constexpr NodeID INVALID_NODE = 0xFFFFFFFF;
 constexpr BVHNodeID INVALID_BVH_NODE = 0xFFFFFFFF;
 
 struct RoutingResult {
     PathWeight total_weight = INF_WEIGHT;
-    uint32_t iterations     = 0;
+    uint32_t visited_nodes_count = 0; 
+    CpuCycles route_cycles = 0; 
+    
     std::vector<NodeID> path;
+    std::vector<AbsoluteTime> etas; // Абсолютное время входа на каждое ребро
 };
 
 // Точка маршрута (привязка к конкретному ребру и смещение на нем)
@@ -31,10 +39,13 @@ struct RoutePoint {
 
 // Финальный ответ роутера
 struct RouteResponse { 
-    uint32_t total_time;     // Итоговое время маршрута
+    uint32_t total_time = 0;     // Итоговое время маршрута
     float total_length_m = 0.0f; // Физическая длина маршрута в метрах
-    uint32_t total_iterations = 0; // Итоговое количество итераций A*
+    uint32_t total_visited_nodes = 0; // Итоговое количество посещенных узлов A*
+    CpuCycles total_cycles = 0;   // Итоговое количество тактов CPU
+    
     std::vector<EdgeID> path; // Последовательность ID ребер
+    std::vector<AbsoluteTime> etas; // Время прибытия на каждое ребро
 };
 
 // Структура для R-Tree (32 байта, половина кэш-линии)

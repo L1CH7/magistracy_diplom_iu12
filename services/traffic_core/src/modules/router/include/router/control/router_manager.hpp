@@ -79,6 +79,7 @@ private:
 
     MappedGraph mapped_graph_;
     std::unique_ptr<traffic::common::SpatialGrid> spatial_grid_;
+    std::unique_ptr<VolumeManager> volume_manager_;
 };
 
 } // namespace traffic::router::control

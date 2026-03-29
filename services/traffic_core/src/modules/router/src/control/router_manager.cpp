@@ -36,6 +36,8 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
         LOG_INFO("Spatial grid loaded successfully (O(1) lookup enabled)");
     }
 
+    volume_manager_ = std::make_unique<VolumeManager>(num_nodes);
+
     return {};
 }
 
@@ -68,7 +70,8 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
     }
 
     // Теперь вызов абсолютно потокобезопасен
-    return tl_router->find_path_with_telemetry(start_node_idx, target_node_idx);
+    // Используем Route<false, true> (Трафик выключен, Профилирование включено для бенчмарков)
+    return tl_router->Route<false, true>(start_node_idx, target_node_idx, start_time);
 }
 
 float RouterManager::CalculateEdgeLength(traffic::EdgeID edge_id) const {
@@ -112,8 +115,10 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
 
     traffic::RouteResponse final_res;
     final_res.total_time = res->total_weight + start_penalty - target_discount;
-    final_res.total_iterations = res->iterations;
+    final_res.total_visited_nodes = res->visited_nodes_count;
+    final_res.total_cycles = res->route_cycles;
     final_res.path = std::move(res->path);
+    final_res.etas = std::move(res->etas);
     
     // Суммируем реальную длину всего пути
     final_res.total_length_m = 0.0f;
@@ -146,7 +151,8 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
 
         global_res.total_time += segment_res->total_time;
         global_res.total_length_m += segment_res->total_length_m;
-        global_res.total_iterations += segment_res->total_iterations;
+        global_res.total_visited_nodes += segment_res->total_visited_nodes;
+        global_res.total_cycles += segment_res->total_cycles;
         current_time += segment_res->total_time;
 
         // Конкатенация пути с дедупликацией на стыках

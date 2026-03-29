@@ -190,7 +190,7 @@ int main(int argc, char** argv) {
                         ss_resp << "SUCCESS | Time: " << route_result->total_time << "s | "
                                 << "Distance: " << std::fixed << std::setprecision(1) << route_result->total_length_m << "m | "
                                 << "Latency: " << std::fixed << std::setprecision(3) << ms << "ms | "
-                                << "Iterations: " << route_result->total_iterations << " | "
+                                << "Visited Nodes: " << route_result->total_visited_nodes << " | "
                                 << "FirstID: " << (route_result->path.empty() ? 0 : route_result->path.front()) << " | "
                                 << "Segments: " << route_result->path.size() << "\n";
                     } else {
