@@ -51,30 +51,23 @@ target_link_libraries(traffic_core PRIVATE
 # ============================
 add_subdirectory(src/graph_builder)
 
-# ============================
-# EXECUTABLE: BENCHMARKS
-# ============================
-add_executable(throughput_benchmark
-    tests/throughput_benchmark.cpp
-)
-
-target_include_directories(throughput_benchmark PRIVATE src)
-target_link_libraries(throughput_benchmark PRIVATE
-    quill::quill
-    concurrentqueue
-    traffic_router
-)
 
 # ============================
-# EXECUTABLE: UNIT TESTS
+# TESTS
 # ============================
-add_executable(test_dynamic_routing
-    tests/test_dynamic_routing.cpp
-)
+option(TRAFFIC_BUILD_TESTS "Build unit and functional tests" ON)
 
-target_include_directories(test_dynamic_routing PRIVATE src)
-target_link_libraries(test_dynamic_routing PRIVATE
-    quill::quill
-    concurrentqueue
-    traffic_router
-)
+if(TRAFFIC_BUILD_TESTS)
+    add_executable(test_functional tests/test_functional.cpp)
+    target_include_directories(test_functional PRIVATE 
+        src/modules/router/include 
+        src/common
+        src
+        3rd_party/doctest
+    )
+    target_link_libraries(test_functional PRIVATE 
+        traffic_router
+        quill::quill
+        concurrentqueue
+    )
+endif()
