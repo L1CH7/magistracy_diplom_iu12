@@ -34,6 +34,8 @@ public:
         const traffic::EdgeWeight* mpr_penalty_array = nullptr
     ) {
         traffic::RoutingResult result;
+        result.path.reserve(1024);
+        result.etas.reserve(1024);
         if (source == target) {
             result.total_weight = 0;
             result.path = {source};
