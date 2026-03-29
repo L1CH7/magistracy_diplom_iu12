@@ -2,7 +2,7 @@
 #include "common/graph_types.hpp"
 #include <atomic>
 
-namespace traffic::router {
+namespace traffic::router::compute {
 
 // Используем макросы из CMake (см. cmake/options.cmake)
 constexpr uint32_t BUCKET_INTERVAL_SEC = TRAFFIC_SLOT_SEC;
@@ -39,4 +39,4 @@ struct VolumeBucket {
     }
 };
 
-} // namespace traffic::router
+} // namespace traffic::router::compute

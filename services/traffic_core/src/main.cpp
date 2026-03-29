@@ -127,8 +127,8 @@ int main(int argc, char** argv) {
                     std::string command;
                     ss_query >> command;
 
-                    auto start_time = std::chrono::high_resolution_clock::now();
-                    std::expected<traffic::RouteResponse, std::string> route_result = std::unexpected("Unknown command");
+                    auto start_time_bench = std::chrono::high_resolution_clock::now();
+                    std::expected<traffic::RoutingResult, std::string> route_result = std::unexpected("Unknown command");
 
                     try {
                         if (command == "ll") {
@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
                                 }
                                 if (coords.size() >= 2) {
                                     std::cout << "[Worker " << getpid() << "] Routing ll with " << coords.size() << " points\n";
-                                    route_result = manager.RouteMultipointByCoords(coords);
+                                    route_result = manager.Route<true, false>(coords);
                                 } else {
                                     route_result = std::unexpected("Insufficient valid coordinates");
                                 }
@@ -152,18 +152,18 @@ int main(int argc, char** argv) {
                         } else if (command == "id") {
                             int n_ids = 0;
                             if (ss_query >> n_ids && n_ids >= 2) {
-                                std::vector<traffic::RoutePoint> wps;
-                                wps.reserve(n_ids);
+                                std::vector<traffic::NodeID> ids;
+                                ids.reserve(n_ids);
                                 for (int i = 0; i < n_ids; ++i) {
                                     traffic::EdgeID id;
-                                    float off;
+                                    float off; // Offset ignored in unified API for now
                                     if (ss_query >> id >> off) {
-                                        wps.push_back({id, off});
+                                        ids.push_back(id);
                                     }
                                 }
-                                if (wps.size() >= 2) {
-                                    std::cout << "[Worker " << getpid() << "] Routing id with " << wps.size() << " points\n";
-                                    route_result = manager.RouteMultipoint(wps);
+                                if (ids.size() >= 2) {
+                                    std::cout << "[Worker " << getpid() << "] Routing id with " << ids.size() << " points\n";
+                                    route_result = manager.Route<true, false>(ids);
                                 } else {
                                     route_result = std::unexpected("Insufficient valid waypoints");
                                 }
@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
                             std::stringstream ss_legacy(input_query);
                             float x1, y1, x2, y2;
                             if (ss_legacy >> x1 >> y1 >> x2 >> y2) {
-                                route_result = manager.RouteByCoords(x1, y1, x2, y2);
+                                route_result = manager.Route<true, false>(x1, y1, x2, y2);
                             }
                         }
                     } catch (const std::exception& e) {
@@ -181,16 +181,21 @@ int main(int argc, char** argv) {
                         _exit(1);
                     }
 
-                    auto end_time = std::chrono::high_resolution_clock::now();
-                    float ms = std::chrono::duration<float, std::milli>(end_time - start_time).count();
+                    auto end_time_bench = std::chrono::high_resolution_clock::now();
+                    float ms = std::chrono::duration<float, std::milli>(end_time_bench - start_time_bench).count();
 
                     std::stringstream ss_resp;
                     if (route_result) {
-                        std::cout << "[Worker " << getpid() << "] SUCCESS. Time: " << route_result->total_time << "s, Latency: " << ms << "ms\n";
-                        ss_resp << "SUCCESS | Time: " << route_result->total_time << "s | "
-                                << "Distance: " << std::fixed << std::setprecision(1) << route_result->total_length_m << "m | "
+                        float total_dist = 0.0f;
+                        for (auto eid : route_result->path) {
+                            total_dist += manager.get_edge_length(eid);
+                        }
+
+                        std::cout << "[Worker " << getpid() << "] SUCCESS. Time: " << route_result->total_weight << "s, Latency: " << ms << "ms\n";
+                        ss_resp << "SUCCESS | Time: " << route_result->total_weight << "s | "
+                                << "Distance: " << std::fixed << std::setprecision(1) << total_dist << "m | "
                                 << "Latency: " << std::fixed << std::setprecision(3) << ms << "ms | "
-                                << "Visited Nodes: " << route_result->total_visited_nodes << " | "
+                                << "Visited Nodes: " << route_result->visited_nodes_count << " | "
                                 << "FirstID: " << (route_result->path.empty() ? 0 : route_result->path.front()) << " | "
                                 << "Segments: " << route_result->path.size() << "\n";
                     } else {

@@ -35,7 +35,7 @@ void RunBucketTests() {
     EdgeWeight mpr_penalty[] = {0, 0, 0};
 
     // 2. Инициализируем Роутер и Менеджер
-    router::TdAltRouter router(view, num_nodes);
+    router::compute::TdAltRouter router(view, num_nodes);
     router::control::VolumeManager vol_manager(num_nodes);
 
     AbsoluteTime start_time = 0;

@@ -8,7 +8,7 @@
 #include "alt_heuristics.hpp"
 #include <x86intrin.h>
 #include "volume_bucket.hpp"
-namespace traffic::router {
+namespace traffic::router::compute {
 
 static constexpr uint32_t DEFAULT_PQ_CAPACITY = 2048;
 static constexpr uint32_t VALUES_PER_LANDMARK = 2; // to_L and from_L
@@ -48,7 +48,7 @@ public:
         traffic::NodeID source, 
         traffic::NodeID target, 
         traffic::AbsoluteTime start_time = 0,
-        const traffic::router::VolumeBucket* buckets = nullptr,
+        const VolumeBucket* buckets = nullptr,
         const traffic::PenaltyScale* k_magic_array = nullptr,
         const traffic::EdgeWeight* mpr_penalty_array = nullptr
     ) {
@@ -98,9 +98,9 @@ public:
                 // Zero-cost ветвление на этапе компиляции
                 if constexpr (TrafficEnabled) {
                     traffic::AbsoluteTime arrival_time = start_time + g_u;
-                    uint32_t local_sec = arrival_time % traffic::router::BUCKET_INTERVAL_SEC;
-                    uint32_t t_idx = (arrival_time / traffic::router::BUCKET_INTERVAL_SEC) % traffic::router::NUM_BUCKETS;
-                    uint32_t next_t_idx = (t_idx + 1) % traffic::router::NUM_BUCKETS;
+                    uint32_t local_sec = arrival_time % traffic::router::compute::BUCKET_INTERVAL_SEC;
+                    uint32_t t_idx = (arrival_time / traffic::router::compute::BUCKET_INTERVAL_SEC) % traffic::router::compute::NUM_BUCKETS;
+                    uint32_t next_t_idx = (t_idx + 1) % traffic::router::compute::NUM_BUCKETS;
 
                     // Relaxed memory order для скорости
                     uint32_t v1 = buckets[v].volumes[t_idx].load(std::memory_order_relaxed);
@@ -110,7 +110,7 @@ public:
                     uint64_t pen_1 = scale * v1 * v1;
                     uint64_t pen_2 = scale * v2 * v2;
 
-                    uint32_t dynamic_penalty = static_cast<uint32_t>((pen_1 + ((pen_2 - pen_1) * local_sec) / traffic::router::BUCKET_INTERVAL_SEC) >> 20);
+                    uint32_t dynamic_penalty = static_cast<uint32_t>((pen_1 + ((pen_2 - pen_1) * local_sec) / traffic::router::compute::BUCKET_INTERVAL_SEC) >> 20);
                     
                     if (dynamic_penalty > static_cast<uint32_t>(w) * 10) dynamic_penalty = w * 10;
                     
@@ -164,4 +164,4 @@ private:
     traffic::PointCount current_visit_id_ = 0;
 };
 
-} // namespace traffic::router
+} // namespace traffic::router::compute

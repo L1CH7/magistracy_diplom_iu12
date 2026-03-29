@@ -45,7 +45,7 @@ void RunStressTest(router::control::RouterManager& router_manager, int num_threa
     // 2. Асинхронная отправка задач
     for (int i = 0; i < NUM_TASKS; ++i) {
         pool.Enqueue([&router_manager, &tasks, i, &completed_tasks, &failed_tasks]() {
-            auto res = router_manager.RouteByCoords(
+            auto res = router_manager.Route<true, false>(
                 tasks[i].x1, tasks[i].y1, 
                 tasks[i].x2, tasks[i].y2, 0
             );
