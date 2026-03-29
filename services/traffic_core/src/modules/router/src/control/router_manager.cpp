@@ -36,7 +36,7 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
         LOG_INFO("Spatial grid loaded successfully (O(1) lookup enabled)");
     }
 
-    volume_manager_ = std::make_unique<VolumeManager>(num_nodes);
+    volume_manager_ = std::make_unique<traffic::router::control::VolumeManager>(num_nodes);
 
     return {};
 }

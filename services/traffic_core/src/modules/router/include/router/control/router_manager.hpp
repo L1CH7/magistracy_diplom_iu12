@@ -3,6 +3,7 @@
 #include "common/graph_types.hpp"
 #include "router/compute/td_alt_router.hpp"
 #include "router/control/graph_loader.hpp"
+#include "router/control/volume_manager.hpp"
 #include "common/mmap_region.hpp"
 #include "common/spatial_grid.hpp"
 #include <string>
@@ -79,7 +80,7 @@ private:
 
     MappedGraph mapped_graph_;
     std::unique_ptr<traffic::common::SpatialGrid> spatial_grid_;
-    std::unique_ptr<VolumeManager> volume_manager_;
+    std::unique_ptr<traffic::router::control::VolumeManager> volume_manager_;
 };
 
 } // namespace traffic::router::control
