@@ -14,6 +14,7 @@ struct MappedGraph {
     std::unique_ptr<traffic::common::MmapRegion> csr_region;
     std::unique_ptr<traffic::common::MmapRegion> landmarks_region;
     std::unique_ptr<traffic::common::MmapRegion> spatial_grid_region;
+    std::unique_ptr<traffic::common::MmapRegion> kmagic_region;
     std::unique_ptr<traffic::common::GeometryStore> geometry_store;
     traffic::GraphView view;
 
@@ -56,6 +57,12 @@ struct MappedGraph {
             auto grid_path = base / "spatial_grid.bin";
             if (fs::exists(grid_path)) {
                 spatial_grid_region = std::make_unique<traffic::common::MmapRegion>(grid_path.string());
+            }
+
+            // Load k_magic (PenaltyScale) if it exists
+            auto kmagic_path = base / "k_magic.bin";
+            if (fs::exists(kmagic_path)) {
+                kmagic_region = std::make_unique<traffic::common::MmapRegion>(kmagic_path.string());
             }
 
             // Load Geometry Store if it exists

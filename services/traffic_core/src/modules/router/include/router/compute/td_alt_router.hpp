@@ -49,7 +49,7 @@ public:
         traffic::NodeID target, 
         traffic::AbsoluteTime start_time = 0,
         const traffic::router::VolumeBucket* buckets = nullptr,
-        const int32_t* k_magic_array = nullptr,
+        const traffic::PenaltyScale* k_magic_array = nullptr,
         const traffic::EdgeWeight* mpr_penalty_array = nullptr
     ) {
         traffic::RoutingResult result;
@@ -106,9 +106,9 @@ public:
                     uint32_t v1 = buckets[v].volumes[t_idx].load(std::memory_order_relaxed);
                     uint32_t v2 = buckets[v].volumes[next_t_idx].load(std::memory_order_relaxed);
 
-                    int64_t k_magic = k_magic_array[v];
-                    int64_t pen_1 = k_magic * v1 * v1;
-                    int64_t pen_2 = k_magic * v2 * v2;
+                    uint64_t scale = static_cast<uint64_t>(k_magic_array[v]);
+                    uint64_t pen_1 = scale * v1 * v1;
+                    uint64_t pen_2 = scale * v2 * v2;
 
                     uint32_t dynamic_penalty = static_cast<uint32_t>((pen_1 + ((pen_2 - pen_1) * local_sec) / traffic::router::BUCKET_INTERVAL_SEC) >> 20);
                     

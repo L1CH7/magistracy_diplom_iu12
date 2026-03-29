@@ -41,38 +41,6 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
     return {};
 }
 
-std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
-    traffic::NodeID start_node_idx, 
-    traffic::NodeID target_node_idx, 
-    uint32_t start_time
-) {
-    if (!mapped_graph_.csr_region) return std::unexpected(std::string("Graphs not loaded"));
-
-    // Получаем количество узлов из уже загруженного графа
-    const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
-    traffic::PointCount num_nodes;
-    std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
-
-    // Изолированный роутер для каждого системного потока (Thread-Local Storage)
-    thread_local std::unique_ptr<TdAltRouter> tl_router = nullptr;
-
-    // Ленивая инициализация (сработает ровно 1 раз для каждого потока в пуле)
-    if (!tl_router) {
-        tl_router = std::make_unique<TdAltRouter>(mapped_graph_.view, num_nodes);
-        if (mapped_graph_.landmarks_region) {
-            tl_router->get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()));
-        }
-    }
-    
-    if (start_node_idx >= num_nodes || target_node_idx >= num_nodes) {
-        return std::unexpected(std::format("Node index out of range: start={}, target={}, max={}", 
-                                          start_node_idx, target_node_idx, num_nodes));
-    }
-
-    // Теперь вызов абсолютно потокобезопасен
-    // Используем Route<false, true> (Трафик выключен, Профилирование включено для бенчмарков)
-    return tl_router->Route<false, true>(start_node_idx, target_node_idx, start_time);
-}
 
 float RouterManager::CalculateEdgeLength(traffic::EdgeID edge_id) const {
     if (!mapped_graph_.geometry_store) return 0.0f;
@@ -106,7 +74,8 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
     }
 
     // 2. Обычный межреберный маршрут
-    auto res = Route(start.edge_id, target.edge_id, start_time);
+    // Используем Route<true, true> (Трафик включен, Профилирование включено для аналитики)
+    auto res = Route<true, true>(start.edge_id, target.edge_id, start_time);
     if (!res) return std::unexpected(res.error());
 
     // 3. Корректировка времени (Partial Edges)
@@ -211,5 +180,48 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
 
     return RouteMultipoint(waypoints, start_time);
 }
+
+
+template<bool TrafficEnabled, bool ProfileEnabled>
+std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
+    traffic::NodeID start_node_idx, 
+    traffic::NodeID target_node_idx, 
+    traffic::AbsoluteTime start_time
+) {
+    if (!mapped_graph_.csr_region) return std::unexpected(std::string("Graphs not loaded"));
+
+    const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
+    traffic::PointCount num_nodes;
+    std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
+
+    thread_local std::unique_ptr<TdAltRouter> tl_router = nullptr;
+    if (!tl_router) {
+        tl_router = std::make_unique<TdAltRouter>(mapped_graph_.view, num_nodes);
+        if (mapped_graph_.landmarks_region) {
+            tl_router->get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()));
+        }
+    }
+    
+    if (start_node_idx >= num_nodes || target_node_idx >= num_nodes) {
+        return std::unexpected(std::format("Node out of range"));
+    }
+
+    // Извлекаем массивы для расчета заторов с использованием глобального типа PenaltyScale
+    const traffic::PenaltyScale* k_magic_ptr = mapped_graph_.kmagic_region ? 
+        static_cast<const traffic::PenaltyScale*>(mapped_graph_.kmagic_region->data()) : nullptr;
+        
+    return tl_router->Route<TrafficEnabled, ProfileEnabled>(
+        start_node_idx, target_node_idx, start_time, 
+        volume_manager_ ? volume_manager_->data() : nullptr,
+        k_magic_ptr, 
+        nullptr 
+    );
+}
+
+// Явные инстанциации всех 4 комбинаций шаблона
+template std::expected<traffic::RoutingResult, std::string> RouterManager::Route<true, true>(traffic::NodeID, traffic::NodeID, traffic::AbsoluteTime);
+template std::expected<traffic::RoutingResult, std::string> RouterManager::Route<true, false>(traffic::NodeID, traffic::NodeID, traffic::AbsoluteTime);
+template std::expected<traffic::RoutingResult, std::string> RouterManager::Route<false, true>(traffic::NodeID, traffic::NodeID, traffic::AbsoluteTime);
+template std::expected<traffic::RoutingResult, std::string> RouterManager::Route<false, false>(traffic::NodeID, traffic::NodeID, traffic::AbsoluteTime);
 
 } // namespace traffic::router::control

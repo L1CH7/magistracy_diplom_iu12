@@ -17,6 +17,7 @@ using SegmentOffset = float; // Доля пройденного пути по р
 using AbsoluteTime = uint32_t;  // Секунды от начала симуляции (или 00:00)
 using VolumeCount  = uint16_t;  // Количество машин в корзинке
 using CpuCycles    = uint64_t;  // Аппаратные такты (RDTSC)
+using PenaltyScale = uint32_t;  // Коэффициент масштабирования штрафа затора
 
 constexpr PathWeight INF_WEIGHT = 0xFFFFFFFF;
 constexpr NodeID INVALID_NODE = 0xFFFFFFFF;

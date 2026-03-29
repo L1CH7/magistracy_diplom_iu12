@@ -25,10 +25,11 @@ public:
 
     std::expected<void, std::string> LoadGraphs(const std::string& data_dir);
     
+    template<bool TrafficEnabled = true, bool ProfileEnabled = false>
     std::expected<traffic::RoutingResult, std::string> Route(
         traffic::NodeID start_node_idx, 
         traffic::NodeID target_node_idx, 
-        uint32_t start_time = 0
+        traffic::AbsoluteTime start_time = 0
     );
 
     // Маршрут между двумя точками с учетом смещения (offset) на начальном и конечном ребрах
@@ -71,6 +72,17 @@ public:
         if (geom.points.empty()) return {0.0f, 0.0f};
         return {geom.points[0].x, geom.points[0].y};
     }
+
+    // Получить длину ребра для физики Симулятора
+    [[nodiscard]] inline float get_edge_length(traffic::NodeID edge_id) const noexcept {
+        if (!mapped_graph_.geometry_store) return 0.0f;
+        auto geom = mapped_graph_.geometry_store->get_geometry(edge_id);
+        if (geom.points.empty()) return 0.0f;
+        return geom.accum_lens.back();
+    }
+    
+    // Прямой доступ к менеджеру корзинок для Симулятора
+    traffic::router::control::VolumeManager* get_volume_manager() noexcept { return volume_manager_.get(); }
 
 private:
     // Вычисляет длину ребра в метрах на основе его реальной геометрии
