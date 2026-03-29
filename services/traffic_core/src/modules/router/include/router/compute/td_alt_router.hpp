@@ -16,7 +16,6 @@ static constexpr uint32_t VALUES_PER_LANDMARK = 2; // to_L and from_L
 
 // Конфигурация эвристики
 // TRAFFIC_TOTAL_LANDMARKS определен в CMake (options.cmake)
-constexpr uint32_t NUM_ACTIVE_LANDMARKS = 8; 
 
 // Weighted A* множитель: 1.15 (115 / 100). Ускоряет поиск в 3 раза ценой 15% субоптимальности.
 constexpr uint32_t WA_STAR_NUM = 115; 
@@ -72,89 +71,28 @@ public:
         if constexpr (ProfileEnabled) start_cycles = __rdtsc();
 
         uint32_t pop_count = 0;
-        // --- ZERO-ALLOCATION ВЫБОР ТОП-8 АКТИВНЫХ МАЯКОВ ---
-        uint32_t active_l_idx[NUM_ACTIVE_LANDMARKS] = {0, 1, 2, 3, 4, 5, 6, 7};
+        ALTHeuristic alt;
         const traffic::EdgeWeight* landmarks = heuristic_module_.get_landmark_ptr();
-        const traffic::EdgeWeight* target_l_ptr = nullptr;
+        const traffic::EdgeWeight* target_l_ptr = (landmarks && target != traffic::INVALID_NODE) ?
+            (landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)) : nullptr;
         
-        __m256i v_target = _mm256_setzero_si256();
-        __m256i v_indices = _mm256_setzero_si256();
-
-        if (landmarks && target != traffic::INVALID_NODE) {
-            target_l_ptr = landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK);
-            const traffic::EdgeWeight* source_l_ptr = landmarks + (source * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK);
-            
-            uint32_t top_scores[NUM_ACTIVE_LANDMARKS] = {0};
-
-            for (uint32_t i = 0; i < TRAFFIC_TOTAL_LANDMARKS; ++i) {
-                uint32_t idx = i * 2;
-                uint32_t d_s_to_L = source_l_ptr[idx];
-                uint32_t d_L_to_s = source_l_ptr[idx + 1];
-                uint32_t d_t_to_L = target_l_ptr[idx];
-                uint32_t d_L_to_t = target_l_ptr[idx + 1];
-                
-                uint32_t h1 = (d_t_to_L > d_s_to_L) ? (d_t_to_L - d_s_to_L) : 0;
-                uint32_t h2 = (d_L_to_s > d_L_to_t) ? (d_L_to_s - d_L_to_t) : 0;
-                uint32_t score = (h1 > h2) ? h1 : h2;
-
-                if (score > top_scores[NUM_ACTIVE_LANDMARKS - 1]) {
-                    top_scores[NUM_ACTIVE_LANDMARKS - 1] = score;
-                    active_l_idx[NUM_ACTIVE_LANDMARKS - 1] = i;
-                    for (int j = NUM_ACTIVE_LANDMARKS - 2; j >= 0; --j) {
-                        if (top_scores[j + 1] > top_scores[j]) {
-                            std::swap(top_scores[j], top_scores[j + 1]);
-                            std::swap(active_l_idx[j], active_l_idx[j + 1]);
-                        }
-                    }
-                }
-            }
-
-            // Упаковываем индексы для аппаратного Gather
-            v_indices = _mm256_set_epi32(
-                active_l_idx[7], active_l_idx[6], active_l_idx[5], active_l_idx[4],
-                active_l_idx[3], active_l_idx[2], active_l_idx[1], active_l_idx[0]
-            );
-
-            // Единожды собираем данные таргета
-            v_target = _mm256_i32gather_epi32((const int*)target_l_ptr, v_indices, 4);
-        }
-
-        // --- HFT ЛЯМБДА ЭВРИСТИКИ ---
-        auto calc_heuristic = [&](traffic::NodeID curr_node) [[gnu::always_inline]] -> traffic::PathWeight {
-            if (!target_l_ptr) return 0;
-            
-            const int* v_ptr = (const int*)(landmarks + (curr_node * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK));
-            
-            // 1 такт: Аппаратно собираем 8 разбросанных маяков (32 бита каждый)
-            __m256i v_node = _mm256_i32gather_epi32(v_ptr, v_indices, 4);
-
-            // Трюк: _mm256_subs_epu16 автоматически дает max(A-B, 0).
-            // Считаем сразу и T-U, и U-T, затем берем максимум.
-            __m256i diff1 = _mm256_subs_epu16(v_target, v_node);
-            __m256i diff2 = _mm256_subs_epu16(v_node, v_target);
-            __m256i h_vals = _mm256_max_epu16(diff1, diff2);
-
-            // Горизонтальный максимум (векторная редукция)
-            h_vals = _mm256_max_epu16(h_vals, _mm256_srli_si256(h_vals, 2));
-            h_vals = _mm256_max_epu16(h_vals, _mm256_srli_si256(h_vals, 4));
-            h_vals = _mm256_max_epu16(h_vals, _mm256_srli_si256(h_vals, 8));
-
-            __m128i lane0 = _mm256_castsi256_si128(h_vals);
-            __m128i lane1 = _mm256_extracti128_si256(h_vals, 1);
-            __m128i final_max = _mm_max_epu16(lane0, lane1);
-
-            uint32_t res = _mm_extract_epi16(final_max, 0);
-            return (res * WA_STAR_NUM) / WA_STAR_DEN;
-        };
-
         current_visit_id_++;
         
         hot_states_[source].g_score = 0;
         hot_states_[source].visit_id = current_visit_id_;
         cold_parents_[source] = traffic::INVALID_NODE;
         
+        traffic::PathWeight h_source = 0;
+        if (target_l_ptr) {
+            h_source = alt.get_heuristic_avx2(
+                reinterpret_cast<const uint16_t*>(landmarks + (source * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
+                reinterpret_cast<const uint16_t*>(target_l_ptr)
+            );
+            h_source = (h_source * WA_STAR_NUM) / WA_STAR_DEN;
+        }
+
         pq_.clear();
-        pq_.push({calc_heuristic(source), source}); 
+        pq_.push({h_source, source});
 
         while (!pq_.empty()) {
             auto [f_curr, u] = pq_.pop();
@@ -163,7 +101,14 @@ public:
             if (u == target) break;
 
             traffic::PathWeight g_u = hot_states_[u].g_score;
-            traffic::PathWeight h_u = calc_heuristic(u);
+            traffic::PathWeight h_u = 0;
+            if (target_l_ptr) {
+                h_u = alt.get_heuristic_avx2(
+                    reinterpret_cast<const uint16_t*>(landmarks + (u * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
+                    reinterpret_cast<const uint16_t*>(target_l_ptr)
+                );
+                h_u = (h_u * WA_STAR_NUM) / WA_STAR_DEN;
+            }
             if (f_curr > g_u + h_u) continue;
 
             _mm_prefetch(reinterpret_cast<const char*>(&view_.row_ptr[u + 1]), _MM_HINT_T0);
@@ -197,8 +142,15 @@ public:
                     hot_states_[v].g_score = new_g;
                     hot_states_[v].visit_id = current_visit_id_;
                     cold_parents_[v] = u;
-                    
-                    traffic::PathWeight h_v = calc_heuristic(v);
+
+                    traffic::PathWeight h_v = 0;
+                    if (target_l_ptr) {
+                        h_v = alt.get_heuristic_avx2(
+                            reinterpret_cast<const uint16_t*>(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
+                            reinterpret_cast<const uint16_t*>(target_l_ptr)
+                        );
+                        h_v = (h_v * WA_STAR_NUM) / WA_STAR_DEN;
+                    }
                     pq_.push({new_g + h_v, v});
                 }
             }
