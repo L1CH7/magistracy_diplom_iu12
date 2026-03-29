@@ -26,7 +26,7 @@ test-router: run-router
 throughput-bench: build-builder
 	docker run --rm --init --network host \
 		-v $(shell pwd)/data:/app/data \
-		traffic_core_builder /app/services/traffic_core/build/test_functional --data /app/data --tc="Stress Test*"
+		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark --data /app/data
 
 test-dynamic: build-builder
 	docker run --rm --init --network host \
