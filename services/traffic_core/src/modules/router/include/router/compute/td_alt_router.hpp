@@ -101,7 +101,9 @@ public:
             auto [f_curr, u] = pq_.pop();
             if constexpr (ProfileEnabled) pop_count++;
 
-            if (u == target) break;
+            // (Это происходит лишь однажды в самом конце пути)
+            if (__builtin_expect(u == target, 0)) break;
+            // if (u == target) break;
 
             traffic::PathWeight g_u = hot_states_[u].g_score;
             traffic::PathWeight h_u = 0;
@@ -135,8 +137,11 @@ public:
 
                     uint32_t dynamic_penalty = static_cast<uint32_t>((pen_1 + ((pen_2 - pen_1) * local_sec) / traffic::router::compute::BUCKET_INTERVAL_SEC) >> 20);
                     
-                    if (dynamic_penalty > static_cast<uint32_t>(w) * 10) dynamic_penalty = w * 10;
-                    
+                    // (Аномальные пробки - это не норма)
+                    // if (__builtin_expect(dynamic_penalty > static_cast<uint32_t>(w) * 10, 0)) {
+                    if (dynamic_penalty > static_cast<uint32_t>(w) * 10) {
+                        dynamic_penalty = w * 10;
+                    }                    
                     w += dynamic_penalty + (mpr_penalty_array ? mpr_penalty_array[v] : 0);
                 }
 
@@ -164,7 +169,9 @@ public:
             result.route_cycles = __rdtsc() - start_cycles;
         }
 
-        if (hot_states_[target].visit_id != current_visit_id_) {
+        // (Фейлы маршрутов должны быть вынесены из горячего блока)
+        if (__builtin_expect(hot_states_[target].visit_id != current_visit_id_, 0)) {
+        // if (hot_states_[target].visit_id != current_visit_id_) {
             result.total_weight = traffic::INF_WEIGHT;
             return result;
         }
