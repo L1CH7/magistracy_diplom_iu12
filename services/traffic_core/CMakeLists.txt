@@ -70,4 +70,17 @@ if(TRAFFIC_BUILD_TESTS)
         quill::quill
         concurrentqueue
     )
+
+    add_executable(throughput_benchmark tests/throughput_benchmark.cpp)
+    target_include_directories(throughput_benchmark PRIVATE 
+        src/modules/router/include 
+        src/common
+        src
+        3rd_party/doctest
+    )
+    target_link_libraries(throughput_benchmark PRIVATE 
+        traffic_router
+        quill::quill
+        concurrentqueue
+    )
 endif()
