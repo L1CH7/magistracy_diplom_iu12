@@ -109,6 +109,72 @@ public:
         return result;
     }
 
+    [[nodiscard]] traffic::RoutingResult find_path_with_telemetry(traffic::NodeID source, traffic::NodeID target) {
+        if (source == target) {
+            traffic::RoutingResult res;
+            res.total_weight = 0;
+            res.path = {source};
+            return res;
+        }
+        
+        uint32_t pop_count = 0;
+        const traffic::EdgeWeight* landmarks = heuristic_module_.get_landmark_ptr();
+        const traffic::EdgeWeight* target_l_ptr = (landmarks && target != traffic::INVALID_NODE) ? 
+                                       (landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)) : nullptr;
+        
+        ALTHeuristic alt;
+        current_visit_id_++;
+        
+        node_states_[source].g_score = 0;
+        node_states_[source].visit_id = current_visit_id_;
+        node_states_[source].parent_node = traffic::INVALID_NODE;
+        
+        pq_.clear();
+        pq_.push({0, source});
+
+        while (!pq_.empty()) {
+            auto [f_curr, u] = pq_.pop();
+            pop_count++;
+
+            if (u == target) break;
+
+            traffic::PathWeight g_u = node_states_[u].g_score;
+            traffic::PathWeight h_u = (landmarks && target_l_ptr) ? alt.get_heuristic_avx2(landmarks + (u * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK), target_l_ptr) : 0;
+            if (f_curr > g_u + h_u) continue;
+
+            for (auto edge : view_.get_edges(u)) {
+                traffic::NodeID v = edge.to;
+                traffic::PathWeight w = edge.w;
+                traffic::PathWeight new_g = g_u + w;
+
+                if (node_states_[v].visit_id != current_visit_id_ || new_g < node_states_[v].g_score) {
+                    node_states_[v].g_score = new_g;
+                    node_states_[v].parent_node = u;
+                    node_states_[v].visit_id = current_visit_id_;
+                    traffic::PathWeight h_v = (landmarks && target_l_ptr) ? 
+                                       alt.get_heuristic_avx2(reinterpret_cast<const uint16_t*>(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), reinterpret_cast<const uint16_t*>(target_l_ptr)) : 0;
+                    pq_.push({new_g + h_v, v});
+                }
+            }
+        }
+
+        traffic::RoutingResult result;
+        result.iterations = pop_count;
+        if (node_states_[target].visit_id != current_visit_id_) {
+            result.total_weight = traffic::INF_WEIGHT;
+            return result;
+        }
+
+        result.total_weight = node_states_[target].g_score;
+        traffic::NodeID curr = target;
+        while (curr != traffic::INVALID_NODE) {
+            result.path.push_back(curr);
+            curr = node_states_[curr].parent_node;
+        }
+        std::reverse(result.path.begin(), result.path.end());
+        return result;
+    }
+
     [[nodiscard]] traffic::NodeID num_nodes() const noexcept { return static_cast<traffic::NodeID>(node_states_.size()); }
 
 private:

@@ -19,6 +19,7 @@ constexpr BVHNodeID INVALID_BVH_NODE = 0xFFFFFFFF;
 
 struct RoutingResult {
     PathWeight total_weight = INF_WEIGHT;
+    uint32_t iterations     = 0;
     std::vector<NodeID> path;
 };
 
@@ -32,6 +33,7 @@ struct RoutePoint {
 struct RouteResponse { 
     uint32_t total_time;     // Итоговое время маршрута
     float total_length_m = 0.0f; // Физическая длина маршрута в метрах
+    uint32_t total_iterations = 0; // Итоговое количество итераций A*
     std::vector<EdgeID> path; // Последовательность ID ребер
 };
 

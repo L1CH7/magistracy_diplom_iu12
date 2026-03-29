@@ -49,7 +49,7 @@ std::expected<traffic::RoutingResult, std::string> RouterManager::Route(
                                           start_node_idx, target_node_idx, router_->num_nodes()));
     }
 
-    return router_->find_path(start_node_idx, target_node_idx);
+    return router_->find_path_with_telemetry(start_node_idx, target_node_idx);
 }
 
 float RouterManager::CalculateEdgeLength(traffic::EdgeID edge_id) const {
@@ -94,6 +94,7 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteBetweenTw
 
     traffic::RouteResponse final_res;
     final_res.total_time = res->total_weight + start_penalty - target_discount;
+    final_res.total_iterations = res->iterations;
     final_res.path = std::move(res->path);
     
     // Суммируем реальную длину всего пути
@@ -127,6 +128,7 @@ std::expected<traffic::RouteResponse, std::string> RouterManager::RouteMultipoin
 
         global_res.total_time += segment_res->total_time;
         global_res.total_length_m += segment_res->total_length_m;
+        global_res.total_iterations += segment_res->total_iterations;
         current_time += segment_res->total_time;
 
         // Конкатенация пути с дедупликацией на стыках

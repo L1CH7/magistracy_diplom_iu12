@@ -12,10 +12,6 @@
 #include <immintrin.h>
 #include <xmmintrin.h>
 #include <pmmintrin.h>
-#include <chrono>
-#include <print>
-#include <atomic>
-#include <unistd.h>
 
 namespace traffic::common {
 
@@ -57,10 +53,6 @@ public:
     }
 
     [[nodiscard]] traffic::RoutePoint MapToEdge(float px, float py) const noexcept {
-        auto t1 = std::chrono::high_resolution_clock::now();
-        uint32_t cells_scanned = 0;
-        uint32_t segments_scanned = 0;
-
         if (!cell_offsets_ || !soa_data_) return {traffic::INVALID_NODE, 0.0f};
 
         _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
@@ -81,14 +73,10 @@ public:
         traffic::SegmentOffset best_offset = 0.0f;
 
         // Spiral Early Exit
-        ScanCell(row * cols_ + col, px, py, min_dist_sq, best_node_id, best_offset, segments_scanned);
-        cells_scanned++;
+        ScanCell(row * cols_ + col, px, py, min_dist_sq, best_node_id, best_offset);
 
         constexpr float EARLY_EXIT_FACTOR = 0.4f * 0.4f;
-        bool early_exit_triggered = false;
-        if (best_node_id != traffic::INVALID_NODE && min_dist_sq < (cell_size_ * cell_size_ * EARLY_EXIT_FACTOR)) {
-            early_exit_triggered = true;
-        } else {
+        if (best_node_id == traffic::INVALID_NODE || min_dist_sq >= (cell_size_ * cell_size_ * EARLY_EXIT_FACTOR)) {
             constexpr uint32_t RADIUS = 3; // Кольца от 1 до 3 (до 300+ метров)
             for (uint32_t cur_r = 1; cur_r <= RADIUS; ++cur_r) {
                 uint32_t c_start = (col >= cur_r) ? col - cur_r : 0;
@@ -101,8 +89,7 @@ public:
                         // Сканируем только периметр (границы) текущего кольца
                         if (std::abs(static_cast<int>(r) - static_cast<int>(row)) == static_cast<int>(cur_r) || 
                             std::abs(static_cast<int>(c) - static_cast<int>(col)) == static_cast<int>(cur_r)) {
-                            ScanCell(r * cols_ + c, px, py, min_dist_sq, best_node_id, best_offset, segments_scanned);
-                            cells_scanned++;
+                            ScanCell(r * cols_ + c, px, py, min_dist_sq, best_node_id, best_offset);
                         }
                     }
                 }
@@ -113,22 +100,12 @@ public:
             }
         }
 
-        auto t2 = std::chrono::high_resolution_clock::now();
-        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
-        
-        // В архитектуре fork-per-request статические счетчики бесполезны. 
-        // Печатаем сырую телеметрию на КАЖДЫЙ вызов прямо в stderr (в обход quill).
-        fprintf(stderr, "[TELEMETRY PID %d] MapToEdge: %ld ns (~%.3f ms) | Cells: %u | Segments: %u | Early Exit: %d | Node: %u\n", 
-                getpid(), ns, ns / 1000000.0, cells_scanned, segments_scanned, 
-                early_exit_triggered ? 1 : 0, best_node_id);
-        fflush(stderr);
-
         return {best_node_id, best_offset};
     }
 
 private:
     void ScanCell(uint32_t cell_idx, float px, float py, 
-                  float& min_dist_sq, traffic::EdgeID& best_node_id, traffic::SegmentOffset& best_offset, uint32_t& segments_scanned) const noexcept {
+                  float& min_dist_sq, traffic::EdgeID& best_node_id, traffic::SegmentOffset& best_offset) const noexcept {
         uint32_t start_idx = cell_offsets_[cell_idx];
         uint32_t end_idx = cell_offsets_[cell_idx + 1];
 
@@ -143,7 +120,6 @@ private:
         __m256 v_cos_lat = _mm256_set1_ps(cos_lat);
 
         for (uint32_t i = start_idx; i < end_idx; i += 8) {
-            segments_scanned += 8;
             const float* block_ptr = soa_data_ + (i / 8) * 56;
             
             __m256 v_ax = _mm256_load_ps(block_ptr);
