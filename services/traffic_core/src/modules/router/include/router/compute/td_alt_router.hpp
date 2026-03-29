@@ -38,6 +38,7 @@ struct HotNodeState {
     traffic::PointCount visit_id = 0;
 };
 
+template<typename PriorityQueueType = PriorityQueue>
 class TdAltRouter {
 public:
     explicit TdAltRouter(traffic::GraphView view, traffic::NodeID max_nodes) 
@@ -45,7 +46,7 @@ public:
     {
         hot_states_.resize(max_nodes);
         cold_parents_.resize(max_nodes, traffic::INVALID_NODE);
-        pq_.reserve(DEFAULT_PQ_CAPACITY);
+        pq_.reserve(max_nodes);
     }
 
     ALTHeuristicModule& get_heuristic() { return heuristic_module_; }
@@ -187,7 +188,7 @@ private:
     ALTHeuristicModule heuristic_module_;
     std::vector<HotNodeState> hot_states_;
     std::vector<traffic::NodeID> cold_parents_;
-    PriorityQueue pq_;
+    PriorityQueueType pq_;
     traffic::PointCount current_visit_id_ = 0;
 };
 

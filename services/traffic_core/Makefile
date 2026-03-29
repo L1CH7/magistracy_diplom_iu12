@@ -35,4 +35,9 @@ test-dynamic: build-builder
 
 pq-bench: build-builder
 	docker run --rm --init --network host \
-		traffic_core_builder /app/services/traffic_core/build/pq_benchmark
+		traffic_core_builder taskset -c 0 /app/services/traffic_core/build/pq_benchmark
+
+pq-comparison: build-builder
+	docker run --rm --init --network host \
+		-v $(shell pwd)/data:/app/data \
+		traffic_core_builder taskset -c 0 /app/services/traffic_core/build/router_pq_comparison --data /app/data

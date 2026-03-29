@@ -95,4 +95,16 @@ if(TRAFFIC_BUILD_TESTS)
         traffic_router
         quill::quill
     )
+
+    add_executable(router_pq_comparison tests/router_pq_comparison.cpp)
+    target_include_directories(router_pq_comparison PRIVATE 
+        src/modules/router/include 
+        src/common
+        src
+        3rd_party/doctest
+    )
+    target_link_libraries(router_pq_comparison PRIVATE 
+        traffic_router
+        quill::quill
+    )
 endif()
