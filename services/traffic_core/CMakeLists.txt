@@ -83,4 +83,16 @@ if(TRAFFIC_BUILD_TESTS)
         quill::quill
         concurrentqueue
     )
+
+    add_executable(pq_benchmark tests/pq_benchmark.cpp)
+    target_include_directories(pq_benchmark PRIVATE 
+        src/modules/router/include 
+        src/common
+        src
+        3rd_party/doctest
+    )
+    target_link_libraries(pq_benchmark PRIVATE 
+        traffic_router
+        quill::quill
+    )
 endif()
