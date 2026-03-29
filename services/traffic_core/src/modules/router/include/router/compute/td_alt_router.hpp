@@ -5,9 +5,11 @@
 #include <algorithm>
 #include "common/graph_types.hpp"
 #include "priority_queue.hpp"
+#include "advanced_pqs.hpp"
 #include "alt_heuristics.hpp"
 #include <x86intrin.h>
 #include "volume_bucket.hpp"
+
 
 namespace traffic::router::compute {
 
@@ -38,7 +40,7 @@ struct HotNodeState {
     traffic::PointCount visit_id = 0;
 };
 
-template<typename PriorityQueueType = PriorityQueue>
+template<typename PriorityQueueType = Strict8ArySoAHeap>
 class TdAltRouter {
 public:
     explicit TdAltRouter(traffic::GraphView view, traffic::NodeID max_nodes) 

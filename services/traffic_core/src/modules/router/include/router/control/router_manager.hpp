@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <vector>
 #include <format>
+#include "../compute/advanced_pqs.hpp"
 
 namespace traffic::router::control {
 

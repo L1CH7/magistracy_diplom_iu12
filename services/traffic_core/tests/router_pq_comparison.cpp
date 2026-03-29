@@ -168,11 +168,11 @@ int main(int argc, char** argv) {
     // 1. ALT (Weighted A*) Heaps
     results.push_back(RunTestProtected<TdAltRouter, Strict4AryHeap>("ALT Strict 4-Ary", tasks, view, num_nodes, landmarks, bl_ptr));
     results.push_back(RunTestProtected<TdAltRouter, Strict8ArySoAHeap>("ALT Strict 8-Ary SoA", tasks, view, num_nodes, landmarks, bl_ptr));
-    results.push_back(RunTestProtected<TdAltRouter, SBBH>("ALT SBBH", tasks, view, num_nodes, landmarks, bl_ptr));
+    // results.push_back(RunTestProtected<TdAltRouter, SBBH>("ALT SBBH", tasks, view, num_nodes, landmarks, bl_ptr));
 
     // 2. Dijkstra (Monotonic) Heaps
     results.push_back(RunTestProtected<DijkstraRouter, SafeRadixHeap>("DIJKSTRA Radix Heap", tasks, view, num_nodes, nullptr, bl_ptr));
-    results.push_back(RunTestProtected<DijkstraRouter, DeltaBucketQueue<4>>("DIJKSTRA Delta (D=16)", tasks, view, num_nodes, nullptr, bl_ptr));
+    // results.push_back(RunTestProtected<DijkstraRouter, DeltaBucketQueue<4>>("DIJKSTRA Delta (D=16)", tasks, view, num_nodes, nullptr, bl_ptr));
 
     std::cout << "\n+------------------------+------------+------------+------------+----------+----------+----------+\n";
     std::cout << "| PQ Type                | Total ms   | ns/Iter    | I-AVG      | QPS      | CORR%    | STATUS   |\n";
