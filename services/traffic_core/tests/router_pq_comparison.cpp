@@ -10,6 +10,7 @@
 #include <csetjmp>
 #include "router/control/router_manager.hpp"
 #include "router/compute/td_alt_router.hpp"
+#include "router/compute/dijkstra_router.hpp"
 #include "router/compute/advanced_pqs.hpp"
 
 using namespace traffic;
@@ -49,15 +50,14 @@ struct BenchResult {
     size_t completed_routes = 0;
     bool failed = false;
     bool crashed = false;
-    std::string error_msg = "";
 };
 
-template<typename PQType>
+template<template<typename> class RouterType, typename PQType>
 BenchResult RunTestProtected(const std::string& name, 
                              const std::vector<RouteTask>& tasks,
                              GraphView view, 
                              NodeID num_nodes,
-                             const EdgeWeight* landmarks,
+                             const uint16_t* landmarks,
                              const RoutingResult* baseline_results = nullptr) 
 {
     std::cout << "  - Starting test: " << name << "... " << std::flush;
@@ -69,10 +69,15 @@ BenchResult RunTestProtected(const std::string& name,
     if (sig == 0) {
         g_current_route_idx = 0;
         {
-            TestGuard guard; // Sets g_test_in_progress = 1
+            TestGuard guard;
             try {
-                TdAltRouter<PQType> router_instance(view, num_nodes);
-                if (landmarks) router_instance.get_heuristic().set_landmarks(landmarks);
+                RouterType<PQType> router_instance(view, num_nodes);
+                // Try to set landmarks only if RouterType supports it
+                if constexpr (requires(RouterType<PQType> r, const uint16_t* l) { r.get_heuristic().set_landmarks((const EdgeWeight*)l); }) {
+                    if (landmarks) {
+                        router_instance.get_heuristic().set_landmarks(reinterpret_cast<const EdgeWeight*>(landmarks));
+                    }
+                }
 
                 uint64_t total_iters = 0;
                 uint32_t correct_count = 0;
@@ -101,16 +106,13 @@ BenchResult RunTestProtected(const std::string& name,
                 std::cout << "Done.\n";
             } catch (const std::exception& e) {
                 res.failed = true;
-                res.error_msg = e.what();
                 std::cout << "FAILED: " << e.what() << "\n";
             }
-            // router_instance destructor is called here, while guard is still alive!
         }
     } else {
         res.crashed = true;
         res.failed = true;
-        res.error_msg = std::format("CRASHED (Signal {}) at route {}", sig, (int)g_current_route_idx);
-        std::cout << " !!! CRASHED !!! at route " << g_current_route_idx << "\n";
+        std::cout << " !!! CRASHED !!!\n";
     }
     
     return res;
@@ -131,11 +133,13 @@ int main(int argc, char** argv) {
 
     router::control::RouterManager manager;
     if (!manager.LoadGraphs(data_path)) {
+        std::cerr << "Failed to load graphs from " << data_path << "\n";
         return 1;
     }
 
     auto view = manager.get_view();
     auto num_nodes = manager.num_nodes();
+    const uint16_t* landmarks = manager.get_landmarks_ptr();
     
     std::mt19937 gen(42);
     std::uniform_int_distribution<NodeID> dist(0, num_nodes - 1);
@@ -146,14 +150,14 @@ int main(int argc, char** argv) {
         tasks.push_back({dist(gen), dist(gen)});
     }
 
-    std::cout << std::format("\n🚀 STARTING RESILIENT INTEGRATION BENCHMARK ({} routes)\n", NUM_ROUTES);
+    std::cout << std::format("\n🚀 STARTING GRAND FINALE INTEGRATION BENCHMARK ({} routes)\n", NUM_ROUTES);
+    if (!landmarks) std::cout << "⚠️ WARNING: Landmarks NOT found. ALT will run as Dijkstra.\n";
 
     std::vector<RoutingResult> baseline_res;
-    auto baseline_bench = RunTestProtected<router::PriorityQueue>("Baseline (Std 4-Ary)", tasks, view, num_nodes, nullptr);
-    if (baseline_bench.crashed || baseline_bench.failed) {
-        std::cerr << "FATAL: Baseline failed. Correctness metrics will be disabled.\n";
-    } else {
+    auto baseline_bench = RunTestProtected<TdAltRouter, router::PriorityQueue>("Baseline (ALT Std 4-Ary)", tasks, view, num_nodes, landmarks);
+    if (!baseline_bench.crashed && !baseline_bench.failed) {
         TdAltRouter<router::PriorityQueue> bl_router(view, num_nodes);
+        if (landmarks) bl_router.get_heuristic().set_landmarks((const EdgeWeight*)landmarks);
         for(const auto& t : tasks) baseline_res.push_back(bl_router.Route<false, true>(t.source, t.target));
     }
 
@@ -161,20 +165,20 @@ int main(int argc, char** argv) {
     results.push_back(baseline_bench);
     const RoutingResult* bl_ptr = baseline_res.empty() ? nullptr : baseline_res.data();
 
-    results.push_back(RunTestProtected<Ultimate4AryHeap>("Ultimate 4-Ary", tasks, view, num_nodes, nullptr, bl_ptr));
-    results.push_back(RunTestProtected<Ultimate8ArySoAHeap>("Ultimate 8-Ary (SoA)", tasks, view, num_nodes, nullptr, bl_ptr));
-    results.push_back(RunTestProtected<SafeRadixHeap>("Safe Vector Radix", tasks, view, num_nodes, nullptr, bl_ptr));
-    results.push_back(RunTestProtected<DeltaBucketQueue<2>>("Delta Bucket (D=4)", tasks, view, num_nodes, nullptr, bl_ptr));
-    results.push_back(RunTestProtected<DeltaBucketQueue<3>>("Delta Bucket (D=8)", tasks, view, num_nodes, nullptr, bl_ptr));
-    results.push_back(RunTestProtected<DeltaBucketQueue<4>>("Delta Bucket (D=16)", tasks, view, num_nodes, nullptr, bl_ptr));
+    // 1. ALT (Weighted A*) Heaps
+    results.push_back(RunTestProtected<TdAltRouter, Strict4AryHeap>("ALT Strict 4-Ary", tasks, view, num_nodes, landmarks, bl_ptr));
+    results.push_back(RunTestProtected<TdAltRouter, Strict8ArySoAHeap>("ALT Strict 8-Ary SoA", tasks, view, num_nodes, landmarks, bl_ptr));
+    results.push_back(RunTestProtected<TdAltRouter, SBBH>("ALT SBBH", tasks, view, num_nodes, landmarks, bl_ptr));
+
+    // 2. Dijkstra (Monotonic) Heaps
+    results.push_back(RunTestProtected<DijkstraRouter, SafeRadixHeap>("DIJKSTRA Radix Heap", tasks, view, num_nodes, nullptr, bl_ptr));
+    results.push_back(RunTestProtected<DijkstraRouter, DeltaBucketQueue<4>>("DIJKSTRA Delta (D=16)", tasks, view, num_nodes, nullptr, bl_ptr));
 
     std::cout << "\n+------------------------+------------+------------+------------+----------+----------+----------+\n";
     std::cout << "| PQ Type                | Total ms   | ns/Iter    | I-AVG      | QPS      | CORR%    | STATUS   |\n";
     std::cout << "+------------------------+------------+------------+------------+----------+----------+----------+\n";
     for (const auto& r : results) {
         std::string status = r.crashed ? "CRASHED" : (r.failed ? "FAILED" : "OK");
-        if (r.crashed) status += "@" + std::to_string(r.completed_routes);
-
         std::cout << std::format("| {:<22} | {:>10.1f} | {:>10.1f} | {:>10.0f} | {:>8.1f} | {:>7.1f}% | {:>8} |\n",
             r.name, r.total_ms, r.avg_ns_per_iter, r.avg_iters, r.qps, r.correctness, status);
     }
