@@ -78,8 +78,15 @@ public:
         uint32_t pop_count = 0;
         ALTHeuristic alt;
         const traffic::EdgeWeight* landmarks = heuristic_module_.get_landmark_ptr();
-        const traffic::EdgeWeight* target_l_ptr = (landmarks && target != traffic::INVALID_NODE) ?
-            (landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)) : nullptr;
+        const traffic::EdgeWeight* target_l_ptr = nullptr;
+        __m256i target_l0 = _mm256_setzero_si256();
+        __m256i target_l1 = _mm256_setzero_si256();
+
+        if (landmarks && target != traffic::INVALID_NODE) {
+            target_l_ptr = landmarks + (target * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK);
+            target_l0 = _mm256_load_si256(reinterpret_cast<const __m256i*>(target_l_ptr));
+            target_l1 = _mm256_load_si256(reinterpret_cast<const __m256i*>(target_l_ptr + 16));
+        }
         
         current_visit_id_++;
         
@@ -91,7 +98,8 @@ public:
         if (target_l_ptr) {
             h_source = alt.get_heuristic_avx2(
                 reinterpret_cast<const uint16_t*>(landmarks + (source * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
-                reinterpret_cast<const uint16_t*>(target_l_ptr)
+                target_l0, 
+                target_l1
             );
             h_source = (h_source * WA_STAR_NUM) / WA_STAR_DEN;
         }
@@ -112,7 +120,8 @@ public:
             if (target_l_ptr) {
                 h_u = alt.get_heuristic_avx2(
                     reinterpret_cast<const uint16_t*>(landmarks + (u * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
-                    reinterpret_cast<const uint16_t*>(target_l_ptr)
+                    target_l0, 
+                    target_l1
                 );
                 h_u = (h_u * WA_STAR_NUM) / WA_STAR_DEN;
             }
@@ -157,7 +166,8 @@ public:
                     if (target_l_ptr) {
                         h_v = alt.get_heuristic_avx2(
                             reinterpret_cast<const uint16_t*>(landmarks + (v * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
-                            reinterpret_cast<const uint16_t*>(target_l_ptr)
+                            target_l0, 
+                            target_l1
                         );
                         h_v = (h_v * WA_STAR_NUM) / WA_STAR_DEN;
                     }
