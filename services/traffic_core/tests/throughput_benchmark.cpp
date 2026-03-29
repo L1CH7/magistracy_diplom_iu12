@@ -21,63 +21,72 @@ using namespace traffic;
 // Глобальный путь к данным для бенчмарка
 static std::string g_data_path = "";
 
+// --- Аналитические структуры ---
 struct RouteStats {
     std::string type;
     int pts_count;
     double wall_time_ms;
     uint32_t iterations;
-    double route_duration_sec;
     size_t edges_count;
 };
 
-struct AggregatedStats {
-    double t_min = 1e9, t_max = 0, t_sum = 0;
-    std::vector<double> t_vals;
-    
-    uint32_t i_min = 0xFFFFFFFF, i_max = 0;
+struct AggStats {
+    double t_sum = 0, t_max = 0;
     uint64_t i_sum = 0;
-    std::vector<uint32_t> i_vals;
-
-    double dur_sum = 0;
-    size_t edges_sum = 0;
+    
+    // Для медиан и перцентилей нормализованных метрик
+    std::vector<double> ns_per_iter_vals;
+    std::vector<double> iter_per_edge_vals;
+    
     size_t count = 0;
 
     void add(const RouteStats& s) {
-        t_min = std::min(t_min, s.wall_time_ms); t_max = std::max(t_max, s.wall_time_ms);
-        t_sum += s.wall_time_ms; t_vals.push_back(s.wall_time_ms);
-
-        i_min = std::min(i_min, s.iterations); i_max = std::max(i_max, s.iterations);
-        i_sum += s.iterations; i_vals.push_back(s.iterations);
-
-        dur_sum += s.route_duration_sec; edges_sum += s.edges_count;
+        t_sum += s.wall_time_ms;
+        t_max = std::max(t_max, s.wall_time_ms);
+        i_sum += s.iterations;
+        
+        if (s.iterations > 0) {
+            ns_per_iter_vals.push_back((s.wall_time_ms * 1e6) / s.iterations);
+        }
+        if (s.edges_count > 0) {
+            iter_per_edge_vals.push_back(static_cast<double>(s.iterations) / s.edges_count);
+        }
         count++;
     }
 
-    void finalize(std::string label) {
+    void print(std::string label, int total_threads) {
         if (count == 0) return;
-        std::sort(t_vals.begin(), t_vals.end());
-        std::sort(i_vals.begin(), i_vals.end());
+        
+        std::sort(ns_per_iter_vals.begin(), ns_per_iter_vals.end());
+        std::sort(iter_per_edge_vals.begin(), iter_per_edge_vals.end());
         
         double t_avg = t_sum / count;
-        double t_p95 = t_vals[static_cast<size_t>(count * 0.95)];
-        
         double i_avg = static_cast<double>(i_sum) / count;
-        uint32_t i_p95 = i_vals[static_cast<size_t>(count * 0.95)];
+        
+        double ns_iter_avg = 0;
+        if (!ns_per_iter_vals.empty()) {
+            for (double v : ns_per_iter_vals) ns_iter_avg += v;
+            ns_iter_avg /= ns_per_iter_vals.size();
+        }
+        
+        double ns_iter_p95 = !ns_per_iter_vals.empty() 
+            ? ns_per_iter_vals[static_cast<size_t>(ns_per_iter_vals.size() * 0.95)] : 0;
+        
+        double iter_edge_avg = 0;
+        if (!iter_per_edge_vals.empty()) {
+            for (double v : iter_per_edge_vals) iter_edge_avg += v;
+            iter_edge_avg /= iter_per_edge_vals.size();
+        }
+        
+        double iter_edge_max = !iter_per_edge_vals.empty() ? iter_per_edge_vals.back() : 0;
 
-        double dur_avg = dur_sum / count;
-        double edges_avg = static_cast<double>(edges_sum) / count;
+        // Эффективный QPS = (Кол-во задач * Потоки) / Суммарное время процессора в секундах
+        double eff_qps = (t_sum > 0) ? (count * total_threads) / (t_sum / 1000.0) : 0;
 
-        std::cout << std::format("{:<7} | {:>7.2f} | {:>7.2f} | {:>7.2f} | {:>7.2f} | {:>8} | {:>8} | {:>8.0f} | {:>8} | {:>9.1f} | {:>7.0f}\n",
-            label, t_min, t_max, t_avg, t_p95, i_min, i_max, i_avg, i_p95, dur_avg, edges_avg);
+        std::cout << std::format("{:<7} | {:>7.2f} | {:>7.2f} | {:>8.0f} | {:>9.1f} | {:>9.1f} | {:>9.1f} | {:>9.1f} | {:>8.0f}\n",
+            label, t_avg, t_max, i_avg, ns_iter_avg, ns_iter_p95, iter_edge_avg, iter_edge_max, eff_qps);
     }
 };
-
-void PrintHeader(std::string title) {
-    std::cout << "\n=== " << title << " ===\n";
-    std::cout << std::format("{:<7} | {:>7} | {:>7} | {:>7} | {:>7} | {:>8} | {:>8} | {:>8} | {:>8} | {:>9} | {:>7}\n",
-        "GRP/PTS", "T-MIN", "T-MAX", "T-AVG", "T-P95", "I-MIN", "I-MAX", "I-AVG", "I-P95", "DUR(sec)", "EDGES");
-    std::cout << std::string(105, '-') << "\n";
-}
 
 TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
     router::control::RouterManager router_manager;
@@ -145,7 +154,6 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
                     static_cast<int>(tasks[i].ids.size()),
                     duration_ms,
                     res->visited_nodes_count,
-                    static_cast<double>(res->total_weight),
                     res->path.size()
                 });
             }
@@ -160,8 +168,8 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
     auto end_time = std::chrono::high_resolution_clock::now();
     double total_seconds = std::chrono::duration<double>(end_time - start_time).count();
 
-    std::map<int, AggregatedStats> id_stats, ll_stats;
-    AggregatedStats total_id, total_ll, total_all;
+    std::map<int, AggStats> id_stats, ll_stats;
+    AggStats total_id, total_ll, total_all;
 
     for (const auto& th_res : thread_results) {
         for (const auto& s : th_res) {
@@ -171,20 +179,27 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
         }
     }
 
-    PrintHeader("DIRECT ID ROUTING");
-    for (int i = 2; i <= 5; ++i) id_stats[i].finalize(std::to_string(i) + " PTS");
-    std::cout << std::string(105, '-') << "\n";
-    total_id.finalize("ALL ID");
+    auto print_hdr = [](std::string title) {
+        std::cout << "\n=== " << title << " ===\n";
+        std::cout << std::format("{:<7} | {:>7} | {:>7} | {:>8} | {:>9} | {:>9} | {:>9} | {:>9} | {:>8}\n",
+            "GRP/PTS", "T-AVG", "T-MAX", "I-AVG", "ns/Iter", "ns/Iter95", "Iter/Edge", "I/E(MAX)", "EFF-QPS");
+        std::cout << std::string(100, '-') << "\n";
+    };
 
-    PrintHeader("COORDINATE SNAP (LL) ROUTING");
-    for (int i = 2; i <= 5; ++i) ll_stats[i].finalize(std::to_string(i) + " PTS");
-    std::cout << std::string(105, '-') << "\n";
-    total_ll.finalize("ALL LL");
+    print_hdr("DIRECT ID ROUTING");
+    for (int i = 2; i <= 5; ++i) id_stats[i].print(std::to_string(i) + " PTS", num_threads);
+    std::cout << std::string(100, '-') << "\n";
+    total_id.print("ALL ID", num_threads);
 
-    PrintHeader("OVERALL SYSTEM");
-    total_all.finalize("GLOBAL");
+    print_hdr("COORDINATE SNAP (LL) ROUTING");
+    for (int i = 2; i <= 5; ++i) ll_stats[i].print(std::to_string(i) + " PTS", num_threads);
+    std::cout << std::string(100, '-') << "\n";
+    total_ll.print("ALL LL", num_threads);
 
-    std::cout << "\n🔥 Global Throughput: " << NUM_TASKS / total_seconds << " QPS (Full System Wall Time)\n";
+    print_hdr("OVERALL SYSTEM");
+    total_all.print("GLOBAL", num_threads);
+
+    std::cout << "\n🔥 Global Wall-Clock Throughput: " << NUM_TASKS / total_seconds << " QPS\n\n";
 }
 
 int main(int argc, char** argv) {
