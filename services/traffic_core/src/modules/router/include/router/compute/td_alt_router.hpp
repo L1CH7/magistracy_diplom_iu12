@@ -5,7 +5,6 @@
 #include <algorithm>
 #include "common/graph_types.hpp"
 #include "priority_queue.hpp"
-#include "advanced_pqs.hpp"
 #include "alt_heuristics.hpp"
 #include <x86intrin.h>
 #include "volume_bucket.hpp"
@@ -40,7 +39,6 @@ struct HotNodeState {
     traffic::PointCount visit_id = 0;
 };
 
-template<typename PriorityQueueType = PriorityQueue>
 class TdAltRouter {
 public:
     explicit TdAltRouter(traffic::GraphView view, traffic::NodeID max_nodes) 
@@ -209,7 +207,7 @@ private:
     ALTHeuristicModule heuristic_module_;
     std::vector<HotNodeState> hot_states_;
     std::vector<traffic::NodeID> cold_parents_;
-    PriorityQueueType pq_;
+    PriorityQueue pq_;
     traffic::PointCount current_visit_id_ = 0;
 };
 

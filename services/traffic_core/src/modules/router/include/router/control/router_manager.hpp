@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <vector>
 #include <format>
-#include "../compute/advanced_pqs.hpp"
 
 namespace traffic::router::control {
 
@@ -50,9 +49,9 @@ public:
         }
 
         // Thread-local изоляция A* для конкурентных запросов
-        thread_local std::unique_ptr<compute::TdAltRouter<>> tl_router = nullptr;
+        thread_local std::unique_ptr<compute::TdAltRouter> tl_router = nullptr;
         if (!tl_router) {
-            tl_router = std::make_unique<compute::TdAltRouter<>>(mapped_graph_.view, num_nodes);
+            tl_router = std::make_unique<compute::TdAltRouter>(mapped_graph_.view, num_nodes);
             if (mapped_graph_.landmarks_region) {
                 tl_router->get_heuristic().set_landmarks(static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()));
             }

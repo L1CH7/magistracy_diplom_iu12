@@ -13,7 +13,6 @@ namespace traffic::router::compute {
 /**
  * @brief Pure Dijkstra Router for monotonicity comparison with Radix Heaps.
  */
-template<typename PriorityQueueType = PriorityQueue>
 class DijkstraRouter {
 public:
     explicit DijkstraRouter(traffic::GraphView view, traffic::NodeID max_nodes) 
@@ -127,7 +126,7 @@ private:
     traffic::GraphView view_;
     std::vector<HotNodeState> hot_states_;
     std::vector<traffic::NodeID> cold_parents_;
-    PriorityQueueType pq_;
+    PriorityQueue pq_;
     traffic::PointCount current_visit_id_ = 0;
 };
 
