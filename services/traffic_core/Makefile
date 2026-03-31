@@ -1,7 +1,7 @@
 .PHONY: build build-builder run-builder
 
 build-builder:
-	docker build --target builder -t traffic_core_builder -f Dockerfile ../..
+	DOCKER_BUILDKIT=1 docker build --target builder -t traffic_core_builder -f Dockerfile ../..
 
 run-builder: build-builder
 	docker run --rm --init --network host \
@@ -14,7 +14,7 @@ run-builder: build-builder
 		traffic_core_builder /app/services/traffic_core/build/src/graph_builder/traffic_graph_builder $(ARGS)
 
 build-release:
-	docker build -t traffic_core -f Dockerfile ../..
+	DOCKER_BUILDKIT=1 docker build -t traffic_core -f Dockerfile ../..
 
 run-router: build-release
 	docker run --rm --init --network host \
@@ -23,10 +23,14 @@ run-router: build-release
 
 test-router: run-router
 
+THREADS ?= 12
+
 throughput-bench: build-builder
+	mkdir -p $(HOME)/.ccache_docker
 	docker run --rm --init --network host \
 		-v $(shell pwd)/data:/app/data \
-		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark --data /app/data
+		-v $(HOME)/.ccache_docker:/root/.cache/ccache \
+		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark --data /app/data --threads $(THREADS)
 
 test-dynamic: build-builder
 	docker run --rm --init --network host \

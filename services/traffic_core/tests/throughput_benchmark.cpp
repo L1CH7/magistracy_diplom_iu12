@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <map>
+#include <pthread.h>
+#include <sched.h>
 
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
@@ -20,6 +22,35 @@ using namespace traffic;
 
 // Глобальный путь к данным для бенчмарка
 static std::string g_data_path = "";
+static int g_num_threads = 12; // Дефолт
+
+// Вызывать ИЗНУТРИ рабочего потока в самом начале!
+void PinThreadToCore(int worker_idx, int num_workers) {
+    int hw_threads = std::thread::hardware_concurrency(); // Для 5700G это 16
+    int phys_cores = hw_threads / 2; // 8
+    
+    int target_cpu = 0;
+
+    if (num_workers < phys_cores) {
+        // Потоков <= 7: обходим стороной 0-е физическое ядро (и его SMT)
+        // worker_idx (0..6) ляжет на ядра (1..7)
+        target_cpu = (worker_idx + 1) % hw_threads;
+    } else {
+        // Потоков 8+: раскидываем последовательно.
+        // 0..7 лягут на чистые физические ядра.
+        // 8..15 лягут на SMT-потоки.
+        target_cpu = worker_idx % hw_threads;
+    }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(target_cpu, &cpuset);
+
+    int rc = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    if (rc != 0) {
+        std::cerr << "Error setting thread affinity for worker " << worker_idx << "\n";
+    }
+}
 
 // --- Аналитические структуры ---
 struct RouteStats {
@@ -96,7 +127,7 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
         FAIL("Could not load graphs from " << g_data_path);
     }
 
-    int num_threads = std::thread::hardware_concurrency();
+    int num_threads = g_num_threads;
     constexpr int NUM_TASKS = 20000;
 
     std::cout << "\n======================================================\n";
@@ -138,7 +169,15 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
 
     for (int i = 0; i < NUM_TASKS; ++i) {
         pool.Enqueue([&router_manager, &tasks, i, &completed_tasks, &thread_results, num_threads]() {
-            int thread_id = i % num_threads;
+            static std::atomic<int> next_worker_id{0};
+            static thread_local int worker_id = -1;
+            
+            if (worker_id == -1) {
+                worker_id = next_worker_id.fetch_add(1);
+                PinThreadToCore(worker_id, num_threads);
+            }
+
+            int thread_id = worker_id % num_threads;
             auto t_start = std::chrono::high_resolution_clock::now();
             
             auto res = (tasks[i].type == "ID") 
@@ -209,6 +248,11 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--data" && i + 1 < argc) {
             g_data_path = argv[i + 1];
+            for(int j = i; j < argc - 2; ++j) argv[j] = argv[j+2];
+            argc -= 2;
+            i--;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            g_num_threads = std::stoi(argv[i + 1]);
             for(int j = i; j < argc - 2; ++j) argv[j] = argv[j+2];
             argc -= 2;
             i--;
