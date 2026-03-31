@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <map>
+#include <map>
 
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
@@ -20,6 +21,9 @@ using namespace traffic;
 
 // Глобальный путь к данным для бенчмарка
 static std::string g_data_path = "";
+static int g_num_threads = 12; // Дефолт
+static bool g_use_affinity = true;
+static bool g_avoid_os = true;
 
 // --- Аналитические структуры ---
 struct RouteStats {
@@ -96,7 +100,7 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
         FAIL("Could not load graphs from " << g_data_path);
     }
 
-    int num_threads = std::thread::hardware_concurrency();
+    int num_threads = g_num_threads;
     constexpr int NUM_TASKS = 20000;
 
     std::cout << "\n======================================================\n";
@@ -128,7 +132,7 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
         }
     }
 
-    traffic::core::ThreadPool pool(num_threads); 
+    traffic::core::ThreadPool pool(num_threads, g_use_affinity, g_avoid_os); 
     std::atomic<int> completed_tasks{0};
     
     std::vector<std::vector<RouteStats>> thread_results(num_threads);
@@ -138,7 +142,7 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
 
     for (int i = 0; i < NUM_TASKS; ++i) {
         pool.Enqueue([&router_manager, &tasks, i, &completed_tasks, &thread_results, num_threads]() {
-            int thread_id = i % num_threads;
+            int thread_id = core::ThreadPool::GetWorkerId();
             auto t_start = std::chrono::high_resolution_clock::now();
             
             auto res = (tasks[i].type == "ID") 
@@ -209,6 +213,21 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--data" && i + 1 < argc) {
             g_data_path = argv[i + 1];
+            for(int j = i; j < argc - 2; ++j) argv[j] = argv[j+2];
+            argc -= 2;
+            i--;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            g_num_threads = std::stoi(argv[i + 1]);
+            for(int j = i; j < argc - 2; ++j) argv[j] = argv[j+2];
+            argc -= 2;
+            i--;
+        } else if (arg == "--affinity" && i + 1 < argc) {
+            g_use_affinity = (std::string(argv[i + 1]) == "1");
+            for(int j = i; j < argc - 2; ++j) argv[j] = argv[j+2];
+            argc -= 2;
+            i--;
+        } else if (arg == "--avoid-os" && i + 1 < argc) {
+            g_avoid_os = (std::string(argv[i + 1]) == "1");
             for(int j = i; j < argc - 2; ++j) argv[j] = argv[j+2];
             argc -= 2;
             i--;

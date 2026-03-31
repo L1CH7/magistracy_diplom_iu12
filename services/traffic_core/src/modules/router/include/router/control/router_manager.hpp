@@ -162,6 +162,11 @@ public:
         return Route<TrafficEnabled, ProfileEnabled>(waypoints, start_time);
     }
 
+    const uint16_t* get_landmarks_ptr() const {
+        return (mapped_graph_.landmarks_region) ? 
+            static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()) : nullptr;
+    }
+
     const traffic::GraphView& get_view() const { return mapped_graph_.view; }
 
     // Helpers for benchmarking

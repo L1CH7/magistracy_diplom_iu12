@@ -184,15 +184,15 @@ std::expected<void, std::string> LandmarkBuilder::Build(const std::string& csr_p
     }
 
     std::println("-> Running MaxCover Stochastic Search...");
-    auto best_indices = OptimizeMaxCover(to_L, from_L, fwd.n, 32);
+    auto best_indices = OptimizeMaxCover(to_L, from_L, fwd.n, TRAFFIC_TOTAL_LANDMARKS);
 
-    std::println("-> Packing 32 Selected Landmarks into SIMD Layout...");
+    std::println("-> Packing {} Selected Landmarks into SIMD Layout...", TRAFFIC_TOTAL_LANDMARKS);
     std::ofstream l_out(out_path, std::ios::binary);
     if (!l_out) return std::unexpected("Cannot write " + out_path);
 
     for (uint32_t v = 0; v < fwd.n; ++v) {
-        uint16_t row_buffer[64];
-        for (int i = 0; i < 32; ++i) {
+        uint16_t row_buffer[TRAFFIC_TOTAL_LANDMARKS * 2];
+        for (int i = 0; i < TRAFFIC_TOTAL_LANDMARKS; ++i) {
             uint32_t l_idx = best_indices[i];
             row_buffer[i * 2]     = static_cast<uint16_t>(std::min<uint32_t>(to_L[l_idx][v], 0xFFFE));
             row_buffer[i * 2 + 1] = static_cast<uint16_t>(std::min<uint32_t>(from_L[l_idx][v], 0xFFFE));

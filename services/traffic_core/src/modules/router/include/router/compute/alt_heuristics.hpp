@@ -6,52 +6,43 @@
 
 namespace traffic::router {
 
-/**
- * @brief ALT Heuristics using AVX2 SIMD vectorization.
- * Computes max(|d(u,L) - d(t,L)|, |d(L,t) - d(L,u)|) over 32 landmarks.
- * Distances are stored in interleaved format: [to_L1, from_L1, to_L2, from_L2, ...]
- */
 class ALTHeuristic {
 public:
-    /**
-     * @brief Computes the ALT lower bound between node u and target t.
-     * @param u_ptr Pointer to u's landmark distances (64 uint16_t, 32-byte aligned)
-     * @param t_ptr Pointer to t's landmark distances (64 uint16_t, 32-byte aligned)
-     */
-    [[nodiscard]] inline PathWeight get_heuristic_avx2(const uint16_t* u_ptr, const uint16_t* t_ptr) const noexcept {
-        __m256i max_vec = _mm256_setzero_si256();
+    // Функция теперь принимает готовые регистры t0 и t1 по значению!
+    [[nodiscard]] inline traffic::PathWeight get_heuristic_avx2(
+        const uint16_t* __restrict u_ptr, 
+        const __m256i t0, 
+        const __m256i t1) const noexcept 
+    {
+        // Грузим только текущий узел (32 байта за раз)
+        __m256i u0 = _mm256_load_si256(reinterpret_cast<const __m256i*>(u_ptr));
+        __m256i u1 = _mm256_load_si256(reinterpret_cast<const __m256i*>(u_ptr + 16));
 
-        // Each loop iteration processes 16 uint16_t (8 landmarks, to and from)
-        // Total 4 iterations = 64 uint16_t (32 landmarks)
-        #pragma GCC unroll 4
-        for (int i = 0; i < 4; ++i) {
-            // Load 32 bytes (16 uint16_t) from u and t landmark data
-            __m256i u_data = _mm256_load_si256(reinterpret_cast<const __m256i*>(u_ptr + i * 16));
-            __m256i t_data = _mm256_load_si256(reinterpret_cast<const __m256i*>(t_ptr + i * 16));
+        // Вычисляем разницы
+        __m256i diff_ut_0 = _mm256_subs_epu16(u0, t0);
+        __m256i diff_tu_0 = _mm256_subs_epu16(t0, u0);
+        // Blend берет четные элементы из первого аргумента (0, 2, 4...), нечетные из второго (1, 3...)
+        // Маска 0xAA (10101010) выбирает элементы 1, 3, 5, 7, 9, 11, 13, 15 из второго операнда
+        __m256i h0 = _mm256_blend_epi16(diff_ut_0, diff_tu_0, 0xAA);
 
-            // Saturated subtraction: epu16 handles non-negative result |d1 - d2|
-            // sub1 = max(0, u - t)
-            // sub2 = max(0, t - u)
-            __m256i sub1 = _mm256_subs_epu16(u_data, t_data);
-            __m256i sub2 = _mm256_subs_epu16(t_data, u_data);
+        __m256i diff_ut_1 = _mm256_subs_epu16(u1, t1);
+        __m256i diff_tu_1 = _mm256_subs_epu16(t1, u1);
+        __m256i h1 = _mm256_blend_epi16(diff_ut_1, diff_tu_1, 0xAA);
 
-            // combined = |u - t|
-            __m256i combined = _mm256_max_epu16(sub1, sub2);
-            max_vec = _mm256_max_epu16(max_vec, combined);
-        }
+        // 3. Находим максимум между двумя половинами (h0 и h1)
+        __m256i max_h = _mm256_max_epu16(h0, h1);
 
-        // Horizontal max over 256-bit register
-        // 1. Fold 256 -> 128
-        __m128i max_128 = _mm_max_epu16(_mm256_castsi256_si128(max_vec), _mm256_extracti128_si256(max_vec, 1));
-        
-        // 2. Cascaded horizontal max (128-bit)
-        // Shift and max to reduce 8 elements (uint16) to 1
-        max_128 = _mm_max_epu16(max_128, _mm_srli_si128(max_128, 8)); // Max of [0..3] and [4..7]
-        max_128 = _mm_max_epu16(max_128, _mm_srli_si128(max_128, 4)); // Max of [0..1] and [2..3]
-        max_128 = _mm_max_epu16(max_128, _mm_srli_si128(max_128, 2)); // Max of 0 and 1
+        // Горизонтальный максимум
+        __m128i max128 = _mm_max_epu16(_mm256_castsi256_si128(max_h), _mm256_extracti128_si256(max_h, 1));
+        max128 = _mm_max_epu16(max128, _mm_shuffle_epi32(max128, _MM_SHUFFLE(1, 0, 3, 2)));
+        // c. Складываем 64 -> 32
+        max128 = _mm_max_epu16(max128, _mm_shufflelo_epi16(max128, _MM_SHUFFLE(1, 0, 3, 2)));
+        // d. Складываем 32 -> 16
+        max128 = _mm_max_epu16(max128, _mm_shufflelo_epi16(max128, _MM_SHUFFLE(2, 3, 0, 1)));
 
-        return static_cast<PathWeight>(_mm_extract_epi16(max_128, 0));
+        return static_cast<traffic::PathWeight>(_mm_extract_epi16(max128, 0));
     }
 };
 
 } // namespace traffic::router
+

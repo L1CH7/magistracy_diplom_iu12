@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     libpqxx-dev \
     libboost-dev \
     postgresql-server-dev-all \
+    ccache \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,7 +21,8 @@ COPY services/traffic_core /app/services/traffic_core
 WORKDIR /app/services/traffic_core/build
 
 # Компилируем оба бинарника: traffic_core и traffic_graph_builder
-RUN cmake -G Ninja -DCMAKE_BUILD_TYPE=Release .. && \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache .. && \
     cmake --build .
 
 # --- СТЕЙДЖ ЗАПУСКА (RUNTIME) ---
