@@ -40,7 +40,7 @@ struct HotNodeState {
     traffic::PointCount visit_id = 0;
 };
 
-template<typename PriorityQueueType = Strict8ArySoAHeap>
+template<typename PriorityQueueType = PriorityQueue>
 class TdAltRouter {
 public:
     explicit TdAltRouter(traffic::GraphView view, traffic::NodeID max_nodes) 
