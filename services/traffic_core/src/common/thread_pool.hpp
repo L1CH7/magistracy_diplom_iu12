@@ -14,6 +14,7 @@
 
 namespace traffic::core
 {
+inline thread_local int g_worker_id = -1;
 
 class ThreadPool
 {
@@ -34,19 +35,33 @@ public:
 
         for( unsigned i = 0; i < num_threads; ++i )
         {
-            workers_.emplace_back( [this, i, use_affinity, avoid_os_cores]() {
+            workers_.emplace_back( [this, i, use_affinity, avoid_os_cores, num_threads]() {
+                g_worker_id = static_cast<int>(i);
 #ifdef __linux__
                 if( use_affinity )
                 {
-                    unsigned core_id = i;
-                    if( avoid_os_cores )
-                    {
-                        core_id += 2;
+                    unsigned hw_threads = std::thread::hardware_concurrency();
+                    // Предполагаем, что половина - физические (для типичных AMD/Intel с SMT)
+                    unsigned phys_cores = hw_threads > 1 ? hw_threads / 2 : 1; 
+                    unsigned core_id = 0;
+
+                    if (avoid_os_cores && phys_cores > 2 && num_threads <= phys_cores - 1) {
+                        // Пропускаем физическое ядро 0 (оно для ОС). 
+                        // Раскидываем потоки строго по физическим ядрам 1..N
+                        core_id = (i % (phys_cores - 1)) + 1;
+                    } 
+                    else if (num_threads <= phys_cores) {
+                        // Потоков мало, avoid_os_cores выключен. Сажаем на физические 0..N
+                        core_id = i % phys_cores;
+                    } 
+                    else {
+                        // Потоков больше, чем физических ядер. Задействуем SMT равномерно.
+                        core_id = i % hw_threads;
                     }
                     
                     cpu_set_t cpuset;
                     CPU_ZERO( &cpuset );
-                    CPU_SET( core_id % std::thread::hardware_concurrency(), &cpuset );
+                    CPU_SET( core_id, &cpuset );
                     
                     pthread_setaffinity_np( pthread_self(), sizeof( cpu_set_t ), &cpuset );
                 }
@@ -100,6 +115,8 @@ public:
             std::this_thread::yield();
         }
     }
+
+    static int GetWorkerId() { return g_worker_id; }
 
 private:
     std::vector< std::thread > workers_;

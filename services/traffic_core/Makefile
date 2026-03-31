@@ -24,13 +24,19 @@ run-router: build-release
 test-router: run-router
 
 THREADS ?= 12
+AFFINITY ?= 1
+AVOID_OS ?= 1
 
 throughput-bench: build-builder
 	mkdir -p $(HOME)/.ccache_docker
 	docker run --rm --init --network host \
 		-v $(shell pwd)/data:/app/data \
 		-v $(HOME)/.ccache_docker:/root/.cache/ccache \
-		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark --data /app/data --threads $(THREADS)
+		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark \
+			--data /app/data \
+			--threads $(THREADS) \
+			--affinity $(AFFINITY) \
+			--avoid-os $(AVOID_OS)
 
 test-dynamic: build-builder
 	docker run --rm --init --network host \
