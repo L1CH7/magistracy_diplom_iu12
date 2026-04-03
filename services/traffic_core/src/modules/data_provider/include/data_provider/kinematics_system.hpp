@@ -20,6 +20,7 @@ struct PhysicsContext
 {
     // Live physical occupancy data (updated by KinematicsSystem during transitions)
     uint32_t * live_volumes = nullptr;
+    uint32_t * max_volumes  = nullptr;
     const traffic::PenaltyScale * k_magic = nullptr;
 
     // Static edge weights from the CSR graph (w_i = free-flow travel time in seconds).
@@ -137,6 +138,10 @@ public:
      *  - inv_edge_length_m is now updated immediately when agent enters next edge.
      *  - BPR velocity is computed ONCE at edge entry (O(transitions), not O(agents*ticks)).
      *
+     * - [x] Update `kinematics_system.hpp`
+     * - [x] Add `max_volumes` to `PhysicsContext` struct
+     * - [x] Update peak volumes in `ProcessTransitions()` during edge hops
+     *
      * @param ctx Physics context for BPR speed and geometry lookup.
      * @return Number of agents that completed their route this tick.
      */
@@ -169,8 +174,11 @@ public:
                     // Update physical occupancy counters
                     if( ctx.live_volumes )
                     {
-                        ctx.live_volumes[ old_edge ]--;
+                        if( ctx.live_volumes[ old_edge ] > 0 )
+                            ctx.live_volumes[ old_edge ]--;
                         ctx.live_volumes[ next_edge ]++;
+                        if( ctx.max_volumes && ctx.live_volumes[ next_edge ] > ctx.max_volumes[ next_edge ] )
+                            ctx.max_volumes[ next_edge ] = ctx.live_volumes[ next_edge ];
                     }
 
                     pool_.current_edge[ agent_idx ]        = next_edge;
@@ -187,7 +195,8 @@ public:
                     // End of route: despawn and update occupancy
                     if( ctx.live_volumes )
                     {
-                        ctx.live_volumes[ old_edge ]--;
+                        if( ctx.live_volumes[ old_edge ] > 0 )
+                            ctx.live_volumes[ old_edge ]--;
                     }
 
                     pool_.is_active[ agent_idx ]  = 0;

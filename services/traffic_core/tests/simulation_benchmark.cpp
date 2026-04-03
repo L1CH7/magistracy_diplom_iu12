@@ -10,6 +10,7 @@
 #include <random>
 #include <csignal>
 #include <sstream>
+#include <algorithm>
 
 #ifdef __linux__
 #include <pthread.h>
@@ -191,50 +192,43 @@ int main( int argc, char ** argv )
     // --- Results ---
     size_t final_routes = engine.GetRoutesComputed();
     
-    // Calculate VolumeManager Bucket load histogram
+    // Calculate historical maximum physical edge load statistics
     size_t cap_zero = 0, cap_1_25 = 0, cap_25_50 = 0, cap_50_75 = 0, cap_75_85 = 0;
     size_t cap_85_90 = 0, cap_90_95 = 0, cap_95_99 = 0, cap_99_100 = 0, cap_over = 0;
+    std::vector< float > all_loads;
     
-    if( auto vol_mgr = engine.GetRouterManager().get_volume_manager() )
+    auto k_magic = engine.GetRouterManager().get_kmagic_ptr();
+    const auto & view = engine.GetRouterManager().get_view();
+    const auto & max_vols = engine.GetMaxLiveVolumes();
+    all_loads.reserve( max_vols.size() );
+    
+    for( size_t i = 0; i < max_vols.size(); ++i )
     {
-        auto buckets    = vol_mgr->data();
-        auto k_magic    = engine.GetRouterManager().get_kmagic_ptr();
-        const auto & view = engine.GetRouterManager().get_view();
-        size_t n_edges  = engine.GetRouterManager().num_edges();
-
-        for( size_t i = 0; i < n_edges; ++i )
+        uint32_t km = k_magic ? k_magic[ i ] : 0;
+        if( km == 0 )
         {
-            // BPR saturation capacity: penalty = w when v = v_cap.
-            // From: k_magic * v_cap^2 / 2^20 = w  =>  v_cap = sqrt(w * 2^20 / k_magic)
-            // Edges with k_magic=0 (footpaths/service) have undefined capacity — skip.
-            uint32_t km = k_magic ? k_magic[ i ] : 0;
-            if( km == 0 )
-            {
-                cap_zero += traffic::router::compute::NUM_BUCKETS;
-                continue;
-            }
-
-            float w_sec    = static_cast< float >( view.static_weights ? view.static_weights[ i ] : 1 );
-            float capacity = std::sqrt( w_sec * static_cast< float >( 1u << 20 ) /
-                                        static_cast< float >( km ) );
-            capacity = std::max( 1.0f, capacity );
-
-            for( int b = 0; b < traffic::router::compute::NUM_BUCKETS; ++b )
-            {
-                uint32_t vol = buckets[ i ].volumes[ b ].load( std::memory_order_relaxed );
-                float load = static_cast< float >( vol ) / capacity;
-                if( vol == 0 )           cap_zero++;
-                else if( load < 0.25f )  cap_1_25++;
-                else if( load < 0.50f )  cap_25_50++;
-                else if( load < 0.75f )  cap_50_75++;
-                else if( load < 0.85f )  cap_75_85++;
-                else if( load < 0.90f )  cap_85_90++;
-                else if( load < 0.95f )  cap_90_95++;
-                else if( load < 0.99f )  cap_95_99++;
-                else if( load <= 1.00f ) cap_99_100++;
-                else                     cap_over++;
-            }
+            cap_zero++;
+            continue;
         }
+
+        float w_sec = static_cast< float >( view.static_weights ? view.static_weights[ i ] : 1 );
+        float capacity = std::sqrt( w_sec * static_cast< float >( 1u << 20 ) / static_cast< float >( km ) );
+        capacity = std::max( 1.0f, capacity );
+
+        uint32_t max_vol = max_vols[ i ];
+        float load = static_cast< float >( max_vol ) / capacity;
+        if( max_vol > 0 ) all_loads.push_back( load );
+
+        if( max_vol == 0 )       cap_zero++;
+        else if( load < 0.25f )  cap_1_25++;
+        else if( load < 0.50f )  cap_25_50++;
+        else if( load < 0.75f )  cap_50_75++;
+        else if( load < 0.85f )  cap_75_85++;
+        else if( load < 0.90f )  cap_85_90++;
+        else if( load < 0.95f )  cap_90_95++;
+        else if( load < 0.99f )  cap_95_99++;
+        else if( load <= 1.00f ) cap_99_100++;
+        else                     cap_over++;
     }
 
     std::cout << "================================================" << std::endl;
@@ -250,17 +244,29 @@ int main( int argc, char ** argv )
     std::cout << " Routes Completed: " << engine.GetTotalCompletedRoutes() << " (Agents reached destination)" << std::endl;
     std::cout << " Edges Crossed:    " << total_edge_transitions << std::endl;
     std::cout << "------------------------------------------------" << std::endl;
-    std::cout << " Volume Buckets Usage Histogram:" << std::endl;
-    std::cout << "   0%       load:  " << cap_zero << " timeslots" << std::endl;
-    std::cout << "   1-25%    load:  " << cap_1_25 << " timeslots" << std::endl;
-    std::cout << "  25-50%    load:  " << cap_25_50 << " timeslots" << std::endl;
-    std::cout << "  50-75%    load:  " << cap_50_75 << " timeslots" << std::endl;
-    std::cout << "  75-85%    load:  " << cap_75_85 << " timeslots" << std::endl;
-    std::cout << "  85-90%    load:  " << cap_85_90 << " timeslots" << std::endl;
-    std::cout << "  90-95%    load:  " << cap_90_95 << " timeslots" << std::endl;
-    std::cout << "  95-99%    load:  " << cap_95_99 << " timeslots" << std::endl;
-    std::cout << "  99-100%   load:  " << cap_99_100 << " timeslots" << std::endl;
-    std::cout << "   >100%    load:  " << cap_over << " timeslots (Local roads may overflow due to ASF)" << std::endl;
+    std::cout << " Maximum Physical Edge Load Histogram (All-Time):" << std::endl;
+    std::cout << "   0%       load:  " << cap_zero << " edges" << std::endl;
+    std::cout << "   1-25%    load:  " << cap_1_25 << " edges" << std::endl;
+    std::cout << "  25-50%    load:  " << cap_25_50 << " edges" << std::endl;
+    std::cout << "  50-75%    load:  " << cap_50_75 << " edges" << std::endl;
+    std::cout << "  75-85%    load:  " << cap_75_85 << " edges" << std::endl;
+    std::cout << "  85-90%    load:  " << cap_85_90 << " edges" << std::endl;
+    std::cout << "  90-95%    load:  " << cap_90_95 << " edges" << std::endl;
+    std::cout << "  95-99%    load:  " << cap_95_99 << " edges" << std::endl;
+    std::cout << "  99-100%   load:  " << cap_99_100 << " edges" << std::endl;
+    std::cout << "   >100%    load:  " << cap_over << " edges (Over capacity bottleneck)" << std::endl;
+    
+    if( !all_loads.empty() )
+    {
+        std::sort( all_loads.begin(), all_loads.end() );
+        std::cout << "------------------------------------------------" << std::endl;
+        std::cout << " Maximum Load Statistics (Non-zero edges):" << std::endl;
+        std::cout << "  Max Load: " << all_loads.back() << std::endl;
+        std::cout << "  P99 Load: " << all_loads[ static_cast< size_t >( 0.99f * ( all_loads.size() - 1 ) ) ] << std::endl;
+        std::cout << "  P95 Load: " << all_loads[ static_cast< size_t >( 0.95f * ( all_loads.size() - 1 ) ) ] << std::endl;
+        std::cout << "  P90 Load: " << all_loads[ static_cast< size_t >( 0.90f * ( all_loads.size() - 1 ) ) ] << std::endl;
+    }
+
     std::cout << "================================================" << std::endl;
 
     return 0;

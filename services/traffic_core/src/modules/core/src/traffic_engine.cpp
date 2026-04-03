@@ -80,6 +80,7 @@ std::expected< void, std::string > TrafficEngine::Init( const std::string & data
     // Pre-build per-edge occupancy and lengths for PhysicsContext (avoids geometry_store lookup per tick)
     size_t n_edges = static_cast< size_t >( router_manager_.num_edges() );
     live_edge_volumes_.assign( n_edges, 0 );
+    max_live_volumes_.assign( n_edges, 0 );
     edge_lengths_cache_.resize( n_edges );
     for( size_t i = 0; i < n_edges; ++i )
     {
@@ -111,6 +112,10 @@ void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf )
     mpr_ep_->Send( initial_requests );
 
     // Task 1: Fix physics initialization
+    // - [x] Update `traffic_engine.cpp`
+    // - [x] Initialize `max_live_volumes_` in `Init()`
+    // - [x] Pass `max_live_volumes_.data()` in `MakePhysicsContext()`
+    // - [x] Update peak volumes in `HandleResponses()` for initial activation
     for( uint32_t i = 0; i < num_agents; ++i )
     {
         float length = router_manager_.get_edge_length( agent_pool_.current_edge[ i ] );
@@ -350,6 +355,8 @@ void TrafficEngine::HandleResponses()
                 if( agent_pool_.is_active[ r.agent_id ] != 1 )
                 {
                     live_edge_volumes_[ first_edge ]++;
+                    if( live_edge_volumes_[ first_edge ] > max_live_volumes_[ first_edge ] )
+                        max_live_volumes_[ first_edge ] = live_edge_volumes_[ first_edge ];
                 }
 
                 agent_pool_.is_active[ r.agent_id ] = 1;
@@ -385,6 +392,7 @@ data_provider::PhysicsContext TrafficEngine::MakePhysicsContext( uint32_t time_s
     ctx.current_time_sec = time_sec;
     ctx.edge_lengths_m = edge_lengths_cache_.empty() ? nullptr : edge_lengths_cache_.data();
     ctx.live_volumes   = const_cast< uint32_t * >( live_edge_volumes_.data() );
+    ctx.max_volumes    = const_cast< uint32_t * >( max_live_volumes_.data() );
     ctx.k_magic        = router_manager_.get_kmagic_ptr();
 
     // Expose the static CSR weights (free-flow travel time per edge in seconds)

@@ -49,6 +49,7 @@ public:
     size_t GetTotalFailedRoutes() const { return total_failed_routes_; }
     size_t GetTotalCompletedRoutes() const { return total_completed_routes_; }
     float GetCurrentSimTime() const { return current_sim_time_; }
+    const std::vector< uint32_t >& GetMaxLiveVolumes() const { return max_live_volumes_; }
 
     // Helpers for the simulation loop
     data_provider::AgentPool & GetAgentPool() { return agent_pool_; }
@@ -93,8 +94,11 @@ private:
     bool is_initialized_{ false };
 
     // Physics cache: per-edge occupancy and lengths for PhysicsContext (populated in Init)
-    // [x] Modify `traffic_engine.hpp` to add `live_edge_volumes_`;
+    //- `[/]` Update `traffic_engine.hpp`
+    //- `[x]` Add `max_live_volumes_` member
+    //- `[x]` Add `GetMaxLiveVolumes()` accessor
     std::vector< uint32_t > live_edge_volumes_;
+    std::vector< uint32_t > max_live_volumes_;
     std::vector< float >    edge_lengths_cache_;
 };
 

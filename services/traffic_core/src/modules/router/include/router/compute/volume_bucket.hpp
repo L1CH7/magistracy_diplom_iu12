@@ -35,7 +35,21 @@ struct VolumeBucket {
     
     inline void sub_volume(traffic::AbsoluteTime eta, traffic::VolumeCount count) noexcept {
         uint32_t idx = (eta / BUCKET_INTERVAL_SEC) % NUM_BUCKETS;
-        volumes[idx].fetch_sub(count, std::memory_order_relaxed);
+        traffic::VolumeCount old_val = volumes[idx].load(std::memory_order_relaxed);
+
+        // Безопасное вычитание с clamp до 0
+        while (old_val >= count) {
+            if (volumes[idx].compare_exchange_weak(old_val, old_val - count, std::memory_order_relaxed)) {
+                return;
+            }
+        }
+
+        // Если в корзинке осталось меньше, чем мы хотим вычесть (из-за advance_time), просто обнуляем её
+        while (old_val > 0) {
+            if (volumes[idx].compare_exchange_weak(old_val, 0, std::memory_order_relaxed)) {
+                return;
+            }
+        }
     }
 };
 
