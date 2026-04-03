@@ -9,7 +9,7 @@
 namespace traffic::common::net
 {
 
-static constexpr uint32_t MAX_ROUTE_PATH = 128;
+static constexpr uint32_t MAX_ROUTE_PATH = TRAFFIC_MAX_ROUTE_PATH;
 
 /**
  * @brief Zero-overhead request for path computation.

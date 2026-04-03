@@ -10,7 +10,7 @@ include(cmake/options.cmake)
 
 # Глобальные оптимизации для HFT Hot Path (согласно стандарту кодирования)
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    add_compile_options(-O3 -march=native -mavx2 -flto)
+    add_compile_options(-O2 -march=native -mavx2 -flto)
     add_link_options(-flto)
     add_compile_definitions(QUILL_ACTIVE_LOG_LEVEL=${QUILL_COMPILE_ACTIVE_LOG_LEVEL})
 else()
@@ -84,6 +84,23 @@ if(TRAFFIC_BUILD_TESTS)
     )
     target_link_libraries(throughput_benchmark PRIVATE 
         traffic_router
+        quill::quill
+        concurrentqueue
+    )
+
+    add_executable(simulation_benchmark tests/simulation_benchmark.cpp)
+    target_include_directories(simulation_benchmark PRIVATE 
+        src/modules/router/include 
+        src/modules/data_provider/include
+        src/modules/decision_engine/include
+        src/common
+        src
+        3rd_party/doctest
+    )
+    target_link_libraries(simulation_benchmark PRIVATE 
+        traffic_router
+        traffic_data_provider
+        traffic_decision_engine
         quill::quill
         concurrentqueue
     )

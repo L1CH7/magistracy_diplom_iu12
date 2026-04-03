@@ -20,8 +20,6 @@ namespace traffic::decision_engine
 class MprEngine
 {
 public:
-    static constexpr float ETA_TOLERANCE = 1.5f;
-
     explicit MprEngine( traffic::common::net::TypedEndpoint< traffic::common::net::RouteRequest, traffic::common::net::RouteResponse > & router_endpoint )
     :   router_endpoint_( router_endpoint )
     {
@@ -95,8 +93,9 @@ public:
                 const auto etas = arena.GetEtas( static_cast< uint32_t >( i ) );
                 const uint32_t expected_eta = etas[ progress_idxs[ i ] ];
 
-                // Scalar comparison that compilers can often vectorise using masks
-                if( elapsed > static_cast< uint32_t >( static_cast< float >( expected_eta ) * ETA_TOLERANCE ) )
+                const uint32_t allowed_time = ( expected_eta * TRAFFIC_MPR_TOLERANCE_NUM ) /
+                                              TRAFFIC_MPR_TOLERANCE_DEN;
+                if( elapsed > allowed_time )
                 {
                     stuck_indices_.push_back( static_cast< uint32_t >( i ) );
                 }

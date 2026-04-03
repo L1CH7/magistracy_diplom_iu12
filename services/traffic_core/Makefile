@@ -51,3 +51,18 @@ pq-comparison: build-builder
 	docker run --rm --init --network host \
 		-v $(shell pwd)/data:/app/data \
 		traffic_core_builder taskset -c 0 /app/services/traffic_core/build/router_pq_comparison --data /app/data
+
+# Simulation Benchmark
+AGENTS ?= 100000
+ASF ?= 1
+ACCEL ?= 1
+DURATION ?= 600
+
+simulation-benchmark: build-builder
+	docker run --rm --init --network host \
+		-v $(shell pwd)/data:/app/data \
+		traffic_core_builder /app/services/traffic_core/build/simulation_benchmark \
+			--agents $(AGENTS) \
+			--asf $(ASF) \
+			--accel $(ACCEL) \
+			--duration $(DURATION)

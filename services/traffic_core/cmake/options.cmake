@@ -7,6 +7,9 @@ set(TRAFFIC_SLOT_SEC 300 CACHE STRING "Length of one bucket in seconds")
 set(TRAFFIC_TOTAL_LANDMARKS 16 CACHE STRING "Total number of ALT landmarks in the graph")
 set(TRAFFIC_ACTIVE_LANDMARKS 4 CACHE STRING "Number of active ALT landmarks per query")
 set(TRAFFIC_CACHE_LINE_SIZE 64 CACHE STRING "CPU Cache Line Size in bytes for alignments")
+set(TRAFFIC_MPR_TOLERANCE_NUM 3 CACHE STRING "MPR ETA Tolerance Numerator (e.g., 3 for 1.5x)")
+set(TRAFFIC_MPR_TOLERANCE_DEN 2 CACHE STRING "MPR ETA Tolerance Denominator (e.g., 2 for 1.5x)")
+set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteResponse POD")
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
 
 # Add definitions to be visible in C++
@@ -16,4 +19,7 @@ add_compile_definitions(
     TRAFFIC_TOTAL_LANDMARKS=${TRAFFIC_TOTAL_LANDMARKS}
     TRAFFIC_ACTIVE_LANDMARKS=${TRAFFIC_ACTIVE_LANDMARKS}
     TRAFFIC_CACHE_LINE_SIZE=${TRAFFIC_CACHE_LINE_SIZE}
+    TRAFFIC_MPR_TOLERANCE_NUM=${TRAFFIC_MPR_TOLERANCE_NUM}
+    TRAFFIC_MPR_TOLERANCE_DEN=${TRAFFIC_MPR_TOLERANCE_DEN}
+    TRAFFIC_MAX_ROUTE_PATH=${TRAFFIC_MAX_ROUTE_PATH}
 )
