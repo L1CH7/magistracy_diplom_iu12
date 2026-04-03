@@ -53,6 +53,7 @@ public:
             // Populate SoA (Structure of Arrays)
             pool.is_active[ i ] = 1;
             pool.current_edge[ i ] = start_edge;
+            pool.target_edge[ i ] = target_edge;
             pool.velocity_mps[ i ] = 15.0f; // Standard ~50 km/h
             pool.pos_meters[ i ] = 0.0f;
             pool.edge_enter_time_sec[ i ] = 0;

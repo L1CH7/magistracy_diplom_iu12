@@ -13,9 +13,11 @@ set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteRespo
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
 
 # Hardware Topology Configuration
-set(TRAFFIC_ROUTER_THREADS "10" CACHE STRING "Number of threads for router pool")
-set(TRAFFIC_SIM_AFFINITY "1" CACHE STRING "CPU Core ID for Simulator/MPR thread")
-set(TRAFFIC_AVOID_OS_CORES "1" CACHE STRING "Avoid binding to cores 0 and 1")
+set(TRAFFIC_ROUTER_THREADS "12" CACHE STRING "Number of threads for router pool")
+set(TRAFFIC_ROUTER_CORES "2,10,3,11,4,12,5,13,6,14,7,15" CACHE STRING "Explicit logical CPUs for router pool (10 threads on cores 2-6)")
+set(TRAFFIC_SIM_AFFINITY "1" CACHE STRING "Core 1 (Thread 1) for Main Simulator + MPR")
+set(TRAFFIC_DISPATCH_AFFINITY "9" CACHE STRING "Core 1 (Thread 9) for Router Dispatcher")
+set(TRAFFIC_AVOID_OS_CORES "1" CACHE STRING "Reserved Core 0 (Threads 0, 8) for OS")
 
 # Add definitions to be visible in C++
 add_compile_definitions(
@@ -28,6 +30,8 @@ add_compile_definitions(
     TRAFFIC_MPR_TOLERANCE_DEN=${TRAFFIC_MPR_TOLERANCE_DEN}
     TRAFFIC_MAX_ROUTE_PATH=${TRAFFIC_MAX_ROUTE_PATH}
     TRAFFIC_ROUTER_THREADS=${TRAFFIC_ROUTER_THREADS}
+    TRAFFIC_ROUTER_CORES="${TRAFFIC_ROUTER_CORES}"
     TRAFFIC_SIM_AFFINITY=${TRAFFIC_SIM_AFFINITY}
+    TRAFFIC_DISPATCH_AFFINITY=${TRAFFIC_DISPATCH_AFFINITY}
     TRAFFIC_AVOID_OS_CORES=${TRAFFIC_AVOID_OS_CORES}
 )

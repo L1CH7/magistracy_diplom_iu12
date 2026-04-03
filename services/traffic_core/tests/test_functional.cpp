@@ -252,11 +252,11 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
     TypedEndpoint< RouteRequest, traffic::common::net::RouteResponse > mpr_ep( std::move( mpr_transport ) );
     TypedEndpoint< traffic::common::net::RouteResponse, RouteRequest > router_ep( std::move( router_transport ) );
 
-    MprEngine engine( mpr_ep );
+    MprEngine engine;
 
-    SUBCASE( "1. Phase 1: Route Application" )
+    SUBCASE( "1. Phase 1: Route Application (Manual via Arena)" )
     {
-        MESSAGE("Testing MPR Phase 1: Applying received route to Agent 5...");
+        MESSAGE("Testing Manual Route Application to Agent 5...");
         
         uint32_t agent_id = 5;
         traffic::common::net::RouteResponse resp {};
@@ -270,12 +270,13 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         resp.edge_etas_sec[ 1 ] = 120;
         resp.edge_etas_sec[ 2 ] = 180;
 
-        // Mock receiving the response from Router side
-        std::vector< traffic::common::net::RouteResponse > mock_responses = { resp };
-        router_ep.Send( mock_responses ); 
-
-        uint32_t current_time = 1000;
-        engine.Tick( current_time, pool, arena );
+        // Apply manually as MprEngine no longer handles internal receiving
+        arena.UpdateRoute( agent_id, 
+                           { resp.path.data(), resp.path_len },
+                           { resp.edge_etas_sec.data(), resp.path_len } );
+        pool.route_progress_idx[ agent_id ] = 0;
+        pool.edge_enter_time_sec[ agent_id ] = 1000;
+        pool.current_edge[ agent_id ] = 100;
 
         // Verify Arena
         auto path = arena.GetRoute( agent_id );
@@ -288,17 +289,18 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
 
         // Verify Pool
         CHECK( pool.route_progress_idx[ agent_id ] == 0 );
-        CHECK( pool.edge_enter_time_sec[ agent_id ] == current_time );
+        CHECK( pool.edge_enter_time_sec[ agent_id ] == 1000 );
         CHECK( pool.current_edge[ agent_id ] == 100 );
-        MESSAGE("  [SUCCESS] Route applied, timers reset.");
+        MESSAGE("  [SUCCESS] Route applied manually, state verified.");
     }
 
-    SUBCASE( "2. Phase 2 & 3: Reroute Detection (Tolerance 1.5x)" )
+    SUBCASE( "2. Reroute Detection (Tolerance 1.5x)" )
     {
-        MESSAGE("Testing MPR Phase 2: Reroute detection logic...");
+        MESSAGE("Testing MPR Reroute detection logic...");
         uint32_t agent_id = 0;
         pool.is_active[ agent_id ] = 1;
         pool.current_edge[ agent_id ] = 500;
+        pool.target_edge[ agent_id ] = 999; // Destination
         pool.route_progress_idx[ agent_id ] = 0;
         pool.edge_enter_time_sec[ agent_id ] = 1000;
 
@@ -306,28 +308,25 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         std::vector< uint32_t > etas = { 100, 200 };
         arena.UpdateRoute( agent_id, path, etas ); // Expected 100s for first edge
 
-        // Test A: Within tolerance (elapsed = 140s, expected = 100s, ratio = 1.4 < 1.5)
-        engine.Tick( 1140, pool, arena );
-        
         std::vector< RouteRequest > requests;
-        bool has_req = router_ep.Receive( requests );
-        CHECK( !has_req );
+
+        // Test A: Within tolerance (elapsed = 140s, expected = 100s, ratio = 1.4 < 1.5)
+        engine.Tick( 1140, pool, arena, requests );
+        CHECK( requests.empty() );
         MESSAGE("  [OK] No reroute for 1.4x delay.");
 
         // Test B: Exceeds tolerance (elapsed = 160s, expected = 100s, ratio = 1.6 > 1.5)
-        engine.Tick( 1160, pool, arena );
-        
-        has_req = router_ep.Receive( requests );
-        REQUIRE( has_req );
-        REQUIRE( requests.size() == 1 );
+        engine.Tick( 1160, pool, arena, requests );
+        REQUIRE( !requests.empty() );
         CHECK( requests[ 0 ].agent_id == agent_id );
         CHECK( requests[ 0 ].start_edge == 500 );
+        CHECK( requests[ 0 ].target_edge == 999 );
         MESSAGE("  [OK] Reroute request generated for 1.6x delay.");
     }
 
     SUBCASE( "3. Multi-agent Batch Scan" )
     {
-        MESSAGE("Testing MPR Phase 2: Scanning 10 agents (5 delayed, 5 on time)...");
+        MESSAGE("Testing MPR Batch Scan: 10 agents (5 delayed, 5 on time)...");
         uint32_t start_time = 1000;
         
         for( uint32_t i = 0; i < 10; ++i )
@@ -335,6 +334,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
             pool.is_active[ i ] = 1;
             pool.edge_enter_time_sec[ i ] = start_time;
             pool.route_progress_idx[ i ] = 0;
+            pool.target_edge[ i ] = 2000 + i;
             
             std::vector< traffic::EdgeID > path = { 1000 };
             std::vector< uint32_t > etas = { 100 };
@@ -345,18 +345,17 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         uint32_t current_time = start_time + 160;
         for( uint32_t i = 5; i < 10; ++i )
         {
-            pool.edge_enter_time_sec[ i ] = start_time + 50; // Late start simulation
+            pool.edge_enter_time_sec[ i ] = start_time + 70; // Only 90s elapsed
         }
 
-        engine.Tick( current_time, pool, arena );
-
         std::vector< RouteRequest > requests;
-        router_ep.Receive( requests );
+        engine.Tick( current_time, pool, arena, requests );
         
         CHECK( requests.size() == 5 ); // Only agents 0, 1, 2, 3, 4 should be stuck
         for( size_t i = 0; i < requests.size(); ++i )
         {
             CHECK( requests[ i ].agent_id == static_cast< uint32_t >( i ) );
+            CHECK( requests[ i ].target_edge == 2000 + i );
         }
         MESSAGE("  [SUCCESS] Batch scan correctly identified exactly 5 delayed agents.");
     }

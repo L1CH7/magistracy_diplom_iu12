@@ -23,6 +23,7 @@ class TrafficEngine
 {
 public:
     TrafficEngine();
+    explicit TrafficEngine( const std::vector< int > & router_cores );
     ~TrafficEngine();
 
     // Disable copying
@@ -36,6 +37,7 @@ public:
     void SpawnAgents( uint32_t num_agents, uint16_t asf );
     void Warmup();
     void Step( float dt );
+    void ForceReroute( const std::vector< common::net::RouteRequest > & requests );
 
     // Control
     void Stop();
@@ -73,6 +75,9 @@ private:
     std::thread router_worker_;
     std::atomic< bool > keep_running_{ true };
     std::atomic< size_t > routes_computed_{ 0 };
+
+    // Cached buffers for zero-allocation
+    std::vector< traffic::common::net::RouteRequest > mpr_requests_buffer_;
 
     // State
     float current_sim_time_{ 0.0f };

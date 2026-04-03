@@ -9,6 +9,7 @@
 #include <fstream>
 #include <random>
 #include <csignal>
+#include <sstream>
 
 #ifdef __linux__
 #include <pthread.h>
@@ -85,7 +86,16 @@ int main( int argc, char ** argv )
     std::cout << "================================================" << std::endl;
 
     // --- Traffic Engine Initialization ---
-    traffic::core::TrafficEngine engine;
+    std::string cores_str = TRAFFIC_ROUTER_CORES;
+    std::vector< int > router_cores;
+    std::stringstream ss_cores( cores_str );
+    std::string item;
+    while( std::getline( ss_cores, item, ',' ) )
+    {
+        if( !item.empty() ) router_cores.push_back( std::stoi( item ) );
+    }
+
+    traffic::core::TrafficEngine engine( router_cores );
     
     std::cout << " [1/3] Loading Graphs from: " << data_path << "..." << std::flush;
     auto init_status = engine.Init( data_path );
@@ -105,18 +115,16 @@ int main( int argc, char ** argv )
     std::cout << " Warmup: Computing initial " << num_agents << " routes..." << std::flush;
     engine.Warmup();
     std::cout << " Done." << std::endl;
-    std::cout << " Done." << std::endl;
 
     // --- Main Simulation Loop ---
     float dt = 0.1f;
-    float current_sim_time = 0.0f;
-    uint32_t last_mpr_tick = 0;
     size_t total_ticks = 0;
-    size_t reroutes_triggered = 0;
     size_t total_edge_transitions = 0;
+    size_t reroutes_triggered = 0;
+    size_t last_computed_routes = 0;
 
     // PRNG for Chaos injection
-    static std::mt19937 chaos_gen{ std::random_device{}( ) };
+    static std::mt19937 chaos_gen{ 42 }; // Use fixed seed for reproducibility
     std::uniform_int_distribution< uint32_t > prob_dist( 0, 99 );
     std::uniform_int_distribution< uint32_t > agent_dist( 0, num_agents - 1 );
 
@@ -127,10 +135,9 @@ int main( int argc, char ** argv )
     {
         auto tick_start = std::chrono::steady_clock::now();
 
-        // Chaos Injection: останавливаем заданный процент машин в КАЖДУЮ секунду
+        // Chaos Injection
         if( chaos_percent > 0 )
         {
-            // Чтобы не перегружать каждый тик (dt=0.1), будем устраивать хаос раз в 1 секунду (10 тиков)
             if (total_ticks % 10 == 0) 
             {
                 uint32_t agents_to_stop = (num_agents * chaos_percent) / 100;
@@ -146,12 +153,39 @@ int main( int argc, char ** argv )
             }
         }
 
-        size_t old_routes = engine.GetRoutesComputed();
+        // Heavy Stress Test: Forced Rerouting (1000 requests per second)
+        if( total_ticks % 10 == 0 )
+        {
+            std::vector< traffic::common::net::RouteRequest > forced_requests;
+            forced_requests.reserve( 1000 );
+            for( int i = 0; i < 1000; ++i )
+            {
+                uint32_t r_id = agent_dist( chaos_gen );
+                auto & pool = engine.GetAgentPool();
+                if( pool.is_active[ r_id ] )
+                {
+                    forced_requests.push_back( {
+                        .agent_id = r_id,
+                        .start_edge = pool.current_edge[ r_id ],
+                        .target_edge = pool.target_edge[ r_id ],
+                        .asf = asf,
+                        .current_time_sec = static_cast< uint32_t >( engine.GetCurrentSimTime() )
+                    } );
+                }
+            }
+            engine.ForceReroute( forced_requests );
+        }
+
         engine.Step( dt );
         
-        reroutes_triggered += ( engine.GetRoutesComputed() - old_routes );
-        total_edge_transitions += engine.GetAgentPool().transition_queue.size();
+        size_t current_computed = engine.GetRoutesComputed();
+        if( current_computed > last_computed_routes )
+        {
+            reroutes_triggered += ( current_computed - last_computed_routes );
+            last_computed_routes = current_computed;
+        }
 
+        total_edge_transitions += engine.GetAgentPool().transition_queue.size();
         total_ticks++;
 
         // Speed regulation (Accel)
@@ -167,15 +201,19 @@ int main( int argc, char ** argv )
 
     auto end_wall = std::chrono::steady_clock::now();
     auto total_wall_sec = std::chrono::duration< float >( end_wall - start_wall ).count();
+    
+    // Final check for remaining responses
+    std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
     engine.Stop();
 
     // --- Results ---
+    size_t final_routes = engine.GetRoutesComputed();
     std::cout << "================================================" << std::endl;
     std::cout << " Benchmark Finished." << std::endl;
     std::cout << " Wall-clock time:  " << total_wall_sec << "s" << std::endl;
     std::cout << " Avg TPS (Ticks):  " << static_cast< float >( total_ticks ) / total_wall_sec << std::endl;
-    std::cout << " Simulation Speed: " << duration_sim_sec / total_wall_sec << "x real-time" << std::endl;
-    std::cout << " Reroutes total:   " << reroutes_triggered << std::endl;
+    std::cout << " Simulation Speed: " << ( duration_sim_sec / total_wall_sec ) << "x real-time" << std::endl;
+    std::cout << " Reroutes total:   " << final_routes << " (Triggered during sim: " << reroutes_triggered << ")" << std::endl;
     std::cout << " Edges Crossed:    " << total_edge_transitions << std::endl;
     std::cout << "================================================" << std::endl;
 
