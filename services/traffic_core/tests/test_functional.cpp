@@ -13,6 +13,9 @@
 #include "common/graph_types.hpp"
 #include "common/thread_pool.hpp"
 #include "common/logger.hpp"
+#include "common/net/typed_endpoint.hpp"
+#include "common/net/inproc_transport.hpp"
+#include "common/net/message_pool.hpp"
 
 using namespace traffic;
 
@@ -80,6 +83,60 @@ TEST_CASE("Traffic Core Routing & Volume Management Functional Test") {
 
         auto res = router.Route<true, false>(0, 3, start_time, vol_manager.data(), k_magic, mpr_penalty);
         CHECK(res.total_weight == 300);
+    }
+}
+
+TEST_CASE( "Zero-Allocation Communication Layer Unit Test" )
+{
+    using namespace traffic::common::net;
+
+    SUBCASE( "1. MessagePool basic Acquire/Release" )
+    {
+        MessagePool pool;
+        auto buf = pool.Acquire();
+        CHECK( buf.empty() );
+        
+        buf.push_back( 42 );
+        size_t cap = buf.capacity();
+        pool.Release( std::move( buf ) );
+        
+        auto buf2 = pool.Acquire();
+        CHECK( buf2.empty() );
+        CHECK( buf2.capacity() >= cap ); // Capacity preserved
+    }
+
+    SUBCASE( "2. TypedEndpoint round-trip (std::vector<int>)" )
+    {
+        auto transport = std::make_unique< InProcTransport >();
+        TypedEndpoint< int, int > endpoint( std::move( transport ) );
+
+        std::vector< int > sent_data = { 1, 2, 3, 4, 5 };
+        endpoint.Send( sent_data );
+
+        std::vector< int > received_data;
+        bool has_data = endpoint.Receive( received_data );
+
+        CHECK( has_data );
+        CHECK( received_data == sent_data );
+        CHECK( received_data.size() == 5 );
+    }
+
+    SUBCASE( "3. Zero-Allocation check (Capacity Preservation)" )
+    {
+        auto transport = std::make_unique< InProcTransport >();
+        TypedEndpoint< uint64_t, uint64_t > endpoint( std::move( transport ) );
+
+        std::vector< uint64_t > buffer;
+        buffer.reserve( 100 ); // Pre-allocate
+        size_t initial_cap = buffer.capacity();
+
+        std::vector< uint64_t > data_to_send( 10, 0xDEADBEEFull );
+        endpoint.Send( data_to_send );
+
+        bool ok = endpoint.Receive( buffer );
+        CHECK( ok );
+        CHECK( buffer.size() == 10 );
+        CHECK( buffer.capacity() >= initial_cap ); // Capacity should not be lost
     }
 }
 

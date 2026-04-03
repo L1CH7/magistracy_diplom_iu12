@@ -38,7 +38,7 @@ throughput-bench: build-builder
 			--affinity $(AFFINITY) \
 			--avoid-os $(AVOID_OS)
 
-test-dynamic: build-builder
+test-functional: build-builder
 	docker run --rm --init --network host \
 		-v $(shell pwd)/data:/app/data \
 		traffic_core_builder /app/services/traffic_core/build/test_functional
