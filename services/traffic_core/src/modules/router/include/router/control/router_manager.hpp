@@ -167,6 +167,11 @@ public:
             static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()) : nullptr;
     }
 
+    const traffic::PenaltyScale* get_kmagic_ptr() const {
+        return (mapped_graph_.kmagic_region) ? 
+            static_cast<const traffic::PenaltyScale*>(mapped_graph_.kmagic_region->data()) : nullptr;
+    }
+
     const traffic::GraphView& get_view() const { return mapped_graph_.view; }
 
     // Helpers for benchmarking

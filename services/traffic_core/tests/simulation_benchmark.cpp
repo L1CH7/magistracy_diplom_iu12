@@ -125,7 +125,7 @@ int main( int argc, char ** argv )
     std::cout << " Done in " << warmup_sec << "s." << std::endl;
 
     // --- Main Simulation Loop ---
-    float dt = 0.1f;
+    float dt = 5.0f; // 5 sim-seconds per tick: reduces total tick count and amortizes per-tick overhead
     size_t total_ticks = 0;
     size_t total_edge_transitions = 0;
     size_t reroutes_triggered = 0;
@@ -197,26 +197,42 @@ int main( int argc, char ** argv )
     
     if( auto vol_mgr = engine.GetRouterManager().get_volume_manager() )
     {
-        auto buckets = vol_mgr->data();
-        size_t n_edges = engine.GetRouterManager().num_edges();
+        auto buckets    = vol_mgr->data();
+        auto k_magic    = engine.GetRouterManager().get_kmagic_ptr();
+        const auto & view = engine.GetRouterManager().get_view();
+        size_t n_edges  = engine.GetRouterManager().num_edges();
+
         for( size_t i = 0; i < n_edges; ++i )
         {
-            float len = engine.GetRouterManager().get_edge_length( i );
-            float capacity = std::max(1.0f, len / 7.0f); // Roughly 1 vehicle per 7 meters
-            
+            // BPR saturation capacity: penalty = w when v = v_cap.
+            // From: k_magic * v_cap^2 / 2^20 = w  =>  v_cap = sqrt(w * 2^20 / k_magic)
+            // Edges with k_magic=0 (footpaths/service) have undefined capacity — skip.
+            uint32_t km = k_magic ? k_magic[ i ] : 0;
+            if( km == 0 )
+            {
+                cap_zero += traffic::router::compute::NUM_BUCKETS;
+                continue;
+            }
+
+            float w_sec    = static_cast< float >( view.static_weights ? view.static_weights[ i ] : 1 );
+            float capacity = std::sqrt( w_sec * static_cast< float >( 1u << 20 ) /
+                                        static_cast< float >( km ) );
+            capacity = std::max( 1.0f, capacity );
+
             for( int b = 0; b < traffic::router::compute::NUM_BUCKETS; ++b )
             {
                 uint32_t vol = buckets[ i ].volumes[ b ].load( std::memory_order_relaxed );
-                if (vol == 0) cap_zero++;
-                else if (vol < capacity * 0.25f) cap_1_25++;
-                else if (vol < capacity * 0.50f) cap_25_50++;
-                else if (vol < capacity * 0.75f) cap_50_75++;
-                else if (vol < capacity * 0.85f) cap_75_85++;
-                else if (vol < capacity * 0.90f) cap_85_90++;
-                else if (vol < capacity * 0.95f) cap_90_95++;
-                else if (vol < capacity * 0.99f) cap_95_99++;
-                else if (vol <= capacity * 1.00f) cap_99_100++;
-                else cap_over++;
+                float load = static_cast< float >( vol ) / capacity;
+                if( vol == 0 )           cap_zero++;
+                else if( load < 0.25f )  cap_1_25++;
+                else if( load < 0.50f )  cap_25_50++;
+                else if( load < 0.75f )  cap_50_75++;
+                else if( load < 0.85f )  cap_75_85++;
+                else if( load < 0.90f )  cap_85_90++;
+                else if( load < 0.95f )  cap_90_95++;
+                else if( load < 0.99f )  cap_95_99++;
+                else if( load <= 1.00f ) cap_99_100++;
+                else                     cap_over++;
             }
         }
     }

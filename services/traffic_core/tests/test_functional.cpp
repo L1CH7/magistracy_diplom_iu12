@@ -198,7 +198,7 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         REQUIRE( pool.transition_queue.size() == 1 );
         CHECK( pool.transition_queue[ 0 ] == agent_id );
 
-        system.ProcessTransitions( 11 );
+        system.ProcessTransitions( traffic::data_provider::PhysicsContext{} );
         
         // After transition: 
         // pos_meters = 110 - 100 = 10m
@@ -220,7 +220,7 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         pool.pos_meters[ agent_id ] = 95.0f; // 5m before end
 
         system.AdvanceKinematics( 1.0f ); // Move 10m -> 105m pos.
-        system.ProcessTransitions( 1 );
+        system.ProcessTransitions( traffic::data_provider::PhysicsContext{} );
         
         // End of route detected
         CHECK( pool.is_active[ agent_id ] == 0 );

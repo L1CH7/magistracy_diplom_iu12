@@ -59,6 +59,7 @@ public:
 private:
     void StartRouterWorker();
     void HandleResponses();
+    data_provider::PhysicsContext MakePhysicsContext( uint32_t time_sec ) const noexcept;
 
 private:
     // Modules
@@ -90,6 +91,11 @@ private:
     uint32_t last_mpr_tick_sim_sec_{ 0 };
     uint32_t num_agents_{ 0 };
     bool is_initialized_{ false };
+
+    // Physics cache: per-edge occupancy and lengths for PhysicsContext (populated in Init)
+    // [x] Modify `traffic_engine.hpp` to add `live_edge_volumes_`;
+    std::vector< uint32_t > live_edge_volumes_;
+    std::vector< float >    edge_lengths_cache_;
 };
 
 } // namespace traffic::core

@@ -3,12 +3,76 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 
 #include "agent_pool.hpp"
 #include "route_arena.hpp"
+#include "common/graph_types.hpp"
 
 namespace traffic::data_provider
 {
+
+/**
+ * @brief Lightweight context for physics calculations at edge transitions.
+ * All pointers are non-owning. Passed by value into ProcessTransitions.
+ */
+struct PhysicsContext
+{
+    // Live physical occupancy data (updated by KinematicsSystem during transitions)
+    uint32_t * live_volumes = nullptr;
+    const traffic::PenaltyScale * k_magic = nullptr;
+
+    // Static edge weights from the CSR graph (w_i = free-flow travel time in seconds).
+    // Indexed directly by EdgeID. Non-owning ptr into mmap'd region.
+    const traffic::EdgeWeight * static_weights = nullptr;
+
+    // Precomputed per-edge physical lengths in meters, indexed by EdgeID.
+    // nullptr = fallback to length / 15 m/s
+    const float * edge_lengths_m = nullptr;
+
+    uint32_t current_time_sec = 0;
+};
+
+/**
+ * @brief Computes the effective velocity for an agent entering an edge.
+ * Mirrors the BPR logic in TdAltRouter hot-path exactly.
+ * Called ONCE at edge entry, not every tick.
+ * @param edge_id  The edge the agent is entering.
+ * @param ctx      Physics context (buckets, k_magic, static weights, lengths).
+ * @param length_m Physical length of the edge in meters.
+ * @return Effective velocity in m/s.
+ */
+[[nodiscard]] inline float ComputeEdgeEntrySpeed(
+    traffic::EdgeID       edge_id,
+    const PhysicsContext & ctx,
+    float                 length_m ) noexcept
+{
+    // w = static free-flow weight in seconds.
+    // Matches TdAltRouter: the CSR `w` IS the free-flow travel time.
+    float w = ( ctx.static_weights )
+                  ? static_cast< float >( ctx.static_weights[ edge_id ] )
+                  : ( length_m / 15.0f ); // fallback: assume 15 m/s free-flow
+
+    if( w < 0.001f ) w = 0.001f; // guard zero-weight edges
+
+    if( ctx.live_volumes && ctx.k_magic )
+    {
+        uint32_t current_vol = ctx.live_volumes[ edge_id ];
+        uint64_t scale       = static_cast< uint64_t >( ctx.k_magic[ edge_id ] );
+
+        // Penalty computation directly from current physical volume
+        uint32_t penalty = static_cast< uint32_t >( ( scale * current_vol * current_vol ) >> 20 );
+
+        // Cap at 10x free-flow, same as TdAltRouter
+        uint32_t w_sec = static_cast< uint32_t >( w );
+        if( penalty > w_sec * 10 )
+            penalty = w_sec * 10;
+
+        w += static_cast< float >( penalty );
+    }
+
+    return length_m / w;
+}
 
 /**
  * @brief Zero-overhead simulation engine.
@@ -36,31 +100,30 @@ public:
         }
 
         // --- HOT PATH: Linear kinematics (SIMD vectorizable) ---
-        // __restrict notifies the compiler that these arrays don't overlap,
-        // allowing it to use AVX FMA instructions.
-        float * __restrict pos = pool_.pos_meters.data();
-        const float * __restrict vel = pool_.velocity_mps.data();
+        // __restrict tells the compiler these arrays don't alias,
+        // enabling AVX FMA vectorization.
+        float * __restrict pos    = pool_.pos_meters.data();
+        const float * __restrict vel    = pool_.velocity_mps.data();
         const uint8_t * __restrict active = pool_.is_active.data();
 
+        // Hot path: only is_active==1 agents move (is_active==2 = waiting for route).
         #pragma GCC ivdep
         for( size_t i = 0; i < agent_count; ++i )
         {
-            if( active[ i ] )
+            if( active[ i ] == 1 )
             {
                 pos[ i ] += vel[ i ] * dt;
             }
         }
 
         // --- COLD PATH FILTER: Identify agents crossing the edge boundary ---
-        // Re-evaluating only the active ones without branches inside the loop if possible.
         const float * __restrict inv_len = pool_.inv_edge_length_m.data();
         pool_.transition_queue.clear();
 
         for( size_t i = 0; i < agent_count; ++i )
         {
-            // pos * (1.0 / length) >= 1.0f means we reached the end of the edge.
-            // This is equivalent to pos >= length but avoids division.
-            if( active[ i ] && ( pos[ i ] * inv_len[ i ] >= 1.0f ) )
+            // Only is_active==1 agents can transition (not waiting-for-route agents).
+            if( active[ i ] == 1 && ( pos[ i ] * inv_len[ i ] >= 1.0f ) )
             {
                 pool_.transition_queue.push_back( static_cast< uint32_t >( i ) );
             }
@@ -69,43 +132,87 @@ public:
 
     /**
      * @brief Processes topological transitions for agents in the queue.
-     * @param current_time_sec Current simulation time for arrival tracking.
+     *
+     * Key fix vs previous version:
+     *  - inv_edge_length_m is now updated immediately when agent enters next edge.
+     *  - BPR velocity is computed ONCE at edge entry (O(transitions), not O(agents*ticks)).
+     *
+     * @param ctx Physics context for BPR speed and geometry lookup.
+     * @return Number of agents that completed their route this tick.
      */
-    uint32_t ProcessTransitions( uint32_t current_time_sec )
+    uint32_t ProcessTransitions( const PhysicsContext & ctx )
     {
         uint32_t completed_agents = 0;
         for( uint32_t agent_idx : pool_.transition_queue )
         {
-            // Correct the "overflight" to start precisely at the beginning of the next edge
-            // pos_meters -= length (where length = 1.0 / inv_len)
-            pool_.pos_meters[ agent_idx ] -= ( 1.0f / pool_.inv_edge_length_m[ agent_idx ] );
-
-            // Increment route progress
-            uint16_t next_idx = ++pool_.route_progress_idx[ agent_idx ];
-            auto route = arena_.GetRoute( agent_idx );
-
-            if( next_idx < route.size() )
+            // --- Multi-hop loop ---
+            // With large acceleration (dt >> edge_length/velocity), an agent can overshoot
+            // multiple edges in a single tick. We drain the overshoot here in one call
+            // rather than wasting N ticks on N hops at 1 hop/tick.
+            while( pool_.is_active[ agent_idx ] == 1 &&
+                   pool_.pos_meters[ agent_idx ] * pool_.inv_edge_length_m[ agent_idx ] >= 1.0f )
             {
-                // Move to the next edge
-                pool_.current_edge[ agent_idx ] = route[ next_idx ];
-                pool_.edge_enter_time_sec[ agent_idx ] = current_time_sec;
+                // Subtract the current edge length to correct the overshoot
+                float edge_len = 1.0f / pool_.inv_edge_length_m[ agent_idx ];
+                pool_.pos_meters[ agent_idx ] -= edge_len;
+                if( pool_.pos_meters[ agent_idx ] < 0.0f )
+                    pool_.pos_meters[ agent_idx ] = 0.0f;
 
-                // TODO: Update inv_edge_length_m for the new edge from a graph cache.
-                // For now, we assume the simulator will set it soon.
+                uint16_t next_idx = ++pool_.route_progress_idx[ agent_idx ];
+                auto route        = arena_.GetRoute( agent_idx );
+                traffic::EdgeID old_edge = pool_.current_edge[ agent_idx ];
+
+                if( next_idx < route.size() )
+                {
+                    traffic::EdgeID next_edge = route[ next_idx ];
+
+                    // Update physical occupancy counters
+                    if( ctx.live_volumes )
+                    {
+                        ctx.live_volumes[ old_edge ]--;
+                        ctx.live_volumes[ next_edge ]++;
+                    }
+
+                    pool_.current_edge[ agent_idx ]        = next_edge;
+                    pool_.edge_enter_time_sec[ agent_idx ] = ctx.current_time_sec;
+
+                    // Update geometry immediately so the while-condition re-evaluates correctly
+                    float len = ( ctx.edge_lengths_m )
+                                    ? ctx.edge_lengths_m[ next_edge ]
+                                    : 1.0f;
+                    pool_.inv_edge_length_m[ agent_idx ] = ( len > 0.001f ) ? ( 1.0f / len ) : 1.0f;
+                }
+                else
+                {
+                    // End of route: despawn and update occupancy
+                    if( ctx.live_volumes )
+                    {
+                        ctx.live_volumes[ old_edge ]--;
+                    }
+
+                    pool_.is_active[ agent_idx ]  = 0;
+                    pool_.pos_meters[ agent_idx ] = 0.0f;
+                    completed_agents++;
+                }
             }
-            else
+
+            // Compute BPR speed ONCE for the edge the agent will actually dwell on.
+            // Intermediate edges (passed through during multi-hop) are irrelevant.
+            if( pool_.is_active[ agent_idx ] == 1 )
             {
-                // End of journey: Despawn the agent
-                pool_.is_active[ agent_idx ] = 0;
-                pool_.pos_meters[ agent_idx ] = 0.0f;
-                completed_agents++;
+                traffic::EdgeID curr_edge = pool_.current_edge[ agent_idx ];
+                float len = ( ctx.edge_lengths_m )
+                                ? ctx.edge_lengths_m[ curr_edge ]
+                                : ( 1.0f / pool_.inv_edge_length_m[ agent_idx ] );
+                pool_.velocity_mps[ agent_idx ] = ComputeEdgeEntrySpeed( curr_edge, ctx, len );
             }
         }
         return completed_agents;
     }
 
+
 private:
-    AgentPool & pool_;
+    AgentPool &  pool_;
     RouteArena & arena_;
 };
 

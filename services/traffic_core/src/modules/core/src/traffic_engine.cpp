@@ -77,6 +77,15 @@ std::expected< void, std::string > TrafficEngine::Init( const std::string & data
     is_initialized_ = true;
     StartRouterWorker();
 
+    // Pre-build per-edge occupancy and lengths for PhysicsContext (avoids geometry_store lookup per tick)
+    size_t n_edges = static_cast< size_t >( router_manager_.num_edges() );
+    live_edge_volumes_.assign( n_edges, 0 );
+    edge_lengths_cache_.resize( n_edges );
+    for( size_t i = 0; i < n_edges; ++i )
+    {
+        edge_lengths_cache_[ i ] = router_manager_.get_edge_length( static_cast< traffic::EdgeID >( i ) );
+    }
+
     return {};
 }
 
@@ -124,9 +133,11 @@ void TrafficEngine::Step( float dt )
 {
     if( !is_initialized_ ) return;
 
-    // Phase 1: Locomotion (Kinematics + Collision Avoidance)
+    // Phase 1: Locomotion - BPR speed is set at edge entry in ProcessTransitions (O(transitions))
     kin_system_.AdvanceKinematics( dt );
-    total_completed_routes_ += kin_system_.ProcessTransitions( static_cast< uint32_t >( current_sim_time_ ) );
+    total_completed_routes_ += kin_system_.ProcessTransitions(
+        MakePhysicsContext( static_cast< uint32_t >( current_sim_time_ ) )
+    );
 
     // Phase 2: Decision Making (MPR - Mesoscopic Path Rerouting)
     uint32_t sim_sec = static_cast< uint32_t >( current_sim_time_ );
@@ -152,7 +163,16 @@ void TrafficEngine::Step( float dt )
         last_mpr_tick_sim_sec_ = sim_sec;
     }
 
+    float old_sim_time = current_sim_time_;
     current_sim_time_ += dt;
+
+    // Сдвигаем окно времени в корзинках, чтобы зачистить прошедший трафик
+    auto vol_mgr = router_manager_.get_volume_manager();
+    if( vol_mgr )
+    {
+        vol_mgr->advance_time( static_cast< uint32_t >( old_sim_time ),
+                               static_cast< uint32_t >( current_sim_time_ ) );
+    }
 
     // Phase 2.5: Agent Recirculation (Task 2 & 3: Rate Limiter)
     static std::mt19937 rec_gen{ std::random_device{}( ) };
@@ -176,7 +196,9 @@ void TrafficEngine::Step( float dt )
             // СТОП! Машина не должна двигаться, пока нет маршрута (Task: Fix Respawn Loop)
             agent_pool_.velocity_mps[ i ] = 0.0f; 
             
-            float length = router_manager_.get_edge_length( start_edge );
+            float length = edge_lengths_cache_.empty()
+                               ? router_manager_.get_edge_length( start_edge )
+                               : edge_lengths_cache_[ start_edge ];
             agent_pool_.inv_edge_length_m[ i ] = ( length > 0.001f ) ? ( 1.0f / length ) : 1.0f;
             
             // 2 = Состояние ожидания маршрута. Физика её не тронет.
@@ -316,9 +338,26 @@ void TrafficEngine::HandleResponses()
                 agent_pool_.route_progress_idx[ r.agent_id ] = 0;
                 agent_pool_.edge_enter_time_sec[ r.agent_id ] = static_cast< uint32_t >( current_sim_time_ );
 
-                // Маршрут получен. Активируем и даем газ!
+                // Маршрут получен. Обновляем геометрию начальный ребра и скорость по BPR.
+                traffic::EdgeID first_edge = route_arena_.GetRoute( r.agent_id )[ 0 ];
+                float first_len = edge_lengths_cache_.empty()
+                                      ? router_manager_.get_edge_length( first_edge )
+                                      : edge_lengths_cache_[ first_edge ];
+                agent_pool_.inv_edge_length_m[ r.agent_id ] =
+                    ( first_len > 0.001f ) ? ( 1.0f / first_len ) : 1.0f;
+
+                // Увеличиваем счетчик реальной загрузки только если агент только что активировался (чтобы не дублировать при MPR-рероутах)
+                if( agent_pool_.is_active[ r.agent_id ] != 1 )
+                {
+                    live_edge_volumes_[ first_edge ]++;
+                }
+
                 agent_pool_.is_active[ r.agent_id ] = 1;
-                agent_pool_.velocity_mps[ r.agent_id ] = 15.0f;
+                agent_pool_.velocity_mps[ r.agent_id ] = data_provider::ComputeEdgeEntrySpeed(
+                    first_edge,
+                    MakePhysicsContext( static_cast< uint32_t >( current_sim_time_ ) ),
+                    first_len
+                );
             }
             else
             {
@@ -338,6 +377,21 @@ uint32_t TrafficEngine::GetActiveAgents() const
         if( agent_pool_.is_active[ i ] ) active++;
     }
     return active;
+}
+
+data_provider::PhysicsContext TrafficEngine::MakePhysicsContext( uint32_t time_sec ) const noexcept
+{
+    data_provider::PhysicsContext ctx;
+    ctx.current_time_sec = time_sec;
+    ctx.edge_lengths_m = edge_lengths_cache_.empty() ? nullptr : edge_lengths_cache_.data();
+    ctx.live_volumes   = const_cast< uint32_t * >( live_edge_volumes_.data() );
+    ctx.k_magic        = router_manager_.get_kmagic_ptr();
+
+    // Expose the static CSR weights (free-flow travel time per edge in seconds)
+    const auto & view = router_manager_.get_view();
+    ctx.static_weights = view.static_weights;
+
+    return ctx;
 }
 
 } // namespace traffic::core
