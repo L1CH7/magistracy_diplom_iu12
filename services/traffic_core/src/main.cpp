@@ -1,245 +1,85 @@
 #include <iostream>
-#include <vector>
-#include <string>
-#include <chrono>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <cstring>
 #include <csignal>
 #include <atomic>
-#include <poll.h>
-#include <sstream>
-#include <expected>
-#include <sys/wait.h>
-#include <iomanip>
+#include <chrono>
+#include <thread>
+
 #include "common/logger.hpp"
-#include "router/control/router_manager.hpp"
-#include "common/graph_types.hpp"
+#include "core/traffic_engine.hpp"
 
 using namespace traffic;
 
-static std::atomic<bool> keep_running(true);
-static std::atomic<int> signal_count(0);
+static std::atomic< bool > keep_running( true );
 
-void signal_handler(int sig) {
-    if (sig == SIGINT || sig == SIGTERM) {
-        if (++signal_count > 2) {
-            std::cerr << "\nПолучено более 3 сигналов. Принудительный выход..." << std::endl;
-            _exit(1);
-        }
+void signal_handler( int sig )
+{
+    if( sig == SIGINT || sig == SIGTERM )
+    {
         keep_running = false;
-        std::cout << "\nПолучен сигнал завершения. Останавливаем сервер (нажмите Ctrl+C еще 2 раза для форсированного выхода)..." << std::endl;
+        LOG_INFO( "Завершение работы по сигналу..." );
     }
 }
 
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <data_dir>" << std::endl;
+int main( int argc, char ** argv )
+{
+    if( argc < 2 )
+    {
+        std::cerr << "Usage: " << argv[ 0 ] << " <data_dir>" << std::endl;
         return 1;
     }
 
-    traffic::core::logging::init_logger();
-    LOG_INFO("=== Traffic Core Supervisor Server starting (C++26) ===");
+    core::logging::init_logger();
+    LOG_INFO( "=== Traffic Core Service starting (C++26) ===" );
 
-    std::signal(SIGINT,  signal_handler);
-    std::signal(SIGTERM, signal_handler);
+    std::signal( SIGINT,  signal_handler );
+    std::signal( SIGTERM, signal_handler );
 
-    std::string data_dir = argv[1];
+    std::string data_dir = argv[ 1 ];
     
-    try {
-        traffic::router::control::RouterManager manager;
-        LOG_INFO("Supervisor: Loading graphs from directory: {}", data_dir);
+    try
+    {
+        core::TrafficEngine engine;
         
-        auto load_status = manager.LoadGraphs(data_dir);
-        if (!load_status) {
-            LOG_FATAL("SUPERVISOR: CRITICAL GRAPH LOAD FAILURE: {}", load_status.error());
-            return 1;
-        }
-        LOG_INFO("Supervisor: Graphs loaded. Nodes: {}, Edges: {}", manager.num_nodes(), manager.num_edges());
-
-        int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (server_fd == -1) {
-            LOG_FATAL("SUPERVISOR: Failed to create socket: {}", strerror(errno));
+        LOG_INFO( "Initializing TrafficEngine with data: {}", data_dir );
+        auto init_status = engine.Init( data_dir );
+        if( !init_status )
+        {
+            LOG_FATAL( "Failed to initialize TrafficEngine: {}", init_status.error() );
             return 1;
         }
 
-        int opt = 1;
-        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-        setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+        LOG_INFO( "TrafficEngine ready. Edges: {}", engine.GetRouterManager().num_edges() );
 
-        sockaddr_in address{};
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = INADDR_ANY;
-        address.sin_port = htons(5555);
+        // Initial agent spawn (demo/default)
+        // In production, agents might be loaded from a scenario file or external API
+        engine.SpawnAgents( 1000, 1 ); 
+        engine.Warmup();
 
-        if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-            LOG_FATAL("SUPERVISOR: Bind failed on port 5555. Address already in use?");
-            close(server_fd);
-            return 1;
-        }
-        
-        if (listen(server_fd, 100) < 0) {
-            LOG_FATAL("SUPERVISOR: Listen failed: {}", strerror(errno));
-            close(server_fd);
-            return 1;
-        }
+        LOG_INFO( "Simulation started. Press Ctrl+C to stop." );
 
-        LOG_INFO("Supervisor: TCP Server is listening on 0.0.0.0:5555");
-        std::cout << "Ожидание запросов..." << std::endl;
-
-        struct pollfd fds_poll[1];
-        fds_poll[0].fd = server_fd;
-        fds_poll[0].events = POLLIN;
-
-        while (keep_running) {
-            int poll_ret = poll(fds_poll, 1, 500);
-            if (poll_ret < 0) {
-                if (errno == EINTR) continue;
-                LOG_ERROR("SUPERVISOR: Poll error: {}", strerror(errno));
-                break;
-            }
-            if (poll_ret == 0) continue;
-
-            int client_fd = accept(server_fd, nullptr, nullptr);
-            if (client_fd < 0) {
-                LOG_WARN("SUPERVISOR: Failed to accept connection: {}", strerror(errno));
-                continue;
-            }
-
-            char read_buf[8192] = {0}; 
-            ssize_t n_read = read(client_fd, read_buf, sizeof(read_buf) - 1);
+        float dt = 0.1f;
+        while( keep_running )
+        {
+            auto start = std::chrono::steady_clock::now();
             
-            if (n_read > 0) {
-                std::string input_query(read_buf);
-                LOG_DEBUG("SUPERVISOR: Incoming request detected ({} bytes)", n_read);
+            engine.Step( dt );
 
-                pid_t worker_pid = fork();
-                
-                if (worker_pid == 0) {
-                    // --- CHILD PROCESS (Worker) ---
-                    std::signal(SIGINT, SIG_DFL);
-                    
-                    // Мы НЕ запускаем Quill Backend в ребенке, так как потоки не наследуются
-                    // и это гарантированно ведет к дедлокам при наличии открытых мьютексов.
-
-                    std::stringstream ss_query(input_query);
-                    std::string command;
-                    ss_query >> command;
-
-                    auto start_time_bench = std::chrono::high_resolution_clock::now();
-                    std::expected<traffic::RoutingResult, std::string> route_result = std::unexpected("Unknown command");
-
-                    try {
-                        if (command == "ll") {
-                            int n_pts = 0;
-                            if (ss_query >> n_pts && n_pts >= 2) {
-                                std::vector<std::pair<float, float>> coords;
-                                coords.reserve(n_pts);
-                                for (int i = 0; i < n_pts; ++i) {
-                                    float x, y;
-                                    if (ss_query >> x >> y) {
-                                        coords.push_back({x, y});
-                                    }
-                                }
-                                if (coords.size() >= 2) {
-                                    std::cout << "[Worker " << getpid() << "] Routing ll with " << coords.size() << " points\n";
-                                    route_result = manager.Route<true, false>(coords);
-                                } else {
-                                    route_result = std::unexpected("Insufficient valid coordinates");
-                                }
-                            }
-                        } else if (command == "id") {
-                            int n_ids = 0;
-                            if (ss_query >> n_ids && n_ids >= 2) {
-                                std::vector<traffic::NodeID> ids;
-                                ids.reserve(n_ids);
-                                for (int i = 0; i < n_ids; ++i) {
-                                    traffic::EdgeID id;
-                                    float off; // Offset ignored in unified API for now
-                                    if (ss_query >> id >> off) {
-                                        ids.push_back(id);
-                                    }
-                                }
-                                if (ids.size() >= 2) {
-                                    std::cout << "[Worker " << getpid() << "] Routing id with " << ids.size() << " points\n";
-                                    route_result = manager.Route<true, false>(ids);
-                                } else {
-                                    route_result = std::unexpected("Insufficient valid waypoints");
-                                }
-                            }
-                        } else {
-                            // Legacy or single-pair support
-                            std::stringstream ss_legacy(input_query);
-                            float x1, y1, x2, y2;
-                            if (ss_legacy >> x1 >> y1 >> x2 >> y2) {
-                                route_result = manager.Route<true, false>(x1, y1, x2, y2);
-                            }
-                        }
-                    } catch (const std::exception& e) {
-                        std::cerr << "[Worker CRASH] " << e.what() << "\n";
-                        _exit(1);
-                    }
-
-                    auto end_time_bench = std::chrono::high_resolution_clock::now();
-                    float ms = std::chrono::duration<float, std::milli>(end_time_bench - start_time_bench).count();
-
-                    std::stringstream ss_resp;
-                    if (route_result) {
-                        float total_dist = 0.0f;
-                        for (auto eid : route_result->path) {
-                            total_dist += manager.get_edge_length(eid);
-                        }
-
-                        std::cout << "[Worker " << getpid() << "] SUCCESS. Time: " << route_result->total_weight << "s, Latency: " << ms << "ms\n";
-                        ss_resp << "SUCCESS | Time: " << route_result->total_weight << "s | "
-                                << "Distance: " << std::fixed << std::setprecision(1) << total_dist << "m | "
-                                << "Latency: " << std::fixed << std::setprecision(3) << ms << "ms | "
-                                << "Visited Nodes: " << route_result->visited_nodes_count << " | "
-                                << "FirstID: " << (route_result->path.empty() ? 0 : route_result->path.front()) << " | "
-                                << "Segments: " << route_result->path.size() << "\n";
-                    } else {
-                        std::cerr << "[Worker " << getpid() << "] FAILED. Error: " << route_result.error() << "\n";
-                        ss_resp << "ERROR | " << route_result.error() << " | Latency: " << std::fixed << std::setprecision(3) << ms << "ms\n";
-                    }
-                    
-                    std::string final_msg = ss_resp.str();
-                    send(client_fd, final_msg.c_str(), (int)final_msg.size(), 0);
-
-                    close(client_fd);
-                    _exit(0); 
-                    
-                } else if (worker_pid > 0) {
-                    // --- PARENT PROCESS (Supervisor) ---
-                    close(client_fd);
-                    int w_status;
-                    waitpid(worker_pid, &w_status, 0);
-                    
-                    if (WIFSIGNALED(w_status)) {
-                        int w_sig = WTERMSIG(w_status);
-                        LOG_FATAL("SUPERVISOR ALERT: Worker process CRASHED! Signal: {} ({}). Query: {}", 
-                                 w_sig, (w_sig == 11 ? "SIGSEGV" : "ABNORMAL"), 
-                                 input_query.substr(0, 60));
-                    } else if (WIFEXITED(w_status) && WEXITSTATUS(w_status) != 0) {
-                        LOG_ERROR("SUPERVISOR ERROR: Worker exited with failure code {}. Query: {}", 
-                                  WEXITSTATUS(w_status), input_query.substr(0, 60));
-                    } else {
-                        LOG_TRACE("SUPERVISOR: Worker {} finished successfully", worker_pid);
-                    }
-                } else {
-                    LOG_FATAL("SUPERVISOR: System error: fork() failed!");
-                    close(client_fd);
-                }
-            } else {
-                close(client_fd);
+            auto end = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast< std::chrono::milliseconds >( end - start );
+            
+            // Limit to 10Hz
+            if( elapsed.count() < 100 )
+            {
+                std::this_thread::sleep_for( std::chrono::milliseconds( 100 - elapsed.count() ) );
             }
         }
 
-        close(server_fd);
-        LOG_INFO("=== Traffic Core Supervisor Server shutting down cleanly ===");
-
-    } catch (const std::exception& e) {
-        LOG_FATAL("SUPERVISOR FATAL: System Exception: {}", e.what());
+        engine.Stop();
+        LOG_INFO( "=== Traffic Core Service shut down cleanly ===" );
+    }
+    catch( const std::exception & e )
+    {
+        LOG_FATAL( "System Exception: {}", e.what() );
         return 1;
     }
 

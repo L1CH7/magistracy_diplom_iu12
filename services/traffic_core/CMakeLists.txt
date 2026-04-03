@@ -27,6 +27,7 @@ add_subdirectory(3rd_party/concurrentqueue)
 add_subdirectory(src/modules/router)
 add_subdirectory(src/modules/data_provider)
 add_subdirectory(src/modules/decision_engine)
+add_subdirectory(src/modules/core)
 
 # ============================
 # EXECUTABLE: TRAFFIC CORE
@@ -44,6 +45,7 @@ target_link_libraries(traffic_core PRIVATE
     traffic_router
     traffic_data_provider
     traffic_decision_engine
+    traffic_core_core
 )
 
 # ============================
@@ -93,6 +95,7 @@ if(TRAFFIC_BUILD_TESTS)
         src/modules/router/include 
         src/modules/data_provider/include
         src/modules/decision_engine/include
+        src/modules/core/include
         src/common
         src
         3rd_party/doctest
@@ -101,6 +104,7 @@ if(TRAFFIC_BUILD_TESTS)
         traffic_router
         traffic_data_provider
         traffic_decision_engine
+        traffic_core_core
         quill::quill
         concurrentqueue
     )

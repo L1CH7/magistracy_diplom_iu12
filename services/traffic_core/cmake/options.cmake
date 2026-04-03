@@ -12,6 +12,11 @@ set(TRAFFIC_MPR_TOLERANCE_DEN 2 CACHE STRING "MPR ETA Tolerance Denominator (e.g
 set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteResponse POD")
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
 
+# Hardware Topology Configuration
+set(TRAFFIC_ROUTER_THREADS "10" CACHE STRING "Number of threads for router pool")
+set(TRAFFIC_SIM_AFFINITY "1" CACHE STRING "CPU Core ID for Simulator/MPR thread")
+set(TRAFFIC_AVOID_OS_CORES "1" CACHE STRING "Avoid binding to cores 0 and 1")
+
 # Add definitions to be visible in C++
 add_compile_definitions(
     TRAFFIC_NUM_BUCKETS=${TRAFFIC_NUM_BUCKETS}
@@ -22,4 +27,7 @@ add_compile_definitions(
     TRAFFIC_MPR_TOLERANCE_NUM=${TRAFFIC_MPR_TOLERANCE_NUM}
     TRAFFIC_MPR_TOLERANCE_DEN=${TRAFFIC_MPR_TOLERANCE_DEN}
     TRAFFIC_MAX_ROUTE_PATH=${TRAFFIC_MAX_ROUTE_PATH}
+    TRAFFIC_ROUTER_THREADS=${TRAFFIC_ROUTER_THREADS}
+    TRAFFIC_SIM_AFFINITY=${TRAFFIC_SIM_AFFINITY}
+    TRAFFIC_AVOID_OS_CORES=${TRAFFIC_AVOID_OS_CORES}
 )

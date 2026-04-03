@@ -61,8 +61,4 @@ DURATION ?= 600
 simulation-benchmark: build-builder
 	docker run --rm --init --network host \
 		-v $(shell pwd)/data:/app/data \
-		traffic_core_builder /app/services/traffic_core/build/simulation_benchmark \
-			--agents $(AGENTS) \
-			--asf $(ASF) \
-			--accel $(ACCEL) \
-			--duration $(DURATION)
+		traffic_core_builder /app/services/traffic_core/build/simulation_benchmark $(ARGS)

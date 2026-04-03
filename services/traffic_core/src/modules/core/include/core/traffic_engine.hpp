@@ -1,0 +1,84 @@
+#pragma once
+
+#include <string>
+#include <vector>
+#include <memory>
+#include <atomic>
+#include <thread>
+#include <expected>
+
+#include "common/net/typed_endpoint.hpp"
+#include "common/net/messages.hpp"
+#include "common/thread_pool.hpp"
+#include "router/control/router_manager.hpp"
+#include "data_provider/agent_pool.hpp"
+#include "data_provider/route_arena.hpp"
+#include "data_provider/kinematics_system.hpp"
+#include "decision_engine/mpr_engine.hpp"
+
+namespace traffic::core
+{
+
+class TrafficEngine
+{
+public:
+    TrafficEngine();
+    ~TrafficEngine();
+
+    // Disable copying
+    TrafficEngine( const TrafficEngine & ) = delete;
+    TrafficEngine & operator=( const TrafficEngine & ) = delete;
+
+    // Initialization
+    std::expected< void, std::string > Init( const std::string & data_path );
+
+    // Simulation Flow
+    void SpawnAgents( uint32_t num_agents, uint16_t asf );
+    void Warmup();
+    void Step( float dt );
+
+    // Control
+    void Stop();
+
+    // Accessors for metrics
+    uint32_t GetActiveAgents() const;
+    size_t GetRoutesComputed() const { return routes_computed_.load(); }
+    float GetCurrentSimTime() const { return current_sim_time_; }
+
+    // Helpers for the simulation loop
+    data_provider::AgentPool & GetAgentPool() { return agent_pool_; }
+    data_provider::RouteArena & GetRouteArena() { return route_arena_; }
+    data_provider::KinematicsSystem & GetKinSystem() { return kin_system_; }
+    router::control::RouterManager & GetRouterManager() { return router_manager_; }
+
+private:
+    void StartRouterWorker();
+    void HandleResponses();
+
+private:
+    // Modules
+    router::control::RouterManager router_manager_;
+    data_provider::AgentPool agent_pool_;
+    data_provider::RouteArena route_arena_;
+    data_provider::KinematicsSystem kin_system_;
+    
+    // Communication
+    std::unique_ptr< common::net::TypedEndpoint< traffic::common::net::RouteRequest, traffic::common::net::RouteResponse > > mpr_ep_;
+    std::unique_ptr< common::net::TypedEndpoint< traffic::common::net::RouteResponse, traffic::common::net::RouteRequest > > router_ep_;
+    
+    std::unique_ptr< decision_engine::MprEngine > mpr_engine_;
+
+    // Threading
+    ThreadPool router_pool_;
+    std::thread router_worker_;
+    std::atomic< bool > keep_running_{ true };
+    std::atomic< size_t > routes_computed_{ 0 };
+
+    // State
+    float current_sim_time_{ 0.0f };
+    uint32_t last_mpr_tick_sim_sec_{ 0 };
+    uint32_t num_agents_{ 0 };
+    bool is_initialized_{ false };
+};
+
+} // namespace traffic::core
