@@ -47,6 +47,7 @@ public:
     size_t GetRoutesComputed() const { return routes_computed_.load(); }
     size_t GetTotalSuccessfulRoutes() const { return total_successful_routes_; }
     size_t GetTotalFailedRoutes() const { return total_failed_routes_; }
+    size_t GetTotalCompletedRoutes() const { return total_completed_routes_; }
     float GetCurrentSimTime() const { return current_sim_time_; }
 
     // Helpers for the simulation loop
@@ -79,6 +80,7 @@ private:
     std::atomic< size_t > routes_computed_{ 0 };
     size_t total_successful_routes_{ 0 };
     size_t total_failed_routes_{ 0 };
+    size_t total_completed_routes_{ 0 };
 
     // Cached buffers for zero-allocation
     std::vector< traffic::common::net::RouteRequest > mpr_requests_buffer_;

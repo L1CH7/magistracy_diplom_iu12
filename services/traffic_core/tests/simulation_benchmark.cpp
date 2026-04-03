@@ -190,6 +190,37 @@ int main( int argc, char ** argv )
 
     // --- Results ---
     size_t final_routes = engine.GetRoutesComputed();
+    
+    // Calculate VolumeManager Bucket load histogram
+    size_t cap_zero = 0, cap_1_25 = 0, cap_25_50 = 0, cap_50_75 = 0, cap_75_85 = 0;
+    size_t cap_85_90 = 0, cap_90_95 = 0, cap_95_99 = 0, cap_99_100 = 0, cap_over = 0;
+    
+    if( auto vol_mgr = engine.GetRouterManager().get_volume_manager() )
+    {
+        auto buckets = vol_mgr->data();
+        size_t n_edges = engine.GetRouterManager().num_edges();
+        for( size_t i = 0; i < n_edges; ++i )
+        {
+            float len = engine.GetRouterManager().get_edge_length( i );
+            float capacity = std::max(1.0f, len / 7.0f); // Roughly 1 vehicle per 7 meters
+            
+            for( int b = 0; b < traffic::router::compute::NUM_BUCKETS; ++b )
+            {
+                uint32_t vol = buckets[ i ].volumes[ b ].load( std::memory_order_relaxed );
+                if (vol == 0) cap_zero++;
+                else if (vol < capacity * 0.25f) cap_1_25++;
+                else if (vol < capacity * 0.50f) cap_25_50++;
+                else if (vol < capacity * 0.75f) cap_50_75++;
+                else if (vol < capacity * 0.85f) cap_75_85++;
+                else if (vol < capacity * 0.90f) cap_85_90++;
+                else if (vol < capacity * 0.95f) cap_90_95++;
+                else if (vol < capacity * 0.99f) cap_95_99++;
+                else if (vol <= capacity * 1.00f) cap_99_100++;
+                else cap_over++;
+            }
+        }
+    }
+
     std::cout << "================================================" << std::endl;
     std::cout << " Benchmark Finished." << std::endl;
     std::cout << " Init time:        " << init_sec << "s" << std::endl;
@@ -200,7 +231,20 @@ int main( int argc, char ** argv )
     std::cout << " Reroutes total:   " << final_routes << " (Triggered during sim: " << reroutes_triggered << ")" << std::endl;
     std::cout << " Routes Succeeded: " << engine.GetTotalSuccessfulRoutes() << std::endl;
     std::cout << " Routes Failed:    " << engine.GetTotalFailedRoutes() << std::endl;
+    std::cout << " Routes Completed: " << engine.GetTotalCompletedRoutes() << " (Agents reached destination)" << std::endl;
     std::cout << " Edges Crossed:    " << total_edge_transitions << std::endl;
+    std::cout << "------------------------------------------------" << std::endl;
+    std::cout << " Volume Buckets Usage Histogram:" << std::endl;
+    std::cout << "   0%       load:  " << cap_zero << " timeslots" << std::endl;
+    std::cout << "   1-25%    load:  " << cap_1_25 << " timeslots" << std::endl;
+    std::cout << "  25-50%    load:  " << cap_25_50 << " timeslots" << std::endl;
+    std::cout << "  50-75%    load:  " << cap_50_75 << " timeslots" << std::endl;
+    std::cout << "  75-85%    load:  " << cap_75_85 << " timeslots" << std::endl;
+    std::cout << "  85-90%    load:  " << cap_85_90 << " timeslots" << std::endl;
+    std::cout << "  90-95%    load:  " << cap_90_95 << " timeslots" << std::endl;
+    std::cout << "  95-99%    load:  " << cap_95_99 << " timeslots" << std::endl;
+    std::cout << "  99-100%   load:  " << cap_99_100 << " timeslots" << std::endl;
+    std::cout << "   >100%    load:  " << cap_over << " timeslots (Local roads may overflow due to ASF)" << std::endl;
     std::cout << "================================================" << std::endl;
 
     return 0;

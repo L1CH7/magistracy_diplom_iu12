@@ -87,7 +87,7 @@ public:
 
     ~ThreadPool()
     {
-        stop_.store( true, std::memory_order_release );
+        Stop();
         for( auto & worker : workers_ )
         {
             if( worker.joinable() )

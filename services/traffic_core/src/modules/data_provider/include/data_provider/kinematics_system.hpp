@@ -71,8 +71,9 @@ public:
      * @brief Processes topological transitions for agents in the queue.
      * @param current_time_sec Current simulation time for arrival tracking.
      */
-    void ProcessTransitions( uint32_t current_time_sec )
+    uint32_t ProcessTransitions( uint32_t current_time_sec )
     {
+        uint32_t completed_agents = 0;
         for( uint32_t agent_idx : pool_.transition_queue )
         {
             // Correct the "overflight" to start precisely at the beginning of the next edge
@@ -96,9 +97,11 @@ public:
             {
                 // End of journey: Despawn the agent
                 pool_.is_active[ agent_idx ] = 0;
-                pool_.pos_meters[ agent_idx ] = 0.0f; 
+                pool_.pos_meters[ agent_idx ] = 0.0f;
+                completed_agents++;
             }
         }
+        return completed_agents;
     }
 
 private:

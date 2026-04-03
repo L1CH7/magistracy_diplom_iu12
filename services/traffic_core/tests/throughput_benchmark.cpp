@@ -32,6 +32,8 @@ struct RouteStats {
     double wall_time_ms;
     uint32_t iterations;
     size_t edges_count;
+    float route_len_m;
+    float route_dur_sec;
 };
 
 struct AggStats {
@@ -41,6 +43,8 @@ struct AggStats {
     // Для медиан и перцентилей нормализованных метрик
     std::vector<double> ns_per_iter_vals;
     std::vector<double> iter_per_edge_vals;
+    std::vector<float> route_len_vals;
+    std::vector<float> route_dur_vals;
     
     size_t count = 0;
 
@@ -55,6 +59,8 @@ struct AggStats {
         if (s.edges_count > 0) {
             iter_per_edge_vals.push_back(static_cast<double>(s.iterations) / s.edges_count);
         }
+        route_len_vals.push_back(s.route_len_m);
+        route_dur_vals.push_back(s.route_dur_sec);
         count++;
     }
 
@@ -63,6 +69,8 @@ struct AggStats {
         
         std::sort(ns_per_iter_vals.begin(), ns_per_iter_vals.end());
         std::sort(iter_per_edge_vals.begin(), iter_per_edge_vals.end());
+        std::sort(route_len_vals.begin(), route_len_vals.end());
+        std::sort(route_dur_vals.begin(), route_dur_vals.end());
         
         double t_avg = t_sum / count;
         double i_avg = static_cast<double>(i_sum) / count;
@@ -84,11 +92,29 @@ struct AggStats {
         
         double iter_edge_max = !iter_per_edge_vals.empty() ? iter_per_edge_vals.back() : 0;
 
+        float p_len_min = !route_len_vals.empty() ? route_len_vals.front() : 0;
+        float p_len_avg = 0;
+        if (!route_len_vals.empty()) {
+            for (float v : route_len_vals) p_len_avg += v;
+            p_len_avg /= route_len_vals.size();
+        }
+        float p_len_max = !route_len_vals.empty() ? route_len_vals.back() : 0;
+        float p_len_p95 = !route_len_vals.empty() ? route_len_vals[static_cast<size_t>(route_len_vals.size() * 0.95)] : 0;
+        
+        float p_sec_min = !route_dur_vals.empty() ? route_dur_vals.front() : 0;
+        float p_sec_avg = 0;
+        if (!route_dur_vals.empty()) {
+            for (float v : route_dur_vals) p_sec_avg += v;
+            p_sec_avg /= route_dur_vals.size();
+        }
+        float p_sec_max = !route_dur_vals.empty() ? route_dur_vals.back() : 0;
+        float p_sec_p95 = !route_dur_vals.empty() ? route_dur_vals[static_cast<size_t>(route_dur_vals.size() * 0.95)] : 0;
+
         // Эффективный QPS = (Кол-во задач * Потоки) / Суммарное время процессора в секундах
         double eff_qps = (t_sum > 0) ? (count * total_threads) / (t_sum / 1000.0) : 0;
 
-        std::cout << std::format("{:<7} | {:>7.2f} | {:>7.2f} | {:>8.0f} | {:>9.1f} | {:>9.1f} | {:>9.1f} | {:>9.1f} | {:>8.0f}\n",
-            label, t_avg, t_max, i_avg, ns_iter_avg, ns_iter_p95, iter_edge_avg, iter_edge_max, eff_qps);
+        std::cout << std::format("{:<7} | {:>7.2f} | {:>7.2f} | {:>8.0f} | {:>9.1f} | {:>9.1f} | {:>9.1f} | {:>9.1f} | {:>8.0f} | {:>7.0f} | {:>7.0f} | {:>7.0f} | {:>7.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f} | {:>6.0f}\n",
+            label, t_avg, t_max, i_avg, ns_iter_avg, ns_iter_p95, iter_edge_avg, iter_edge_max, eff_qps, p_len_min, p_len_avg, p_len_p95, p_len_max, p_sec_min, p_sec_avg, p_sec_p95, p_sec_max);
     }
 };
 
@@ -153,12 +179,18 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
             double duration_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
 
             if (res) {
+                float total_m = 0.0f;
+                for (auto edge : res->path) total_m += router_manager.get_edge_length(edge);
+                float duration_sec = static_cast<float>(res->total_weight);
+
                 thread_results[thread_id].push_back({
                     tasks[i].type,
                     static_cast<int>(tasks[i].ids.size()),
                     duration_ms,
                     res->visited_nodes_count,
-                    res->path.size()
+                    res->path.size(),
+                    total_m,
+                    duration_sec
                 });
             }
             completed_tasks.fetch_add(1, std::memory_order_release);
@@ -185,19 +217,19 @@ TEST_CASE("Analytical Throughput Benchmark" * doctest::skip(true)) {
 
     auto print_hdr = [](std::string title) {
         std::cout << "\n=== " << title << " ===\n";
-        std::cout << std::format("{:<7} | {:>7} | {:>7} | {:>8} | {:>9} | {:>9} | {:>9} | {:>9} | {:>8}\n",
-            "GRP/PTS", "T-AVG", "T-MAX", "I-AVG", "ns/Iter", "ns/Iter95", "Iter/Edge", "I/E(MAX)", "EFF-QPS");
-        std::cout << std::string(100, '-') << "\n";
+        std::cout << std::format("{:<7} | {:>7} | {:>7} | {:>8} | {:>9} | {:>9} | {:>9} | {:>9} | {:>8} | {:>7} | {:>7} | {:>7} | {:>7} | {:>6} | {:>6} | {:>6} | {:>6}\n",
+            "GRP/PTS", "T-AVG", "T-MAX", "I-AVG", "ns/Iter", "ns/Iter95", "Iter/Edge", "I/E(MAX)", "EFF-QPS", "m. MIN", "m. AVG", "m. P95", "m. MAX", "s. MIN", "s. AVG", "s. P95", "s. MAX");
+        std::cout << std::string(170, '-') << "\n";
     };
 
     print_hdr("DIRECT ID ROUTING");
     for (int i = 2; i <= 5; ++i) id_stats[i].print(std::to_string(i) + " PTS", num_threads);
-    std::cout << std::string(100, '-') << "\n";
+    std::cout << std::string(170, '-') << "\n";
     total_id.print("ALL ID", num_threads);
 
     print_hdr("COORDINATE SNAP (LL) ROUTING");
     for (int i = 2; i <= 5; ++i) ll_stats[i].print(std::to_string(i) + " PTS", num_threads);
-    std::cout << std::string(100, '-') << "\n";
+    std::cout << std::string(170, '-') << "\n";
     total_ll.print("ALL LL", num_threads);
 
     print_hdr("OVERALL SYSTEM");

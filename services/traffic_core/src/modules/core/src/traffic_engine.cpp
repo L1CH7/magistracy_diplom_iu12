@@ -126,7 +126,7 @@ void TrafficEngine::Step( float dt )
 
     // Phase 1: Locomotion (Kinematics + Collision Avoidance)
     kin_system_.AdvanceKinematics( dt );
-    kin_system_.ProcessTransitions( static_cast< uint32_t >( current_sim_time_ ) );
+    total_completed_routes_ += kin_system_.ProcessTransitions( static_cast< uint32_t >( current_sim_time_ ) );
 
     // Phase 2: Decision Making (MPR - Mesoscopic Path Rerouting)
     uint32_t sim_sec = static_cast< uint32_t >( current_sim_time_ );
