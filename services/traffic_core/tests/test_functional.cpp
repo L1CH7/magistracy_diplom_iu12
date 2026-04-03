@@ -19,6 +19,7 @@
 #include "data_provider/agent_pool.hpp"
 #include "data_provider/route_arena.hpp"
 #include "data_provider/kinematics_system.hpp"
+#include "decision_engine/mpr_engine.hpp"
 
 using namespace traffic;
 
@@ -167,7 +168,8 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
     // Setup: 1 agent, 2 edges (100m each)
     uint32_t agent_id = 0;
     std::vector< traffic::EdgeID > route = { 101, 102 };
-    arena.UpdateRoute( agent_id, route );
+    std::vector< uint32_t > etas = { 100, 200 };
+    arena.UpdateRoute( agent_id, route, etas );
 
     pool.Allocate( 1 );
     pool.is_active[ agent_id ] = 1;
@@ -224,6 +226,139 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         CHECK( pool.is_active[ agent_id ] == 0 );
         CHECK( pool.pos_meters[ agent_id ] == 0.0f );
         MESSAGE("  [OK] Agent successfully despawned (is_active = 0).");
+    }
+}
+
+TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
+{
+    using namespace traffic;
+    using namespace traffic::common::net;
+    using namespace traffic::data_provider;
+    using namespace traffic::decision_engine;
+
+    // Setup: 10 agent slots
+    AgentPool pool;
+    pool.Allocate( 10 );
+    RouteArena arena;
+
+    // Simulate Router (Endpoint 1) and MPR (Endpoint 2)
+    auto mpr_transport = std::make_unique< InProcTransport >();
+    auto router_transport = std::make_unique< InProcTransport >();
+    
+    // Link transports to form a pipe (Bi-directional)
+    mpr_transport->SetRemote( router_transport.get() );
+    router_transport->SetRemote( mpr_transport.get() );
+
+    TypedEndpoint< RouteRequest, traffic::common::net::RouteResponse > mpr_ep( std::move( mpr_transport ) );
+    TypedEndpoint< traffic::common::net::RouteResponse, RouteRequest > router_ep( std::move( router_transport ) );
+
+    MprEngine engine( mpr_ep );
+
+    SUBCASE( "1. Phase 1: Route Application" )
+    {
+        MESSAGE("Testing MPR Phase 1: Applying received route to Agent 5...");
+        
+        uint32_t agent_id = 5;
+        traffic::common::net::RouteResponse resp {};
+        resp.agent_id = agent_id;
+        resp.success = true;
+        resp.path_len = 3;
+        resp.path[ 0 ] = 100;
+        resp.path[ 1 ] = 101;
+        resp.path[ 2 ] = 102;
+        resp.edge_etas_sec[ 0 ] = 60;
+        resp.edge_etas_sec[ 1 ] = 120;
+        resp.edge_etas_sec[ 2 ] = 180;
+
+        // Mock receiving the response from Router side
+        std::vector< traffic::common::net::RouteResponse > mock_responses = { resp };
+        router_ep.Send( mock_responses ); 
+
+        uint32_t current_time = 1000;
+        engine.Tick( current_time, pool, arena );
+
+        // Verify Arena
+        auto path = arena.GetRoute( agent_id );
+        REQUIRE( path.size() == 3 );
+        CHECK( path[ 0 ] == 100 );
+
+        auto etas = arena.GetEtas( agent_id );
+        REQUIRE( etas.size() == 3 );
+        CHECK( etas[ 0 ] == 60 );
+
+        // Verify Pool
+        CHECK( pool.route_progress_idx[ agent_id ] == 0 );
+        CHECK( pool.edge_enter_time_sec[ agent_id ] == current_time );
+        CHECK( pool.current_edge[ agent_id ] == 100 );
+        MESSAGE("  [SUCCESS] Route applied, timers reset.");
+    }
+
+    SUBCASE( "2. Phase 2 & 3: Reroute Detection (Tolerance 1.5x)" )
+    {
+        MESSAGE("Testing MPR Phase 2: Reroute detection logic...");
+        uint32_t agent_id = 0;
+        pool.is_active[ agent_id ] = 1;
+        pool.current_edge[ agent_id ] = 500;
+        pool.route_progress_idx[ agent_id ] = 0;
+        pool.edge_enter_time_sec[ agent_id ] = 1000;
+
+        std::vector< traffic::EdgeID > path = { 500, 501 };
+        std::vector< uint32_t > etas = { 100, 200 };
+        arena.UpdateRoute( agent_id, path, etas ); // Expected 100s for first edge
+
+        // Test A: Within tolerance (elapsed = 140s, expected = 100s, ratio = 1.4 < 1.5)
+        engine.Tick( 1140, pool, arena );
+        
+        std::vector< RouteRequest > requests;
+        bool has_req = router_ep.Receive( requests );
+        CHECK( !has_req );
+        MESSAGE("  [OK] No reroute for 1.4x delay.");
+
+        // Test B: Exceeds tolerance (elapsed = 160s, expected = 100s, ratio = 1.6 > 1.5)
+        engine.Tick( 1160, pool, arena );
+        
+        has_req = router_ep.Receive( requests );
+        REQUIRE( has_req );
+        REQUIRE( requests.size() == 1 );
+        CHECK( requests[ 0 ].agent_id == agent_id );
+        CHECK( requests[ 0 ].start_edge == 500 );
+        MESSAGE("  [OK] Reroute request generated for 1.6x delay.");
+    }
+
+    SUBCASE( "3. Multi-agent Batch Scan" )
+    {
+        MESSAGE("Testing MPR Phase 2: Scanning 10 agents (5 delayed, 5 on time)...");
+        uint32_t start_time = 1000;
+        
+        for( uint32_t i = 0; i < 10; ++i )
+        {
+            pool.is_active[ i ] = 1;
+            pool.edge_enter_time_sec[ i ] = start_time;
+            pool.route_progress_idx[ i ] = 0;
+            
+            std::vector< traffic::EdgeID > path = { 1000 };
+            std::vector< uint32_t > etas = { 100 };
+            arena.UpdateRoute( i, path, etas ); // All expect 100s
+        }
+
+        // 0-4 are delayed (160s elapsed), 5-9 are okay (110s elapsed)
+        uint32_t current_time = start_time + 160;
+        for( uint32_t i = 5; i < 10; ++i )
+        {
+            pool.edge_enter_time_sec[ i ] = start_time + 50; // Late start simulation
+        }
+
+        engine.Tick( current_time, pool, arena );
+
+        std::vector< RouteRequest > requests;
+        router_ep.Receive( requests );
+        
+        CHECK( requests.size() == 5 ); // Only agents 0, 1, 2, 3, 4 should be stuck
+        for( size_t i = 0; i < requests.size(); ++i )
+        {
+            CHECK( requests[ i ].agent_id == static_cast< uint32_t >( i ) );
+        }
+        MESSAGE("  [SUCCESS] Batch scan correctly identified exactly 5 delayed agents.");
     }
 }
 

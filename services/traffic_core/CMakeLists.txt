@@ -62,6 +62,7 @@ if(TRAFFIC_BUILD_TESTS)
     target_include_directories(test_functional PRIVATE 
         src/modules/router/include 
         src/modules/data_provider/include
+        src/modules/decision_engine/include
         src/common
         src
         3rd_party/doctest
@@ -69,6 +70,7 @@ if(TRAFFIC_BUILD_TESTS)
     target_link_libraries(test_functional PRIVATE 
         traffic_router
         traffic_data_provider
+        traffic_decision_engine
         quill::quill
         concurrentqueue
     )

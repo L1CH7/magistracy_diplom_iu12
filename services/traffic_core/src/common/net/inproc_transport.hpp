@@ -25,19 +25,33 @@ public:
     ~InProcTransport() override = default;
 
     /**
-     * @brief Sends byte data through the ready queue.
+     * @brief Connects this transport to another one to form a pipe.
+     * @param remote Pointer to the destination transport.
+     */
+    void SetRemote( InProcTransport * remote )
+    {
+        remote_ = remote;
+    }
+
+    /**
+     * @brief Sends byte data through the ready queue (internal or remote).
      * @param data View of the byte sequence.
      */
     void SendBytes( std::span< const uint8_t > data ) override
     {
         std::vector< uint8_t > buf = pool_.Acquire();
         
-        // resize() here might allocate if capacity is smaller,
-        // but pool's vectors should quickly reach a steady state.
         buf.resize( data.size() );
         std::memcpy( buf.data(), data.data(), data.size() );
         
-        ready_queue_.enqueue( std::move( buf ) );
+        if( remote_ )
+        {
+            remote_->ready_queue_.enqueue( std::move( buf ) );
+        }
+        else
+        {
+            ready_queue_.enqueue( std::move( buf ) );
+        }
     }
 
     /**
@@ -51,7 +65,6 @@ public:
         
         if( ready_queue_.try_dequeue( buf ) )
         {
-            // Zero-allocation goal: preserve capacity of the user-provided buffer.
             if( out_buffer.capacity() < buf.size() )
             {
                 out_buffer.reserve( buf.size() );
@@ -67,9 +80,6 @@ public:
         return false;
     }
 
-    /**
-     * @brief Always returns false for In-Process transport.
-     */
     bool IsNetwork() const noexcept override
     {
         return false;
@@ -78,6 +88,7 @@ public:
 private:
     MessagePool pool_;
     moodycamel::ConcurrentQueue< std::vector< uint8_t > > ready_queue_;
+    InProcTransport * remote_ = nullptr;
 };
 
 } // namespace net

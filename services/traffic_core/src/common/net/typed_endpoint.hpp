@@ -21,6 +21,9 @@ namespace net
 template< typename TOut, typename TIn >
 class TypedEndpoint final
 {
+    static_assert( std::is_trivially_copyable_v< TOut > && std::is_trivially_copyable_v< TIn >,
+                   "TypedEndpoint requires trivially copyable (POD) types for high-performance zero-copy." );
+
 public:
     explicit TypedEndpoint( std::unique_ptr< ITransport > transport )
     :   transport_( std::move( transport ) )
