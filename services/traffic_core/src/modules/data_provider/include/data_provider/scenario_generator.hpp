@@ -51,7 +51,7 @@ public:
             }
 
             // Populate SoA (Structure of Arrays)
-            pool.is_active[ i ] = 1;
+            pool.is_active[ i ] = 2; // 2 = Waiting for route
             pool.current_edge[ i ] = start_edge;
             pool.target_edge[ i ] = target_edge;
             pool.velocity_mps[ i ] = 15.0f; // Standard ~50 km/h

@@ -6,10 +6,12 @@
 #include <functional>
 #include <atomic>
 #include <print>
+#include <semaphore>
 
 #ifdef __linux__
 #include <pthread.h>
 #include <sched.h>
+#include <immintrin.h>
 #endif
 
 namespace traffic::core
@@ -101,15 +103,38 @@ public:
         active_tasks_.fetch_add( 1, std::memory_order_relaxed );
         tasks_.enqueue( [this, task = std::forward< F >( f )]() {
             task();
-            active_tasks_.fetch_sub( 1, std::memory_order_release );
+            auto prev = active_tasks_.fetch_sub( 1, std::memory_order_release );
+            if( prev == 1 )
+            {
+                active_tasks_.notify_all();
+            }
         } );
+        task_sem_.release();
     }
 
     void WaitForAll()
     {
-        while( active_tasks_.load( std::memory_order_acquire ) > 0 )
+        int current;
+        while( ( current = active_tasks_.load( std::memory_order_acquire ) ) > 0 )
         {
-            std::this_thread::yield();
+            active_tasks_.wait( current, std::memory_order_acquire );
+        }
+    }
+
+    void Stop()
+    {
+        stop_.store( true, std::memory_order_release );
+        task_sem_.release( static_cast< std::ptrdiff_t >( workers_.size() ) );
+        
+        // Safely drain the queue to cancel pending tasks and unblock WaitForAll
+        std::function< void() > dummy_task;
+        while( tasks_.try_dequeue( dummy_task ) )
+        {
+            auto prev = active_tasks_.fetch_sub( 1, std::memory_order_release );
+            if( prev == 1 )
+            {
+                active_tasks_.notify_all();
+            }
         }
     }
 
@@ -143,7 +168,7 @@ private:
             }
             else
             {
-                std::this_thread::yield();
+                task_sem_.acquire();
             }
         }
     }
@@ -153,6 +178,7 @@ private:
     moodycamel::ConcurrentQueue< std::function< void() > > tasks_;
     std::atomic< bool > stop_;
     std::atomic< int > active_tasks_;
+    std::counting_semaphore< 1000000 > task_sem_{ 0 };
 };
 
 } // namespace traffic::core

@@ -59,12 +59,14 @@ public:
                 const uint32_t elapsed = current_time_sec - enter_times[ i ];
                 
                 const auto etas = arena.GetEtas( static_cast< uint32_t >( i ) );
-                if( etas.empty() || progress_idxs[ i ] >= etas.size() )
+                if( etas.empty() || progress_idxs[ i ] + 1 >= etas.size() )
                     continue;
 
-                const uint32_t expected_eta = etas[ progress_idxs[ i ] ];
+                const uint32_t current_eta = etas[ progress_idxs[ i ] ];
+                const uint32_t next_eta = etas[ progress_idxs[ i ] + 1 ];
+                const uint32_t expected_duration = next_eta > current_eta ? (next_eta - current_eta) : 1;
 
-                const uint32_t allowed_time = ( expected_eta * TRAFFIC_MPR_TOLERANCE_NUM ) /
+                const uint32_t allowed_time = ( expected_duration * TRAFFIC_MPR_TOLERANCE_NUM ) /
                                               TRAFFIC_MPR_TOLERANCE_DEN;
                 if( elapsed > allowed_time )
                 {

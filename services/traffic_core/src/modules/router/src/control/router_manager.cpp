@@ -32,8 +32,10 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
 
     const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
     traffic::PointCount num_nodes;
+    traffic::EdgeID num_edges;
     std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
-    std::cout << " [2/3] num_nodes=" << num_nodes << std::endl;
+    std::memcpy(&num_edges, csr_ptr + sizeof(num_nodes), sizeof(num_edges));
+    std::cout << " [2/3] num_nodes=" << num_nodes << " num_edges=" << num_edges << std::endl;
 
     if (mapped_graph_.spatial_grid_region) {
         std::cout << " [3/3] Loading Spatial Grid..." << std::flush;

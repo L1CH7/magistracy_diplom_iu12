@@ -100,6 +100,13 @@ void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf )
 
     // Send initial paths computation
     mpr_ep_->Send( initial_requests );
+
+    // Task 1: Fix physics initialization
+    for( uint32_t i = 0; i < num_agents; ++i )
+    {
+        float length = router_manager_.get_edge_length( agent_pool_.current_edge[ i ] );
+        agent_pool_.inv_edge_length_m[ i ] = ( length > 0.001f ) ? ( 1.0f / length ) : 1.0f;
+    }
 }
 
 void TrafficEngine::Warmup()
@@ -130,12 +137,74 @@ void TrafficEngine::Step( float dt )
 
         if( !mpr_requests_buffer_.empty() )
         {
+            auto vol_mgr = router_manager_.get_volume_manager();
+            if( vol_mgr )
+            {
+                for( const auto & req : mpr_requests_buffer_ )
+                {
+                    auto path = route_arena_.GetRoute( req.agent_id );
+                    auto etas = route_arena_.GetEtas( req.agent_id );
+                    if( !path.empty() ) vol_mgr->unbook_route( path, etas, 1 );
+                }
+            }
             mpr_ep_->Send( mpr_requests_buffer_ );
         }
         last_mpr_tick_sim_sec_ = sim_sec;
     }
 
     current_sim_time_ += dt;
+
+    // Phase 2.5: Agent Recirculation (Task 2 & 3: Rate Limiter)
+    static std::mt19937 rec_gen{ std::random_device{}( ) };
+    std::uniform_int_distribution< uint32_t > edge_dist( 0, static_cast< uint32_t >( router_manager_.num_edges() ) - 1 );
+
+    uint32_t respawn_quota = 1000; // Task 3: Limit respawns per tick
+    mpr_requests_buffer_.clear(); // Reuse buffer for respawn requests
+    for( uint32_t i = 0; i < num_agents_; ++i )
+    {
+        if( agent_pool_.is_active[ i ] == 0 && respawn_quota > 0 )
+        {
+            respawn_quota--;
+            uint32_t start_edge = edge_dist( rec_gen );
+            uint32_t target_edge = edge_dist( rec_gen );
+            while( target_edge == start_edge ) target_edge = edge_dist( rec_gen );
+
+            agent_pool_.current_edge[ i ] = start_edge;
+            agent_pool_.target_edge[ i ] = target_edge;
+            agent_pool_.pos_meters[ i ] = 0.0f;
+            
+            // СТОП! Машина не должна двигаться, пока нет маршрута (Task: Fix Respawn Loop)
+            agent_pool_.velocity_mps[ i ] = 0.0f; 
+            
+            float length = router_manager_.get_edge_length( start_edge );
+            agent_pool_.inv_edge_length_m[ i ] = ( length > 0.001f ) ? ( 1.0f / length ) : 1.0f;
+            
+            // 2 = Состояние ожидания маршрута. Физика её не тронет.
+            agent_pool_.is_active[ i ] = 2; 
+
+            mpr_requests_buffer_.push_back( {
+                .agent_id = i,
+                .start_edge = start_edge,
+                .target_edge = target_edge,
+                .asf = 50, // Default ASF for respawn
+                .current_time_sec = static_cast< uint32_t >( current_sim_time_ )
+            } );
+        }
+    }
+    if( !mpr_requests_buffer_.empty() )
+    {
+        auto vol_mgr = router_manager_.get_volume_manager();
+        if( vol_mgr )
+        {
+            for( const auto & req : mpr_requests_buffer_ )
+            {
+                auto path = route_arena_.GetRoute( req.agent_id );
+                auto etas = route_arena_.GetEtas( req.agent_id );
+                if( !path.empty() ) vol_mgr->unbook_route( path, etas, 1 );
+            }
+        }
+        mpr_ep_->Send( mpr_requests_buffer_ );
+    }
 
     // Phase 3: Route Integration (Apply responses to Route Arena)
     HandleResponses();
@@ -150,6 +219,7 @@ void TrafficEngine::ForceReroute( const std::vector< RouteRequest > & requests )
 void TrafficEngine::Stop()
 {
     keep_running_ = false;
+    router_pool_.Stop();
     if( router_worker_.joinable() )
     {
         router_worker_.join();
@@ -167,6 +237,7 @@ void TrafficEngine::StartRouterWorker()
 #endif
         std::vector< RouteRequest > req_batch;
         std::vector< RouteResponse > res_batch;
+        uint32_t empty_polls = 0;
 
         while( keep_running_ )
         {
@@ -176,10 +247,8 @@ void TrafficEngine::StartRouterWorker()
                 for( size_t i = 0; i < req_batch.size(); ++i )
                 {
                     router_pool_.Enqueue( [ this, &req = req_batch[ i ], &res = res_batch[ i ] ]( ) {
-                        auto result = router_manager_.Route< false, false >(
-                            req.start_edge,
-                            req.target_edge,
-                            req.asf,
+                        auto result = router_manager_.Route< true, false >( // Force vector overload to prevent implicit float cast
+                            std::vector< traffic::NodeID >{ req.start_edge, req.target_edge },
                             req.current_time_sec
                         );
 
@@ -187,8 +256,8 @@ void TrafficEngine::StartRouterWorker()
                         if( result )
                         {
                             res.success = true;
-                            res.path_len = static_cast< uint16_t >( result->path.size() );
-                            for( size_t j = 0; j < result->path.size(); ++j )
+                            res.path_len = static_cast< uint16_t >( std::min<size_t>(result->path.size(), traffic::common::net::MAX_ROUTE_PATH) );
+                            for( size_t j = 0; j < res.path_len; ++j )
                             {
                                 res.path[ j ] = result->path[ j ];
                                 res.edge_etas_sec[ j ] = result->etas[ j ];
@@ -205,8 +274,18 @@ void TrafficEngine::StartRouterWorker()
                 routes_computed_.fetch_add( static_cast< uint32_t >( req_batch.size() ), std::memory_order_relaxed );
                 
                 router_ep_->Send( res_batch );
+                empty_polls = 0;
             }
-            std::this_thread::yield();
+            else
+            {
+                // Не жжем ядро, если запросов нет (Task: Optimization)
+                if (empty_polls < 4000) {
+                    _mm_pause();
+                    empty_polls++;
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
         }
     } );
 }
@@ -220,15 +299,32 @@ void TrafficEngine::HandleResponses()
         {
             if( r.success )
             {
+                total_successful_routes_++;
                 route_arena_.UpdateRoute( r.agent_id,
                                           { r.path.data(), r.path_len },
                                           { r.edge_etas_sec.data(), r.path_len } );
 
-                // Reset progress if it was a forced or stuck reroute
-                if( agent_pool_.route_progress_idx[ r.agent_id ] == 0 )
+                auto vol_mgr = router_manager_.get_volume_manager();
+                if( vol_mgr )
                 {
-                    agent_pool_.edge_enter_time_sec[ r.agent_id ] = static_cast< uint32_t >( current_sim_time_ );
+                    vol_mgr->book_route( route_arena_.GetRoute( r.agent_id ),
+                                         route_arena_.GetEtas( r.agent_id ),
+                                         1 /* weight */ );
                 }
+
+                // Task 3: Unconditional reset to prevent race conditions
+                agent_pool_.route_progress_idx[ r.agent_id ] = 0;
+                agent_pool_.edge_enter_time_sec[ r.agent_id ] = static_cast< uint32_t >( current_sim_time_ );
+
+                // Маршрут получен. Активируем и даем газ!
+                agent_pool_.is_active[ r.agent_id ] = 1;
+                agent_pool_.velocity_mps[ r.agent_id ] = 15.0f;
+            }
+            else
+            {
+                total_failed_routes_++;
+                // Маршрут не найден. Агент остается мертвым (или становится им) и ждет квоту на респавн
+                agent_pool_.is_active[ r.agent_id ] = 0;
             }
         }
     }
