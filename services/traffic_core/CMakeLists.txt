@@ -61,12 +61,14 @@ if(TRAFFIC_BUILD_TESTS)
     add_executable(test_functional tests/test_functional.cpp)
     target_include_directories(test_functional PRIVATE 
         src/modules/router/include 
+        src/modules/data_provider/include
         src/common
         src
         3rd_party/doctest
     )
     target_link_libraries(test_functional PRIVATE 
         traffic_router
+        traffic_data_provider
         quill::quill
         concurrentqueue
     )
