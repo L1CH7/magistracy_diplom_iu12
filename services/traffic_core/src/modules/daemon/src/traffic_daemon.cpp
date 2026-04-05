@@ -3,6 +3,7 @@
 #include <atomic>
 #include <thread>
 #include <zmq.hpp>
+#include <chrono>
 
 #include "common/logger.hpp"
 #include "common/net/telemetry_protocol.hpp"
@@ -98,6 +99,7 @@ int main( int argc, char ** argv )
                         LOG_INFO( "Command: START agents={} accel={}", cmd->num_agents, cmd->acceleration );
                         engine.SpawnAgents( cmd->num_agents, cmd->asf );
                         engine.Warmup();
+                        LOG_INFO("Engine Warmed up with {} agents", cmd->num_agents);
                         
                         float accel = cmd->acceleration;
                         engine_thread = std::thread( [ &engine, accel ]( ) {
@@ -161,7 +163,10 @@ int main( int argc, char ** argv )
 
                     // Use internal engine's RouterManager for simulation-aware routing (baskets etc)
                     auto & rm = engine.GetRouterManager(); 
+                    auto start_calc = std::chrono::steady_clock::now();
                     auto result = rm.Route< true, false >( coords, route_header->start_time_sec );
+                    auto end_calc = std::chrono::steady_clock::now();
+                    float calc_ms = std::chrono::duration<float, std::milli>(end_calc - start_calc).count();
 
                     if( result )
                     {
@@ -172,6 +177,7 @@ int main( int argc, char ** argv )
                         res_header.num_edges = static_cast< uint16_t >( result->path.size() );
                         res_header.total_distance_m = 0.0f; // Could be summed from edges
                         res_header.total_time_sec = static_cast< float >( result->total_weight );
+                        res_header.calc_time_ms = calc_ms;
 
                         std::vector< uint16_t > point_counts;
                         std::vector< common::net::PointCoord > geometry;

@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import FastAPI, Request, WebSocket, HTTPException
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from services.common.config import Settings, config_loader
@@ -110,31 +110,32 @@ async def calculate_route(request: Request):
         socket.send(full_request)
         
         # 2. Receive Multi-part Response
-        # Part 1: Header (15 bytes: B, H, I, f, f)
-        res_header_raw = socket.recv()
-        if len(res_header_raw) < 15: # OneOffRouteResponseHeader size
-             return JSONResponse({"status": "error", "message": f"Invalid response header size: {len(res_header_raw)}"}, status_code=500)
+        # We MUST use recv_multipart() for REQ sockets to consume all frames at once
+        frames = socket.recv_multipart()
         
-        success, num_edges, total_points, total_dist, total_time = struct.unpack("<BHIff", res_header_raw)
+        if len(frames) < 5:
+            logger.error(f"Invalid multi-part response: expected 5+ frames, got {len(frames)}")
+            return JSONResponse({"status": "error", "message": "Corrupted response from Traffic Core"}, status_code=500)
+
+        # Frame 1: Header (19 bytes: B, H, I, f, f, f)
+        res_header_raw = frames[0]
+        # B = success, H = num_edges (2), I = total_pts (4), f = dist, f = time, f = calc_ms
+        success, num_edges, total_pts, dist, total_time, calc_ms = struct.unpack("<BHIfff", res_header_raw)
         
         if not success:
             return JSONResponse({"status": "error", "detail": "Routing failed"}, status_code=404)
         
-        # Part 2: EdgeIDs (uint32)
-        edge_ids_raw = socket.recv()
-        edge_ids = struct.unpack(f"<{num_edges}I", edge_ids_raw)
+        # Frame 2: EdgeIDs (uint32)
+        edge_ids = struct.unpack(f"<{num_edges}I", frames[1])
         
-        # Part 3: ETAs (float)
-        etas_raw = socket.recv()
-        etas = struct.unpack(f"<{num_edges}f", etas_raw)
+        # Frame 3: ETAs (float)
+        etas = struct.unpack(f"<{num_edges}f", frames[2])
         
-        # Part 4: PointCounts (uint16)
-        counts_raw = socket.recv()
-        point_counts = struct.unpack(f"<{num_edges}H", counts_raw)
+        # Frame 4: PointCounts (uint16)
+        point_counts = struct.unpack(f"<{num_edges}H", frames[3])
         
-        # Part 5: GeometryData (float x, float y)
-        geom_raw = socket.recv()
-        all_points = struct.unpack(f"<{total_points * 2}f", geom_raw)
+        # Frame 5: GeometryData (float x, float y)
+        all_points = struct.unpack(f"<{total_pts * 2}f", frames[4])
         
         # 3. Reconstruct JSON Response
         segments = []
@@ -161,18 +162,18 @@ async def calculate_route(request: Request):
             })
             
         return {
+            "status": "success",
+            "calculation_time_ms": calc_ms,
             "routes": [{
                 "route_id": 0,
                 "segments": segments,
-                "total_distance_m": total_dist,
+                "total_distance_m": dist,
                 "estimated_time_sec": total_time,
                 "diversity_score": 1.0,
                 "edge_ids": list(edge_ids)
             }]
         }
         
-        logger.info(f"Route calculated successfully: {num_edges} segments, {total_dist:.1f}m, {total_time:.1f}s")
-        return response
     except zmq.Again:
         return JSONResponse({"status": "error", "message": "Traffic Core timeout"}, status_code=504)
     except Exception as e:
@@ -283,4 +284,3 @@ register_routes()
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)
-

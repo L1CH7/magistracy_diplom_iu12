@@ -67,6 +67,7 @@ struct OneOffRouteResponseHeader
     uint32_t total_points;
     float total_distance_m;
     float total_time_sec;
+    float calc_time_ms;
 };
 
 /**
