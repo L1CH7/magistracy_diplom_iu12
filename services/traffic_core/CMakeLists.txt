@@ -21,6 +21,14 @@ endif()
 add_subdirectory(3rd_party/quill)
 add_subdirectory(3rd_party/concurrentqueue)
 
+# ZeroMQ (Microservice Communication)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZMQ REQUIRED IMPORTED_TARGET libzmq)
+# Create a common alias for easy linkage
+if(TARGET PkgConfig::ZMQ AND NOT TARGET ZMQ::ZMQ)
+    add_library(ZMQ::ZMQ ALIAS PkgConfig::ZMQ)
+endif()
+
 # ============================
 # MODULES (Архитектура системы)
 # ============================
@@ -28,6 +36,7 @@ add_subdirectory(src/modules/router)
 add_subdirectory(src/modules/data_provider)
 add_subdirectory(src/modules/decision_engine)
 add_subdirectory(src/modules/core)
+add_subdirectory(src/modules/daemon)
 
 # ============================
 # EXECUTABLE: TRAFFIC CORE
@@ -46,6 +55,7 @@ target_link_libraries(traffic_core PRIVATE
     traffic_data_provider
     traffic_decision_engine
     traffic_core_core
+    ZMQ::ZMQ
 )
 
 # ============================
@@ -75,6 +85,7 @@ if(TRAFFIC_BUILD_TESTS)
         traffic_decision_engine
         quill::quill
         concurrentqueue
+        ZMQ::ZMQ
     )
 
     add_executable(throughput_benchmark tests/throughput_benchmark.cpp)
@@ -88,6 +99,7 @@ if(TRAFFIC_BUILD_TESTS)
         traffic_router
         quill::quill
         concurrentqueue
+        ZMQ::ZMQ
     )
 
     add_executable(simulation_benchmark tests/simulation_benchmark.cpp)
@@ -107,5 +119,6 @@ if(TRAFFIC_BUILD_TESTS)
         traffic_core_core
         quill::quill
         concurrentqueue
+        ZMQ::ZMQ
     )
 endif()

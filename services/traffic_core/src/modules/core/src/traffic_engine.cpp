@@ -2,8 +2,7 @@
 #include "common/net/inproc_transport.hpp"
 #include "data_provider/scenario_generator.hpp"
 
-#include <iostream>
-#include <memory>
+#include <chrono>
 #include <thread>
 #include <atomic>
 #include <vector>
@@ -11,6 +10,7 @@
 #include <cstdint>
 #include <expected>
 #include <sstream>
+#include "core/telemetry_worker.hpp"
 
 #ifdef __linux__
 #include <pthread.h>
@@ -30,10 +30,12 @@ TrafficEngine::TrafficEngine()
     current_sim_time_( 0.0f ),
     last_mpr_tick_sim_sec_( 0 ),
     routes_computed_( 0 ),
+    target_accel_( 1000.0f ),
     router_pool_( TRAFFIC_ROUTER_THREADS, true ),
     kin_system_( agent_pool_, route_arena_ )
 {
     mpr_requests_buffer_.reserve( 4096 );
+    last_telemetry_time_ = std::chrono::steady_clock::now();
 }
 
 TrafficEngine::TrafficEngine( const std::vector< int > & router_cores )
@@ -132,6 +134,81 @@ void TrafficEngine::Warmup()
         HandleResponses();
         std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
     }
+}
+
+void TrafficEngine::Run( float requested_accel )
+{
+    target_accel_.store( requested_accel );
+    keep_running_ = true;
+    
+    sim_start_real_time_ = std::chrono::steady_clock::now();
+    sim_start_sim_time_ = current_sim_time_;
+    
+    constexpr float dt = 0.1f;
+    
+    while( keep_running_ )
+    {
+        auto tick_start = std::chrono::steady_clock::now();
+        
+        Step( dt );
+
+        // Telemetry Update (25Hz internal limit in worker, but we can call every tick or threshold)
+        UpdateTelemetry();
+
+        // Throttling Logic
+        float current_accel = target_accel_.load( std::memory_order_relaxed );
+        if( current_accel > 0.0f )
+        {
+            float elapsed_sim = current_sim_time_ - sim_start_sim_time_;
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_real = std::chrono::duration_cast< std::chrono::duration< float > >( now - sim_start_real_time_ );
+            
+            float target_real_time = elapsed_sim / current_accel;
+            if( elapsed_real.count() < target_real_time )
+            {
+                auto wait_dur = std::chrono::duration< float >( target_real_time - elapsed_real.count() );
+                std::this_thread::sleep_for( std::chrono::duration_cast< std::chrono::microseconds >( wait_dur ) );
+            }
+        }
+    }
+}
+
+void TrafficEngine::UpdateTelemetry()
+{
+    if( !telemetry_worker_ ) return;
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast< std::chrono::milliseconds >( now - last_telemetry_time_ );
+    
+    // Throttle telemetry collection to ~25Hz (40ms) to avoid overhead
+    if( elapsed.count() < 40 ) return;
+
+    auto & buffer = telemetry_worker_->GetInactiveBuffer();
+    buffer.clear();
+
+    // Copy only active agents (SoA to AoS conversion for network)
+    for( uint32_t i = 0; i < num_agents_; ++i )
+    {
+        if( agent_pool_.is_active[ i ] == 1 )
+        {
+            common::net::AgentState state;
+            state.agent_id = i;
+            state.current_edge = agent_pool_.current_edge[ i ];
+            state.pos_meters = agent_pool_.pos_meters[ i ];
+            buffer.push_back( state );
+        }
+    }
+
+    common::net::TelemetryHeader header;
+    header.tick_id = static_cast< uint32_t >( current_sim_time_ * 10 ); // 0.1s ticks
+    header.current_sim_time = current_sim_time_;
+    header.num_agents = static_cast< uint32_t >( buffer.size() );
+    
+    // TPS calculation
+    header.current_tps = 1000.0f / elapsed.count();
+    
+    telemetry_worker_->Publish( header );
+    last_telemetry_time_ = now;
 }
 
 void TrafficEngine::Step( float dt )
@@ -378,6 +455,16 @@ void TrafficEngine::HandleResponses()
                     MakePhysicsContext( static_cast< uint32_t >( current_sim_time_ ) ),
                     first_len
                 );
+
+                // Notify Telemetry of new path
+                if( telemetry_worker_ )
+                {
+                    telemetry_worker_->SendEvent( 
+                        common::net::EventType::SPAWN, 
+                        r.agent_id, 
+                        route_arena_.GetRoute( r.agent_id ) 
+                    );
+                }
             }
             else
             {

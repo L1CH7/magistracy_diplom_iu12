@@ -10,6 +10,8 @@ from loguru import logger
 # Load Global Settings
 settings = Settings()
 
+import zmq
+import struct
 import httpx
 
 @asynccontextmanager
@@ -18,9 +20,19 @@ async def lifespan(app: FastAPI):
     # Initialize shared AsyncClient with connection pooling
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     app.state.client = httpx.AsyncClient(limits=limits, timeout=60.0)
+    
+    # Initialize ZMQ Context for Traffic Core control
+    app.state.zmq_ctx = zmq.Context()
+    app.state.zmq_socket = app.state.zmq_ctx.socket(zmq.REQ)
+    # Target is defined by docker-compose service name
+    app.state.zmq_socket.connect("tcp://traffic-core:5555")
+    app.state.zmq_socket.setsockopt(zmq.RCVTIMEO, 5000) # 5s timeout
+    
     yield
     # Cleanup
     await app.state.client.aclose()
+    app.state.zmq_socket.close()
+    app.state.zmq_ctx.term()
     logger.info("Stopping Gateway Service")
 
 app = FastAPI(
@@ -28,6 +40,144 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan
 )
+
+@app.post("/api/v1/sim/control")
+async def sim_control(request: Request):
+    """
+    Proxy simulation commands (START, STOP, SET_SPEED) to Traffic Core via ZeroMQ binary protocol.
+    Expected JSON: { "opcode": int, "num_agents": int, "acceleration": float, ... }
+    """
+    try:
+        data = await request.json()
+        opcode = data.get("opcode", 1)
+        num_agents = data.get("num_agents", 1000)
+        duration = data.get("duration_sec", 3600)
+        asf = data.get("asf", 100)
+        accel = data.get("acceleration", 1000.0)
+        respawn = 1 if data.get("respawn_enabled", True) else 0
+
+        # Pack binary structure: <BIIIHfB (CommandRequest)
+        # B=opcode, I=session, I=request, I=num_agents, H=asf, f=accel, B=reserved
+        payload = struct.pack("<BIIIHfB", opcode, duration, 0, num_agents, asf, accel, respawn)
+        
+        # Send to Traffic Core (REQ/REP is synchronous, but we wrap in thread to avoid blocking loop if necessary)
+        # For simplicity in this micro-service environment, we use a single REQ socket.
+        socket = request.app.state.zmq_socket
+        socket.send(payload)
+        
+        # Wait for ACK
+        ack_raw = socket.recv()
+        if len(ack_raw) < 2:
+            return JSONResponse({"status": "error", "message": "Invalid ACK from Traffic Core"}, status_code=500)
+        
+        success, state = struct.unpack("<BB", ack_raw)
+        return {
+            "status": "success" if success else "failed",
+            "engine_state": "RUNNING" if state == 1 else "IDLE"
+        }
+    except zmq.Again:
+        return JSONResponse({"status": "error", "message": "Traffic Core timeout"}, status_code=504)
+    except Exception as e:
+        logger.error(f"Sim control error: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.post("/routing/calculate")
+async def calculate_route(request: Request):
+    """
+    Proxy legacy routing requests to Traffic Core via binary ZMQ.
+    Handles multi-point paths and returns full geometry.
+    """
+    try:
+        body = await request.json()
+        waypoints = body.get("waypoints", [])
+        if len(waypoints) < 2:
+            return JSONResponse({"status": "error", "detail": "At least 2 waypoints required"}, status_code=400)
+        
+        logger.debug(f"Calculating route for {len(waypoints)} points")
+        # CommandRequest (20b) + OneOffRouteHeader (5b)
+        # opcode=5 (ROUTE_ONE_OFF)
+        cmd_head = struct.pack("<BIIIHfB", 5, 0, 0, 0, 0, 0.0, 0)
+        # OneOffRouteHeader: num_waypoints (B), start_time (I)
+        route_head = struct.pack("<BI", len(waypoints), 0) 
+        
+        points_data = b""
+        for pt in waypoints:
+            points_data += struct.pack("<ff", pt["lon"], pt["lat"])
+        
+        full_request = cmd_head + route_head + points_data
+        
+        socket = request.app.state.zmq_socket
+        socket.send(full_request)
+        
+        # 2. Receive Multi-part Response
+        # Part 1: Header (15 bytes: B, H, I, f, f)
+        res_header_raw = socket.recv()
+        if len(res_header_raw) < 15: # OneOffRouteResponseHeader size
+             return JSONResponse({"status": "error", "message": f"Invalid response header size: {len(res_header_raw)}"}, status_code=500)
+        
+        success, num_edges, total_points, total_dist, total_time = struct.unpack("<BHIff", res_header_raw)
+        
+        if not success:
+            return JSONResponse({"status": "error", "detail": "Routing failed"}, status_code=404)
+        
+        # Part 2: EdgeIDs (uint32)
+        edge_ids_raw = socket.recv()
+        edge_ids = struct.unpack(f"<{num_edges}I", edge_ids_raw)
+        
+        # Part 3: ETAs (float)
+        etas_raw = socket.recv()
+        etas = struct.unpack(f"<{num_edges}f", etas_raw)
+        
+        # Part 4: PointCounts (uint16)
+        counts_raw = socket.recv()
+        point_counts = struct.unpack(f"<{num_edges}H", counts_raw)
+        
+        # Part 5: GeometryData (float x, float y)
+        geom_raw = socket.recv()
+        all_points = struct.unpack(f"<{total_points * 2}f", geom_raw)
+        
+        # 3. Reconstruct JSON Response
+        segments = []
+        pt_idx = 0
+        for i in range(num_edges):
+            count = point_counts[i]
+            edge_coords = []
+            for _ in range(count):
+                lon = all_points[pt_idx * 2]
+                lat = all_points[pt_idx * 2 + 1]
+                edge_coords.append([lon, lat])
+                pt_idx += 1
+            
+            segments.append({
+                "edge_id": edge_ids[i],
+                "from_node": 0, # Omitted or dummy
+                "to_node": 0,
+                "distance_m": 0.0, # Could be calculated but usually provided at segment level
+                "speed_limit": 0.0,
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": edge_coords
+                }
+            })
+            
+        return {
+            "routes": [{
+                "route_id": 0,
+                "segments": segments,
+                "total_distance_m": total_dist,
+                "estimated_time_sec": total_time,
+                "diversity_score": 1.0,
+                "edge_ids": list(edge_ids)
+            }]
+        }
+        
+        logger.info(f"Route calculated successfully: {num_edges} segments, {total_dist:.1f}m, {total_time:.1f}s")
+        return response
+    except zmq.Again:
+        return JSONResponse({"status": "error", "message": "Traffic Core timeout"}, status_code=504)
+    except Exception as e:
+        logger.error(f"Routing calculate error: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
@@ -61,6 +211,10 @@ def register_routes():
         
         for route in registry.get("routes", []):
             path_prefix = route["path"]
+            # Router: Graph Management (Moved to ZMQ/Daemon if needed, removing legacy HTTP proxy)
+            # - path: "/routing"
+            #   service: "router"
+            #   internal_prefix: "/api/v1/routing"
             service_name = route["service"]
             internal_prefix = route["internal_prefix"]
             

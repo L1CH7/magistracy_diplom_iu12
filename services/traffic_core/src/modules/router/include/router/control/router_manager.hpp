@@ -174,6 +174,8 @@ public:
 
     const traffic::GraphView& get_view() const { return mapped_graph_.view; }
 
+    const common::GeometryStore* get_geometry_store() const { return mapped_graph_.geometry_store.get(); }
+
     // Helpers for benchmarking
     // Helpers for benchmarking
     traffic::PointCount num_nodes() const noexcept;

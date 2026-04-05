@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     libnuma-dev \
     libpqxx-dev \
     libboost-dev \
+    libzmq3-dev \
+    cppzmq-dev \
     postgresql-server-dev-all \
     ccache \
     && rm -rf /var/lib/apt/lists/*
@@ -40,16 +42,14 @@ RUN apt-get update && apt-get install -y \
     libnuma1 \
     libpq5 \
     libpqxx-dev \
+    libzmq5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Копируем скомпилированные бинарники из стейджа сборки (builder)
-COPY --from=builder /app/services/traffic_core/build/traffic_core .
+COPY --from=builder /app/services/traffic_core/build/src/modules/daemon/traffic_daemon .
 COPY --from=builder /app/services/traffic_core/build/src/graph_builder/traffic_graph_builder .
 
-# Важно: При использовании distroless все пути к конфигам и дампам 
-# должны быть либо запечены в код, либо передаваться через ENV/Volume
-# так как зайти внутрь "посмотреть" будет невозможно.
-
-ENTRYPOINT ["./traffic_core"]
+ENTRYPOINT ["./traffic_daemon"]
+CMD ["/app/data"]
