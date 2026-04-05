@@ -94,6 +94,19 @@ def main():
     window = MainWindow(gateway_url)
     window.show()
     
+    # Глобальный перехват выхода: Ctrl+C в терминале
+    import signal
+    from PyQt5 import QtCore
+    signal.signal(signal.SIGINT, lambda sig, frame: app.quit())
+    
+    # Таймер нужен, чтобы Qt отдавал управление Python для обработки сигналов ОС
+    timer = QtCore.QTimer()
+    timer.start(500)
+    timer.timeout.connect(lambda: None)
+    
+    # Гарантированный STOP при выходе
+    app.aboutToQuit.connect(window.cleanup)
+    
     sys.exit(app.exec_())
 
 

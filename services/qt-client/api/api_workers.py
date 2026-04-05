@@ -232,3 +232,61 @@ class DataSocketWorker(QThread):
     @property
     def internal_client(self):
         return self.client
+class SimulationWorker(QThread):
+    """
+    Worker thread for simulation control commands (Start, Stop, etc.).
+    
+    Signals:
+        finished(bool, dict): Success status and response data
+        error(str): Error message
+    """
+    finished = pyqtSignal(bool, dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, gateway_url: str, command: int, params: dict = None, parent=None):
+        super().__init__(parent)
+        self.gateway_url = gateway_url
+        self.command = command
+        self.params = params or {}
+        self._timeout = 35.0 # Increased timeout for simulation commands
+
+    def run(self):
+        """Execute the simulation control request."""
+        try:
+            url = f"{self.gateway_url}/api/v1/sim/control"
+            
+            # Prepare payload matching CommandRequest structure
+            # params might contain: num_agents, acceleration, fps, chaos
+            payload = {
+                "opcode": self.command,
+                "num_agents": self.params.get("num_agents", 1000),
+                "acceleration": self.params.get("acceleration", 1.0),
+                "fps": self.params.get("fps", 10.0),
+                "chaos": self.params.get("chaos", 0.0)
+            }
+            
+            log.info(f"[SimulationWorker] Sending command {self.command} to {url}")
+            
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=35.0
+            )
+            
+            if response.status_code == 504:
+                self.error.emit("Core Timeout: The simulation engine is taking too long to respond.")
+                return
+
+            response.raise_for_status()
+            data = response.json()
+            
+            success = data.get("status") == "success"
+            self.finished.emit(success, data)
+            
+        except requests.exceptions.Timeout:
+            self.error.emit("Gateway Timeout: Request to simulation gateway timed out.")
+        except requests.exceptions.ConnectionError:
+            self.error.emit("Connection Error: Simulation gateway is unreachable.")
+        except Exception as e:
+            log.error(f"[SimulationWorker] Unexpected error: {e}")
+            self.error.emit(f"Internal Error: {str(e)}")

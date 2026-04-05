@@ -15,6 +15,7 @@ from handlers.points_bridge import PointsBridge
 from handlers.logger_bridge import LoggerBridge
 from handlers.config_bridge import ConfigBridge
 from models.points_presenter import PointsPresenter
+from models.navigation_state import SimState, SimStateMachine
 from ui.main_window_handlers import MainWindowHandlers
 from ui.main_window_ui import MainWindowUI
 from services.common.config import config_loader
@@ -63,10 +64,11 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self.points_presenter = PointsPresenter()
         
         # Simulation state
+        self.sim_fsm = SimStateMachine()
         self.sim_agent_id = None
         self.sim_timer = None
         self.sim_fps = 30  # Default FPS from config
-        
+        self._active_workers = set() # Store references to async workers
         # Start HTTP server for map.html assets (to avoid CORS)
         self._start_assets_httpd()
         
@@ -79,6 +81,11 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         # Setup UI
         self._setup_ui()
         
+        # Connect FSM to UI
+        self.sim_fsm.state_changed.connect(self.sidebar.simulation_panel.update_ui_for_state)
+        # Set initial UI state
+        self.sidebar.simulation_panel.update_ui_for_state(self.sim_fsm.state)
+
         # Setup keyboard shortcuts
         self._setup_shortcuts()
         
@@ -95,10 +102,30 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self.showMaximized()
         
     def closeEvent(self, event):
-        """Handle window close."""
+        """Handle window close event."""
+        # cleanup() is also connected to app.aboutToQuit in main.py,
+        # but calling it here ensures it runs when only the window is closed.
+        self.cleanup()
+        event.accept()
+        super().closeEvent(event)
+
+    def cleanup(self):
+        """Centralized cleanup: sending STOP to Traffic Core and closing sockets."""
+        import requests
+        log.info("Cleaning up application. Sending STOP to Traffic Core...")
+        try:
+            # Fire-and-forget stop request (Opcode 2)
+            payload = {"opcode": 2}
+            requests.post(
+                f"{self.gateway_url}/api/v1/sim/control",
+                json=payload,
+                timeout=1.0
+            )
+        except Exception as e:
+            log.warning(f"Could not send STOP command on cleanup: {e}")
+        
         if hasattr(self, 'data_msg_worker'):
             self.data_msg_worker.stop()
-        super().closeEvent(event)
         
     def _on_data_message(self, data: dict):
         """Handle data updates from WebSocket."""

@@ -3,9 +3,9 @@ import random
 import time
 from functools import wraps
 
-from loguru import logger
-
-log = logger
+from loguru import logger as log
+from models.navigation_state import SimState
+from api.api_workers import SimulationWorker
 
 
 def track_metric(operation_name: str):
@@ -611,30 +611,106 @@ class MainWindowHandlers:
     # ========================================================================
     
     def _on_start_simulation(self) -> None:
-        """Handle Start Simulation button click."""
+        """Handle Start/Resume Simulation button click."""
+        state = self.sim_fsm.state
         params = self.sidebar.simulation_panel.get_sim_params()
-        log.info(f"start_simulation_requested: {params}")
-        # TODO: Implement START via API
+        
+        if state == SimState.IDLE:
+            # Transition to WARMUP
+            if self.sim_fsm.transition_to(SimState.WARMUP):
+                log.info(f"simulation_starting: {params}")
+                self._run_sim_worker(1, params) # Opcode 1: START
+            
+        elif state == SimState.PAUSED:
+            # Resume: use SET_SPEED with acceleration from spin
+            log.info(f"simulation_resuming with acceleration={params['acceleration']}")
+            self._run_sim_worker(3, params) # Opcode 3: SET_SPEED
+            self.sim_fsm.transition_to(SimState.RUNNING)
     
     def _on_pause_simulation(self) -> None:
         """Handle Pause Simulation."""
-        log.info("pause_simulation_requested")
-        # TODO: Implement PAUSE via API
+        if self.sim_fsm.transition_to(SimState.PAUSED):
+            params = self.sidebar.simulation_panel.get_sim_params()
+            log.info("simulation_pausing (accel=0)")
+            # Opcode 3: SET_SPEED with accel=0
+            pause_params = params.copy()
+            pause_params["acceleration"] = 0.0
+            self._run_sim_worker(3, pause_params)
     
     def _on_stop_simulation(self) -> None:
         """Handle Stop Simulation."""
-        log.info("stop_simulation_requested")
-        # TODO: Implement STOP via API
+        from loguru import logger
+        logger.info("simulation_stopping")
+        # Do NOT transition state immediately. Disable button to prevent double-clicks.
+        self.sidebar.simulation_panel.stop_btn.setEnabled(False)
+        self._run_sim_worker(2, {}) # Opcode 2: STOP
         
     def _on_step_simulation(self) -> None:
         """Handle Simulation Step (manual mode)."""
-        log.info("step_simulation_requested")
-        # TODO: Implement STEP via API
+        from loguru import logger
+        if self.sim_fsm.state == SimState.PAUSED:
+            logger.info("simulation_step_requested")
+            self._run_sim_worker(6, {}) # Opcode 6: STEP
         
     def _on_apply_simulation_settings(self, params: dict) -> None:
         """Handle settings apply (accel, fps, etc.)."""
-        log.info(f"apply_simulation_settings: {params}")
-        # TODO: Implement UPDATE via API
+        from loguru import logger
+        logger.info(f"Applying dynamic settings: {params}")
+        api_params = {
+            "acceleration": params.get("accel", 1.0),
+            "fps": params.get("fps", 10.0),
+            "chaos": params.get("chaos", 0.0)
+        }
+        self._run_sim_worker(3, api_params) # Opcode 3: SET_SPEED
+
+    def _run_sim_worker(self, opcode: int, params: dict):
+        """Internal helper to spawn simulation worker (Native Qt Management with Lockout)."""
+        # Block the simulation panel to prevent concurrent threads/segfaults
+        self.sidebar.simulation_panel.setEnabled(False)
+        
+        # passing parent=self ensures that the worker is NOT garbage collected before finishing
+        worker = SimulationWorker(self.gateway_url, opcode, params, parent=self)
+        worker.finished.connect(self._on_simulation_finished)
+        worker.error.connect(self._on_simulation_error)
+        
+        # Restore UI on completion or error
+        worker.finished.connect(lambda: self.sidebar.simulation_panel.setEnabled(True))
+        worker.error.connect(lambda: self.sidebar.simulation_panel.setEnabled(True))
+        
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        worker.start()
+        
+    def _on_simulation_finished(self, success: bool, data: dict):
+        from loguru import logger
+        logger.info(f"simulation_worker_finished success={success} data={data}")
+        
+        if success:
+            engine_state = data.get("engine_state")
+            if engine_state == "RUNNING":
+                self.sim_fsm.transition_to(SimState.RUNNING)
+            elif engine_state == "IDLE":
+                self.sim_fsm.transition_to(SimState.IDLE)
+        else:
+            # Revert to IDLE if we were trying to start/warmup
+            if self.sim_fsm.state == SimState.WARMUP:
+                self.sim_fsm.transition_to(SimState.IDLE)
+            self.show_error_message(self.tr("Command Failed"), data.get("message", "Unknown error"))
+    
+    def _on_simulation_error(self, error_msg: str):
+        """Callback for simulation command error."""
+        log.error(f"simulation_worker_error: {error_msg}")
+        
+        # Revert to IDLE if we were trying to start
+        if self.sim_fsm.state == SimState.WARMUP:
+            self.sim_fsm.transition_to(SimState.IDLE)
+            
+        self.show_error_message(self.tr("Simulation Error"), error_msg)
+
+    def show_error_message(self, title: str, message: str):
+        """Helper to show QMessageBox."""
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.critical(self, title, message)
     
     def _on_clear_routes(self) -> None:
         """Handle Clear Routes button click."""

@@ -136,39 +136,37 @@ void TrafficEngine::Warmup()
     }
 }
 
-void TrafficEngine::Run( float requested_accel )
+void TrafficEngine::Warmup( uint32_t num_agents )
 {
-    target_accel_.store( requested_accel );
+    SpawnAgents( num_agents, 50 );
+    Warmup();
+}
+
+void TrafficEngine::Run()
+{
     keep_running_ = true;
-    
-    sim_start_real_time_ = std::chrono::steady_clock::now();
-    sim_start_sim_time_ = current_sim_time_;
-    
-    constexpr float dt = 0.1f;
+    const float dt = 0.1f; // High-precision 100ms physics steps
     
     while( keep_running_ )
     {
         auto tick_start = std::chrono::steady_clock::now();
         
         Step( dt );
-
-        // Telemetry Update (25Hz internal limit in worker, but we can call every tick or threshold)
         UpdateTelemetry();
 
         // Throttling Logic
-        float current_accel = target_accel_.load( std::memory_order_relaxed );
-        if( current_accel > 0.0f )
-        {
-            float elapsed_sim = current_sim_time_ - sim_start_sim_time_;
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed_real = std::chrono::duration_cast< std::chrono::duration< float > >( now - sim_start_real_time_ );
-            
-            float target_real_time = elapsed_sim / current_accel;
-            if( elapsed_real.count() < target_real_time )
-            {
-                auto wait_dur = std::chrono::duration< float >( target_real_time - elapsed_real.count() );
-                std::this_thread::sleep_for( std::chrono::duration_cast< std::chrono::microseconds >( wait_dur ) );
+        auto tick_end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(tick_end - tick_start);
+        
+        float accel = target_accel_.load();
+        if (accel > 0.0f) {
+            auto target_micros = static_cast<long long>((dt / accel) * 1000000.0f);
+            if (elapsed.count() < target_micros) {
+                std::this_thread::sleep_for(std::chrono::microseconds(target_micros - elapsed.count()));
             }
+        } else {
+            // Paused: idle wait
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 }
@@ -180,8 +178,9 @@ void TrafficEngine::UpdateTelemetry()
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast< std::chrono::milliseconds >( now - last_telemetry_time_ );
     
-    // Throttle telemetry collection to ~25Hz (40ms) to avoid overhead
-    if( elapsed.count() < 40 ) return;
+    // Throttle telemetry collection based on telemetry_fps_
+    float interval_ms = 1000.0f / std::max( 1.0f, telemetry_fps_.load() );
+    if( elapsed.count() < interval_ms ) return;
 
     auto & buffer = telemetry_worker_->GetInactiveBuffer();
     buffer.clear();
@@ -257,14 +256,16 @@ void TrafficEngine::Step( float dt )
     }
 
     // Phase 2.5: Agent Recirculation (Task 2 & 3: Rate Limiter)
-    static std::mt19937 rec_gen{ std::random_device{}( ) };
-    std::uniform_int_distribution< uint32_t > edge_dist( 0, static_cast< uint32_t >( router_manager_.num_edges() ) - 1 );
-
-    uint32_t respawn_quota = 1000; // Task 3: Limit respawns per tick
-    mpr_requests_buffer_.clear(); // Reuse buffer for respawn requests
-    for( uint32_t i = 0; i < num_agents_; ++i )
+    if( respawn_enabled_.load() )
     {
-        if( agent_pool_.is_active[ i ] == 0 && respawn_quota > 0 )
+        static std::mt19937 rec_gen{ std::random_device{}( ) };
+        std::uniform_int_distribution< uint32_t > edge_dist( 0, static_cast< uint32_t >( router_manager_.num_edges() ) - 1 );
+
+        uint32_t respawn_quota = 1000; // Task 3: Limit respawns per tick
+        mpr_requests_buffer_.clear(); // Reuse buffer for respawn requests
+        for( uint32_t i = 0; i < num_agents_; ++i )
+        {
+            if( agent_pool_.is_active[ i ] == 0 && respawn_quota > 0 )
         {
             respawn_quota--;
             uint32_t start_edge = edge_dist( rec_gen );
@@ -301,6 +302,7 @@ void TrafficEngine::Step( float dt )
             mpr_requests_buffer_.push_back( std::move( req ) );
         }
     }
+}
     if( !mpr_requests_buffer_.empty() )
     {
         auto vol_mgr = router_manager_.get_volume_manager();
@@ -500,6 +502,16 @@ data_provider::PhysicsContext TrafficEngine::MakePhysicsContext( uint32_t time_s
     ctx.static_weights = view.static_weights;
 
     return ctx;
+}
+
+void TrafficEngine::ApplySettings( float accel, float fps, float chaos )
+{
+    target_accel_.store( accel );
+    telemetry_fps_.store( fps );
+    chaos_factor_.store( chaos );
+    
+    // Signal the Run() loop to reset its timing markers
+    settings_changed_ = true;
 }
 
 } // namespace traffic::core

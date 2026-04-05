@@ -5,6 +5,12 @@
 #include <zmq.hpp>
 #include <chrono>
 
+#include <sstream>
+#ifdef __linux__
+#include <pthread.h>
+#include <sched.h>
+#endif
+
 #include "common/logger.hpp"
 #include "common/net/telemetry_protocol.hpp"
 #include "core/traffic_engine.hpp"
@@ -34,6 +40,25 @@ int main( int argc, char ** argv )
     core::logging::init_logger();
     LOG_INFO( "=== Traffic Core Daemon Starting ===" );
 
+    // 1. Читаем Router Cores из ENV
+    std::string cores_str = "2,8,3,9,4,10,5,11";
+    if (const char* env_cores = std::getenv("TRAFFIC_ROUTER_CORES")) {
+        cores_str = env_cores;
+    }
+    
+    std::vector<int> router_cores;
+    std::stringstream ss_cores(cores_str);
+    std::string item;
+    while (std::getline(ss_cores, item, ',')) {
+        if (!item.empty()) router_cores.push_back(std::stoi(item));
+    }
+
+    // 2. Читаем Sim Affinity из ENV
+    int sim_affinity = 1;
+    if (const char* env_sim = std::getenv("TRAFFIC_SIM_AFFINITY")) {
+        sim_affinity = std::stoi(env_sim);
+    }
+
     std::signal( SIGINT,  signal_handler );
     std::signal( SIGTERM, signal_handler );
 
@@ -48,8 +73,8 @@ int main( int argc, char ** argv )
     {
         zmq::context_t context( 1 );
         
-        // 1. Initialize Modules
-        core::TrafficEngine engine;
+        // 2. Initialize Engine
+        core::TrafficEngine engine(router_cores);
         auto init_status = engine.Init( data_dir );
         if( !init_status )
         {
@@ -61,11 +86,16 @@ int main( int argc, char ** argv )
         telemetry.Start( pub_addr );
         engine.SetTelemetryWorker( &telemetry );
 
-        // 2. Command Socket (REP)
+        // 3. Command Socket (REP)
         zmq::socket_t rep_socket( context, zmq::socket_type::rep );
         rep_socket.bind( cmd_addr );
         
-        LOG_INFO( "Daemon listening: CMD={} PUB={}", cmd_addr, pub_addr );
+        // Настройка таймаута сокета вместо dontwait-спиннинга
+        int timeout_ms = 500;
+        rep_socket.setsockopt(ZMQ_RCVTIMEO, &timeout_ms, sizeof(timeout_ms));
+        
+        LOG_INFO( "Daemon listening: CMD={} PUB={} SIM_CPU={}", 
+                  cmd_addr, pub_addr, sim_affinity );
 
         std::thread engine_thread;
         bool engine_running = false;
@@ -73,12 +103,10 @@ int main( int argc, char ** argv )
         while( keep_running )
         {
             zmq::message_t request_msg;
-            // Non-blocking poll or short timeout to check keep_running
-            auto res = rep_socket.recv( request_msg, zmq::recv_flags::dontwait );
-            if( !res )
-            {
-                std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
-                continue;
+            auto res = rep_socket.recv( request_msg, zmq::recv_flags::none );
+            
+            if( !res ) {
+                continue; // Таймаут 500мс истек, проверяем keep_running и крутим снова
             }
 
             if( request_msg.size() < sizeof( common::net::CommandRequest ) )
@@ -91,37 +119,68 @@ int main( int argc, char ** argv )
             auto * cmd = static_cast< const common::net::CommandRequest * >( request_msg.data() );
             common::net::CommandAck ack{ 1, 0 };
 
-            switch( cmd->opcode )
+            switch( static_cast<common::net::CommandOpcode>(cmd->opcode) )
             {
-                case common::net::CommandOpcode::START:
-                    if( !engine_running )
-                    {
-                        LOG_INFO( "Command: START agents={} accel={}", cmd->num_agents, cmd->acceleration );
-                        engine.SpawnAgents( cmd->num_agents, cmd->asf );
-                        engine.Warmup();
-                        LOG_INFO("Engine Warmed up with {} agents", cmd->num_agents);
-                        
-                        float accel = cmd->acceleration;
-                        engine_thread = std::thread( [ &engine, accel ]( ) {
-                            engine.Run( accel );
-                        } );
-                        engine_running = true;
+                case common::net::CommandOpcode::STOP:
+                    LOG_INFO("Command: STOP");
+                    engine_running = false;
+                    engine.Stop();
+                    if (engine_thread.joinable()) {
+                        engine_thread.join();
+                        LOG_INFO("Engine thread joined successfully.");
                     }
                     break;
 
-                case common::net::CommandOpcode::STOP:
-                    LOG_INFO( "Command: STOP" );
-                    if( engine_running )
-                    {
-                        engine.Stop();
-                        if( engine_thread.joinable() ) engine_thread.join();
+                case common::net::CommandOpcode::START:
+                    if (engine_running) {
+                        LOG_WARN("START received while engine is running. Forcing stop...");
                         engine_running = false;
+                        engine.Stop();
+                        if (engine_thread.joinable()) engine_thread.join();
                     }
+
+                    LOG_INFO("Command: START agents={} asf={} accel={} fps={} chaos={} respawn={}", 
+                             cmd->num_agents, cmd->asf, cmd->acceleration, cmd->telemetry_fps, 
+                             cmd->chaos_factor, cmd->respawn_enabled);
+                    
+                    engine.ApplySettings(cmd->acceleration, cmd->telemetry_fps, cmd->chaos_factor);
+                    engine.SetRespawn(cmd->respawn_enabled > 0);
+                    engine.Warmup(cmd->num_agents);
+                    
+                    LOG_INFO("Engine Warmed up. Active agents: {}", engine.GetActiveAgents());
+                    
+                    engine_running = true;
+                    engine_thread = std::thread([&engine, &engine_running, sim_affinity]() {
+#ifdef __linux__
+                        cpu_set_t cpuset_sim;
+                        CPU_ZERO(&cpuset_sim);
+                        CPU_SET(sim_affinity, &cpuset_sim);
+                        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset_sim);
+#endif
+                        float dt = 5.0f;
+                        while (engine_running) {
+                            auto tick_start = std::chrono::steady_clock::now();
+                            engine.Step(dt);
+                            auto tick_end = std::chrono::steady_clock::now();
+                            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(tick_end - tick_start);
+                            auto target_micros = static_cast<long long>((dt / engine.GetCurrentAcceleration()) * 1000000.0f);
+                            
+                            if (elapsed.count() < target_micros) {
+                                std::this_thread::sleep_for(std::chrono::microseconds(target_micros - elapsed.count()));
+                            }
+                        }
+                    });
                     break;
 
                 case common::net::CommandOpcode::SET_SPEED:
-                    LOG_INFO( "Command: SET_SPEED accel={}", cmd->acceleration );
-                    engine.SetAcceleration( cmd->acceleration );
+                    LOG_INFO("Command: SET_SPEED accel={} fps={} chaos={}", 
+                             cmd->acceleration, cmd->telemetry_fps, cmd->chaos_factor);
+                    engine.ApplySettings(cmd->acceleration, cmd->telemetry_fps, cmd->chaos_factor);
+                    break;
+
+                case common::net::CommandOpcode::STEP:
+                    LOG_INFO("Command: STEP");
+                    engine.Step(0.1f);
                     break;
 
                 case common::net::CommandOpcode::ROUTE_ONE_OFF:

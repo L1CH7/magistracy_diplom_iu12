@@ -36,13 +36,18 @@ public:
     // Simulation Flow
     void SpawnAgents( uint32_t num_agents, uint16_t asf, const std::vector< double > & wp_probs = { 0.90, 0.05, 0.03, 0.02 } );
     void Warmup();
-    void Run( float requested_accel = 1000.0f ); // Managed simulation loop
+    void Warmup( uint32_t num_agents ); // Spawn + Warmup
+    void Run(); // Uses internal atomic settings
+    void Run( float requested_accel ); // Managed simulation loop
     void Step( float dt );
     void ForceReroute( const std::vector< common::net::RouteRequest > & requests );
 
     // Control
     void Stop();
     void SetAcceleration( float accel ) { target_accel_.store( accel ); }
+    float GetCurrentAcceleration() const { return target_accel_.load(); }
+    void ApplySettings( float accel, float fps, float chaos );
+    void SetRespawn( bool enabled ) { respawn_enabled_.store( enabled ); }
 
     // Accessors for metrics
     uint32_t GetActiveAgents() const;
@@ -80,9 +85,13 @@ private:
     // Threading
     ThreadPool router_pool_;
     std::thread router_worker_;
-    std::atomic< bool > keep_running_{ true };
+    std::atomic< bool >  keep_running_{ true };
     std::atomic< size_t > routes_computed_{ 0 };
     std::atomic< float > target_accel_{ 1000.0f }; // Default 1000x acceleration
+    std::atomic< float > telemetry_fps_{ 25.0f };
+    std::atomic< float > chaos_factor_{ 0.0f };
+    std::atomic< bool >  respawn_enabled_{ true };
+    std::atomic< bool >  settings_changed_{ false };
     
     size_t total_successful_routes_{ 0 };
     size_t total_failed_routes_{ 0 };

@@ -42,6 +42,10 @@ public:
       stuck_indices_.reserve(agent_count);
     }
 
+    if (last_route_request_time_.size() < agent_count) {
+      last_route_request_time_.resize(agent_count, 0.0f);
+    }
+
     const uint8_t *__restrict active = pool.is_active.data();
     const uint32_t *__restrict enter_times = pool.edge_enter_time_sec.data();
     const uint16_t *__restrict progress_idxs = pool.route_progress_idx.data();
@@ -65,8 +69,13 @@ public:
         const uint32_t allowed_time =
             (expected_duration * TRAFFIC_MPR_TOLERANCE_NUM) /
             TRAFFIC_MPR_TOLERANCE_DEN;
+            
         if (elapsed > allowed_time) {
-          stuck_indices_.push_back(static_cast<uint32_t>(i));
+          // Anti-Flood Check (30 sim-seconds cooldown)
+          if (current_time_sec - last_route_request_time_[i] >= 30.0f) {
+            stuck_indices_.push_back(static_cast<uint32_t>(i));
+            last_route_request_time_[i] = static_cast<float>(current_time_sec);
+          }
         }
       }
     }
@@ -95,6 +104,7 @@ public:
 private:
   // Reusable buffers to maintain Zero-Allocation status in the hot cycle
   std::vector<uint32_t> stuck_indices_;
+  std::vector<float> last_route_request_time_;
 };
 
 } // namespace traffic::decision_engine

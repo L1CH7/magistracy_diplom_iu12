@@ -19,22 +19,26 @@ enum class CommandOpcode : uint8_t
     STOP = 2,
     SET_SPEED = 3,
     SET_RESPAWN = 4,
-    ROUTE_ONE_OFF = 5
+    ROUTE_ONE_OFF = 5,
+    STEP = 6
 };
 
 /**
- * @brief Command payload for START, STOP, SET_SPEED.
- * Decouples engine control from external clients.
+ * @brief Command payload for START, STOP, SET_SPEED, STEP.
+ * Exactly 30 bytes, packed.
  */
 struct CommandRequest
 {
-    CommandOpcode opcode;
-    uint32_t session_id;
-    uint32_t request_id;
-    uint32_t num_agents;
-    uint16_t asf;
-    float acceleration;
-    uint8_t reserved;
+    uint8_t  opcode;           // 1 byte
+    uint32_t session_id;       // 4 bytes (Used as duration)
+    uint32_t request_id;       // 4 bytes
+    uint32_t num_agents;       // 4 bytes
+    uint16_t asf;              // 2 bytes
+    float    acceleration;     // 4 bytes
+    float    telemetry_fps;    // 4 bytes
+    float    chaos_factor;     // 4 bytes
+    uint8_t  respawn_enabled;  // 1 byte
+    uint8_t  reserved[2];      // 2 bytes
 };
 
 /**

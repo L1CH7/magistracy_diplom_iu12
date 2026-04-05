@@ -11,8 +11,10 @@ from loguru import logger
 settings = Settings()
 
 import zmq
+import zmq.asyncio
 import struct
 import httpx
+import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -21,12 +23,11 @@ async def lifespan(app: FastAPI):
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     app.state.client = httpx.AsyncClient(limits=limits, timeout=60.0)
     
-    # Initialize ZMQ Context for Traffic Core control
-    app.state.zmq_ctx = zmq.Context()
+    # Initialize Async ZMQ Context for Traffic Core control
+    app.state.zmq_ctx = zmq.asyncio.Context()
+    app.state.zmq_lock = asyncio.Lock() # Lock for thread-safe socket usage
     app.state.zmq_socket = app.state.zmq_ctx.socket(zmq.REQ)
-    # Target is defined by docker-compose service name
     app.state.zmq_socket.connect("tcp://traffic-core:5555")
-    app.state.zmq_socket.setsockopt(zmq.RCVTIMEO, 5000) # 5s timeout
     
     yield
     # Cleanup
@@ -34,6 +35,25 @@ async def lifespan(app: FastAPI):
     app.state.zmq_socket.close()
     app.state.zmq_ctx.term()
     logger.info("Stopping Gateway Service")
+
+async def send_core_command(app, payload: bytes, timeout: float = 5.0):
+    """
+    Send binary command to Traffic Core via ZMQ REQ/REP.
+    Uses asyncio.Lock to ensure serialized usage of the REQ socket.
+    """
+    async with app.state.zmq_lock:
+        socket = app.state.zmq_socket
+        try:
+            await socket.send(payload)
+            # Use asyncio.wait_for for robust timeout handling
+            return await asyncio.wait_for(socket.recv(), timeout=timeout)
+        except (asyncio.TimeoutError, zmq.ZMQError) as e:
+            logger.error(f"Core communication error: {e}. Recreating ZMQ socket...")
+            socket.close(linger=0)
+            # Recreate socket
+            app.state.zmq_socket = app.state.zmq_ctx.socket(zmq.REQ)
+            app.state.zmq_socket.connect("tcp://traffic-core:5555")
+            raise HTTPException(status_code=504, detail=f"Core Timeout or Error: {str(e)}")
 
 app = FastAPI(
     title="Navigation MAS Gateway",
@@ -44,29 +64,28 @@ app = FastAPI(
 @app.post("/api/v1/sim/control")
 async def sim_control(request: Request):
     """
-    Proxy simulation commands (START, STOP, SET_SPEED) to Traffic Core via ZeroMQ binary protocol.
-    Expected JSON: { "opcode": int, "num_agents": int, "acceleration": float, ... }
+    Proxy simulation commands (START, STOP, SET_SPEED, STEP) to Traffic Core via ZeroMQ binary protocol.
+    Expected JSON: { "opcode": int, "num_agents": int, "acceleration": float, "fps": float, "chaos": float, "duration_sec": int, "respawn_enabled": bool }
     """
     try:
         data = await request.json()
-        opcode = data.get("opcode", 1)
-        num_agents = data.get("num_agents", 1000)
-        duration = data.get("duration_sec", 3600)
-        asf = data.get("asf", 100)
-        accel = data.get("acceleration", 1000.0)
+        opcode = int(data.get("opcode", 1))
+        num_agents = int(data.get("num_agents", 50000))
+        duration = int(data.get("duration_sec", 0))
+        asf = int(data.get("asf", 50))
+        accel = float(data.get("acceleration", 1.0))
+        telemetry_fps = float(data.get("fps", 25.0))
+        chaos_factor = float(data.get("chaos", 0.0))
         respawn = 1 if data.get("respawn_enabled", True) else 0
 
-        # Pack binary structure: <BIIIHfB (CommandRequest)
-        # B=opcode, I=session, I=request, I=num_agents, H=asf, f=accel, B=reserved
-        payload = struct.pack("<BIIIHfB", opcode, duration, 0, num_agents, asf, accel, respawn)
+        # Pack binary structure: < B I I I H f f f 3B (30 bytes, packed)
+        # B=opcode, I=duration(session_id), I=request, I=num_agents, H=asf, f=accel, f=fps, f=chaos, 3B=respawn+reserved
+        payload = struct.pack("<BIIIHfff3B", opcode, duration, 0, num_agents, asf, accel, telemetry_fps, chaos_factor, respawn, 0, 0)
         
-        # Send to Traffic Core (REQ/REP is synchronous, but we wrap in thread to avoid blocking loop if necessary)
-        # For simplicity in this micro-service environment, we use a single REQ socket.
-        socket = request.app.state.zmq_socket
-        socket.send(payload)
+        # Call encapsulated ZMQ logic. Use 30s for START (opcode 1).
+        timeout = 30.0 if opcode == 1 else 5.0
+        ack_raw = await send_core_command(request.app, payload, timeout=timeout)
         
-        # Wait for ACK
-        ack_raw = socket.recv()
         if len(ack_raw) < 2:
             return JSONResponse({"status": "error", "message": "Invalid ACK from Traffic Core"}, status_code=500)
         
@@ -75,8 +94,8 @@ async def sim_control(request: Request):
             "status": "success" if success else "failed",
             "engine_state": "RUNNING" if state == 1 else "IDLE"
         }
-    except zmq.Again:
-        return JSONResponse({"status": "error", "message": "Traffic Core timeout"}, status_code=504)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Sim control error: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
@@ -107,11 +126,11 @@ async def calculate_route(request: Request):
         full_request = cmd_head + route_head + points_data
         
         socket = request.app.state.zmq_socket
-        socket.send(full_request)
+        await socket.send(full_request)
         
         # 2. Receive Multi-part Response
         # We MUST use recv_multipart() for REQ sockets to consume all frames at once
-        frames = socket.recv_multipart()
+        frames = await socket.recv_multipart()
         
         if len(frames) < 5:
             logger.error(f"Invalid multi-part response: expected 5+ frames, got {len(frames)}")

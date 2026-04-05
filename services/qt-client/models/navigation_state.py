@@ -11,10 +11,69 @@ Signals allow:
 - Performance (Qt handles signal delivery efficiently)
 """
 from typing import List, Optional, Tuple
+from enum import Enum
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from .point import Point
 from .route import Route
+
+
+class SimState(Enum):
+    """Simulation lifecycle states."""
+    IDLE = "IDLE"
+    WARMUP = "WARMUP"
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+
+
+class SimStateMachine(QObject):
+    """
+    Manages simulation state transitions and rules.
+    """
+    state_changed = pyqtSignal(SimState)
+
+    def __init__(self, initial_state: SimState = SimState.IDLE):
+        super().__init__()
+        self._state = initial_state
+
+    @property
+    def state(self) -> SimState:
+        return self._state
+
+    def can_transition(self, new_state: SimState) -> bool:
+        """Check if transition from current state to new_state is allowed."""
+        old = self._state
+        
+        # Rule: ANY -> IDLE (Stop button is always valid reset)
+        if new_state == SimState.IDLE:
+            return True
+            
+        if old == SimState.IDLE:
+            return new_state == SimState.WARMUP
+            
+        if old == SimState.WARMUP:
+            # WARMUP leads to RUNNING on success or IDLE on failure/timeout
+            return new_state in (SimState.RUNNING, SimState.IDLE)
+            
+        if old == SimState.RUNNING:
+            return new_state in (SimState.PAUSED, SimState.IDLE)
+            
+        if old == SimState.PAUSED:
+            # Resume or Step
+            return new_state in (SimState.RUNNING, SimState.IDLE)
+            
+        return False
+
+    def transition_to(self, new_state: SimState) -> bool:
+        """Perform transition if allowed."""
+        if self.can_transition(new_state):
+            if self._state != new_state:
+                from loguru import logger
+                logger.info(f"[FSM] Transition: {self._state.name} -> {new_state.name}")
+                self._state = new_state
+                self.state_changed.emit(new_state)
+            return True
+        return False
 
 
 class NavigationState(QObject):
@@ -55,6 +114,9 @@ class NavigationState(QObject):
     # Operation started (e.g., "Loading graph...")
     operation_started = pyqtSignal(str)
     operation_completed = pyqtSignal()       # Operation completed
+
+    # ============ SIMULATION SIGNALS ============
+    sim_state_changed = pyqtSignal(SimState)
     
     def __init__(self):
         """Initialize state manager."""
@@ -74,6 +136,16 @@ class NavigationState(QObject):
         
         # Status
         self._current_status: str = "Ready"
+
+        # Simulation State
+        self.sim_fsm = SimStateMachine()
+        # Proxy signal
+        self.sim_fsm.state_changed.connect(self.sim_state_changed.emit)
+
+    @property
+    def sim_state(self) -> SimState:
+        """Get current simulation state."""
+        return self.sim_fsm.state
     
     # ============ POINT MANAGEMENT ============
     

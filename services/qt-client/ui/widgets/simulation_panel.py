@@ -11,9 +11,10 @@ Provides controls for agent simulation:
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QSpinBox, QDoubleSpinBox, QGroupBox
+    QSpinBox, QDoubleSpinBox, QGroupBox, QCheckBox
 )
 from PyQt5.QtCore import pyqtSignal, Qt
+from models.navigation_state import SimState
 
 from loguru import logger as log
 from services.common.config import config_loader
@@ -97,6 +98,11 @@ class SimulationPanel(QWidget):
         self.chaos_spin.setSingleStep(1.0)
         chaos_layout.addWidget(self.chaos_spin)
         param_layout.addLayout(chaos_layout)
+        
+        # Respawn Enabled
+        self.respawn_check = QCheckBox(self.tr("Respawn on finish"))
+        self.respawn_check.setChecked(True)
+        param_layout.addWidget(self.respawn_check)
 
         layout.addWidget(param_group)
 
@@ -172,19 +178,17 @@ class SimulationPanel(QWidget):
 
         layout.addStretch()
 
-    def _on_start_pause_clicked(self, checked):
+    def _on_start_pause_clicked(self):
         """Handle Start/Pause toggle."""
-        if checked:
-            self.start_pause_btn.setText(self.tr("Pause"))
-            self.start_clicked.emit()
-        else:
-            self.start_pause_btn.setText(self.tr("Start"))
+        # Note: The actual state transition is handled by MainWindowHandlers
+        # this button just sends the signal based on its current text/state
+        if self.start_pause_btn.text() == self.tr("Pause"):
             self.pause_clicked.emit()
+        else:
+            self.start_clicked.emit()
 
     def _on_stop_clicked(self):
         """Handle Stop."""
-        self.start_pause_btn.setChecked(False)
-        self.start_pause_btn.setText(self.tr("Start"))
         self.stop_clicked.emit()
 
     def _on_step_clicked(self):
@@ -194,7 +198,7 @@ class SimulationPanel(QWidget):
     def _on_apply_clicked(self):
         """Handle Apply button click."""
         params = {
-            "accel": self.sim_speed_spin.value(),
+            "acceleration": self.sim_speed_spin.value(),
             "fps": self.fps_spin.value(),
             "chaos": self.chaos_spin.value()
         }
@@ -206,10 +210,11 @@ class SimulationPanel(QWidget):
         return {
             "num_agents": self.agents_spin.value(),
             "asf": self.asf_spin.value(),
-            "duration": self.dur_spin.value(),
+            "duration_sec": self.dur_spin.value(),
             "chaos": self.chaos_spin.value(),
-            "accel": self.sim_speed_spin.value(),
-            "fps": self.fps_spin.value()
+            "acceleration": self.sim_speed_spin.value(),
+            "fps": self.fps_spin.value(),
+            "respawn_enabled": self.respawn_check.isChecked()
         }
 
     def update_agent_status(
@@ -243,14 +248,45 @@ class SimulationPanel(QWidget):
         """Clear agent status display."""
         self.status_label.setText(self.tr("No active agent"))
 
-    def set_agent_active(self, active: bool):
-        """
-        Update button states based on agent active status.
+    def update_ui_for_state(self, state: SimState):
+        """Update button enabled states and labels based on FSM state."""
+        log.debug(f"[UI] Updating SimulationPanel for state: {state}")
+        
+        if state == SimState.IDLE:
+            self.start_pause_btn.setEnabled(True)
+            self.start_pause_btn.setText(self.tr("Start"))
+            self.start_pause_btn.setChecked(False)
+            self.stop_btn.setEnabled(False)
+            self.step_btn.setEnabled(False)
+            self.apply_btn.setEnabled(True)
+            self.status_label.setText(self.tr("Ready (Idle)"))
+            
+        elif state == SimState.WARMUP:
+            self.start_pause_btn.setEnabled(False)
+            self.start_pause_btn.setText(self.tr("Starting..."))
+            self.stop_btn.setEnabled(False)
+            self.step_btn.setEnabled(False)
+            self.apply_btn.setEnabled(False)
+            self.status_label.setText(self.tr("Wait: Core Warmup..."))
+            
+        elif state == SimState.RUNNING:
+            self.start_pause_btn.setEnabled(True)
+            self.start_pause_btn.setText(self.tr("Pause"))
+            self.start_pause_btn.setChecked(True)
+            self.stop_btn.setEnabled(True)
+            self.step_btn.setEnabled(False)
+            self.apply_btn.setEnabled(True)
+            self.status_label.setText(self.tr("Simulation Running"))
+            
+        elif state == SimState.PAUSED:
+            self.start_pause_btn.setEnabled(True)
+            self.start_pause_btn.setText(self.tr("Resume"))
+            self.start_pause_btn.setChecked(False)
+            self.stop_btn.setEnabled(True)
+            self.step_btn.setEnabled(True)
+            self.apply_btn.setEnabled(True)
+            self.status_label.setText(self.tr("Simulation Paused"))
 
-        Args:
-            active: True if agent is active, False otherwise
-        """
-        self.start_btn.setEnabled(not active)
-        self.stop_btn.setEnabled(active)
-        self.restart_btn.setEnabled(active)
-        self.delete_btn.setEnabled(active)
+    def set_agent_active(self, active: bool):
+        """Legacy method (kept for compatibility)"""
+        pass
