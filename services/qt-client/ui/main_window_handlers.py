@@ -610,30 +610,31 @@ class MainWindowHandlers:
     # Simulation Handlers
     # ========================================================================
     
-    def _on_start_agent(self) -> None:
-        """Handle Start Agent button click."""
-        log.info("start_agent_clicked - SIMULATION UI DISABLED")
-        # Stub: Agent simulation not supported in this version
-        pass
+    def _on_start_simulation(self) -> None:
+        """Handle Start Simulation button click."""
+        params = self.sidebar.simulation_panel.get_sim_params()
+        log.info(f"start_simulation_requested: {params}")
+        # TODO: Implement START via API
     
-    def _on_stop_agent(self) -> None:
-        """Handle Stop Agent button click."""
-        log.info("stop_agent_clicked - SIMULATION UI DISABLED")
-        pass
+    def _on_pause_simulation(self) -> None:
+        """Handle Pause Simulation."""
+        log.info("pause_simulation_requested")
+        # TODO: Implement PAUSE via API
     
-    def _on_restart_agent(self) -> None:
-        """Handle Restart Agent button click."""
-        log.info("restart_agent_clicked - SIMULATION UI DISABLED")
-        pass
-    
-    def _update_agent_route(self, route_id: int) -> None:
-        """Handle route selection change."""
-        pass
-    
-    def _on_delete_agent(self) -> None:
-        """Handle Delete Agent button click."""
-        log.info("delete_agent_clicked - SIMULATION UI DISABLED")
-        pass
+    def _on_stop_simulation(self) -> None:
+        """Handle Stop Simulation."""
+        log.info("stop_simulation_requested")
+        # TODO: Implement STOP via API
+        
+    def _on_step_simulation(self) -> None:
+        """Handle Simulation Step (manual mode)."""
+        log.info("step_simulation_requested")
+        # TODO: Implement STEP via API
+        
+    def _on_apply_simulation_settings(self, params: dict) -> None:
+        """Handle settings apply (accel, fps, etc.)."""
+        log.info(f"apply_simulation_settings: {params}")
+        # TODO: Implement UPDATE via API
     
     def _on_clear_routes(self) -> None:
         """Handle Clear Routes button click."""

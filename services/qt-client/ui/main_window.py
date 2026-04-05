@@ -5,9 +5,9 @@ import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 from PyQt5.QtWidgets import QMainWindow, QWidget, QShortcut
-from PyQt5.QtCore import QUrl
 from PyQt5.QtWebChannel import QWebChannel
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtGui import QKeySequence, QColor
+from PyQt5.QtCore import QUrl, Qt
 
 from ui.widgets.map_widget import MapWidget
 from handlers.zoom_bridge import ZoomBridge
@@ -173,22 +173,23 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         self.map_widget = MapWidget(self.map_frame)
         self.map_widget.setGeometry(0, 0, self.width(), self.height())
         
-        # CRITICAL: Clear WebView HTTP cache to force reload fresh JS
-        self.map_widget.page().profile().clearHttpCache()
-        log.info("webview_cache_cleared")
-        
-        # Setup QWebChannel for JS-to-Python communication
+        # 1. Setup QWebChannel for JS-to-Python communication (STRICTLY BEFORE LOAD)
         self.channel = QWebChannel()
+        self.map_widget.page().setWebChannel(self.channel)
+        
+        # 2. Register bridges for JS communication
         self.channel.registerObject('zoom_bridge', self.zoom_bridge)
         self.channel.registerObject('points_bridge', self.points_bridge)
         self.channel.registerObject('logger_bridge', self.logger_bridge)
         self.channel.registerObject('config_bridge', self.config_bridge)
-        self.map_widget.page().setWebChannel(self.channel)
         
-        # Connect map loadFinished signal (URLs already in HTML)
+        # 3. Explicitly set page background to white to prevent "black/system theme" issues
+        self.map_widget.page().setBackgroundColor(QColor("white"))
+        
+        # 4. Connect map loadFinished signal
         self.map_widget.loadFinished.connect(self._on_map_loaded)
         
-        # Load map HTML via HTTP server
+        # 5. Load map HTML via HTTP server
         map_url = f"http://127.0.0.1:{self._assets_port}/map.html"
         log.debug("loading_map_html", url=map_url)
         self.map_widget.load(QUrl(map_url))
@@ -265,7 +266,6 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         """Toggle sidebar visibility."""
         self.sidebar_visible = not self.sidebar_visible
         self._update_overlay_positions()
-    
     def _on_map_loaded(self, ok: bool) -> None:
         """Handle map.html load completion."""
         log.info("map_loaded_signal", success=ok)
@@ -281,10 +281,6 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         
         # Flag to skip point synchronization after manual changes
         self._skip_points_sync_count = 0
-        
-        # Setup event-based updates instead of periodic polling
-        # JS will call window.pointsChangedCallback() when points change
-        self._setup_js_callbacks()
         
         # MVT tiles auto-load via vectorTileUrl, no need for manual fetch
         # self._auto_load_graph()

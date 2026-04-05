@@ -88,30 +88,27 @@ class MainWindowUI:
             self._on_points_changed
         )
         
-        # Connect simulation panel signals
-        self.sidebar.simulation_panel.start_agent_clicked.connect(
-            self._on_start_agent
+        # Connect simulation panel signals (Updated Stage 1)
+        self.sidebar.simulation_panel.start_clicked.connect(
+            self._on_start_simulation
         )
-        self.sidebar.simulation_panel.stop_agent_clicked.connect(
-            self._on_stop_agent
+        self.sidebar.simulation_panel.pause_clicked.connect(
+            self._on_pause_simulation
         )
-        self.sidebar.simulation_panel.restart_agent_clicked.connect(
-            self._on_restart_agent
+        self.sidebar.simulation_panel.stop_clicked.connect(
+            self._on_stop_simulation
         )
-        self.sidebar.simulation_panel.delete_agent_clicked.connect(
-            self._on_delete_agent
+        self.sidebar.simulation_panel.step_clicked.connect(
+            self._on_step_simulation
+        )
+        self.sidebar.simulation_panel.apply_clicked.connect(
+            self._on_apply_simulation_settings
         )
         self.sidebar.simulation_panel.clear_routes_clicked.connect(
             self._on_clear_routes
         )
         self.sidebar.simulation_panel.clear_points_clicked.connect(
             self._on_clear_all_points
-        )
-        self.sidebar.simulation_panel.sim_speed_changed.connect(
-            self._on_sim_speed_changed
-        )
-        self.sidebar.simulation_panel.fps_changed.connect(
-            self._on_fps_changed
         )
     
     def _setup_zoom_controls(self) -> None:

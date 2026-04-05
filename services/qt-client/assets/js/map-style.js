@@ -4,7 +4,7 @@
 
 import { getMapConfig } from './map-config-loader.js';
 
-function generateLodLayers(lodConfig, colors, widths) {
+function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
   const layers = [];
   for (const lod of lodConfig.layers) {
     const { name, minzoom, maxzoom, highways, show_names } = lod;
@@ -60,7 +60,7 @@ function generateLodLayers(lodConfig, colors, widths) {
 
     layers.push(layerDef);
 
-    if (show_names) {
+    if (show_names && includeLabels) {
       const labelFilter = ['has', 'name'];
 
       layers.push({
@@ -87,40 +87,89 @@ function generateLodLayers(lodConfig, colors, widths) {
   return layers;
 }
 
-export function createMapStyle(tileUrl) {
+export function getBaseStyle() {
   const cfg = getMapConfig();
   if (!cfg) throw new Error('[map-style] Config not loaded');
 
   const lodLayersArray = Array.isArray(cfg.lod) ? cfg.lod : cfg.lod.layers;
 
+  // Generate vector layers WITHOUT labels initially
   const lodLayers = generateLodLayers(
     { layers: lodLayersArray },
     cfg.layers.graph.colors,
-    cfg.rendering?.widths || cfg.layers.graph.baseWidth
+    cfg.rendering?.widths || cfg.layers.graph.baseWidth,
+    false
   );
 
   return {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {
-      osm: { type: 'raster', tiles: [tileUrl], tileSize: cfg.tiles.tileSize },
       'graph-vector': {
         type: 'vector',
         tiles: [`${cfg.apiBaseUrl || 'http://localhost:8000'}/tiles/{z}/{x}/{y}.mvt?v=${Date.now()}`],
         minzoom: 0,
-        maxzoom: 18
+        maxzoom: (cfg.tiles && cfg.tiles.maxZoom) ? cfg.tiles.maxZoom : 14
       },
       routes: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
       'k-routes': { type: 'geojson', data: { type: 'FeatureCollection', features: [] } }
     },
     layers: [
-      { id: 'background', type: 'background', paint: { 'background-color': cfg.layers.background.color } },
-      { id: 'osm', type: 'raster', source: 'osm' },
+      { id: 'background', type: 'background', paint: { 'background-color': cfg.layers.background.color || '#f3f4f6' } },
     ].concat(lodLayers).concat([
       { id: 'routes', type: 'line', source: 'routes', paint: { 'line-color': ['get', 'color'], 'line-width': cfg.layers.routes.width } }
     ]).concat(['inactive', 'selected', 'assigned'].flatMap(type => [
-      { id: `k-routes-${type}-casing`, type: 'line', source: 'k-routes', filter: type === 'inactive' ? ['!=', ['get', 'route_id'], -1] : ['==', ['get', 'route_id'], -1], paint: { 'line-color': '#000000', 'line-width': cfg.layers.kRoutes[type].width + 2, 'line-opacity': cfg.layers.kRoutes[type].opacity } },
-      { id: `k-routes-${type}`, type: 'line', source: 'k-routes', filter: type === 'inactive' ? ['!=', ['get', 'route_id'], -1] : ['==', ['get', 'route_id'], -1], paint: { 'line-color': cfg.layers.kRoutes[type].color, 'line-width': cfg.layers.kRoutes[type].width, 'line-opacity': cfg.layers.kRoutes[type].opacity } }
+      { id: `k-routes-${type}-casing`, type: 'line', source: 'k-routes', filter: type === 'inactive' ? ['!=', ['get', 'route_id'], -1] : ['==', ['get', 'route_id'], -1], paint: { 'line-color': '#000000', 'line-width': (cfg.layers.kRoutes[type]?.width || 3) + 2, 'line-opacity': cfg.layers.kRoutes[type]?.opacity || 0.6 } },
+      { id: `k-routes-${type}`, type: 'line', source: 'k-routes', filter: type === 'inactive' ? ['!=', ['get', 'route_id'], -1] : ['==', ['get', 'route_id'], -1], paint: { 'line-color': cfg.layers.kRoutes[type]?.color || '#3b82f6', 'line-width': cfg.layers.kRoutes[type]?.width || 3, 'line-opacity': cfg.layers.kRoutes[type]?.opacity || 1.0 } }
     ]))
   };
+}
+
+export function addOsmRaster(map, tileUrl, tileSize = 256) {
+  if (map.getSource('osm')) return;
+  
+  map.addSource('osm', {
+    type: 'raster',
+    tiles: [tileUrl],
+    tileSize: tileSize,
+    attribution: '&copy; OpenStreetMap contributors'
+  });
+
+  const layers = map.getStyle().layers;
+  const firstNonBackground = layers.find(l => l.id !== 'background');
+
+  map.addLayer({
+    id: 'osm',
+    type: 'raster',
+    source: 'osm',
+    paint: {
+      'raster-opacity': 1.0,
+      'raster-fade-duration': 300
+    }
+  }, firstNonBackground ? firstNonBackground.id : undefined);
+}
+
+export function addRoadLabels(map, glyphsUrl) {
+  const cfg = getMapConfig();
+  if (!cfg) return;
+
+  if (glyphsUrl) {
+    map.setGlyphs(glyphsUrl);
+  }
+
+  const lodLayersArray = Array.isArray(cfg.lod) ? cfg.lod : cfg.lod.layers;
+  
+  // Generate ONLY label layers
+  const labelLayers = generateLodLayers(
+    { layers: lodLayersArray },
+    cfg.layers.graph.colors,
+    cfg.rendering?.widths || cfg.layers.graph.baseWidth,
+    true
+  ).filter(l => l.type === 'symbol');
+
+  labelLayers.forEach(layer => {
+    if (!map.getLayer(layer.id)) {
+      map.addLayer(layer);
+    }
+  });
 }
