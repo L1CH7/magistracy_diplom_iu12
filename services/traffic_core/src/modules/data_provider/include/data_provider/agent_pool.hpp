@@ -24,7 +24,9 @@ struct AgentPool
     std::vector< traffic::EdgeID > current_edge; // Edge we are currently on
     std::vector< uint16_t > route_progress_idx;  // Index in agent's own RouteSpan
     std::vector< uint32_t > edge_enter_time_sec; // Arrival time to current edge
-    std::vector< traffic::EdgeID > target_edge;  // Destination for routing
+    std::vector< std::array< traffic::EdgeID, 16 > > waypoints;
+    std::vector< uint8_t > total_waypoints;
+    std::vector< uint8_t > next_waypoint_idx; // Индекс точки, к которой агент едет сейчас
     std::vector< uint8_t > is_active;           // 1 for active, 0 for despawned/wait
 
     // === Buffer for agents finishing their current edge ===
@@ -43,7 +45,9 @@ struct AgentPool
         current_edge.resize( capacity, 0 );
         route_progress_idx.resize( capacity, 0 );
         edge_enter_time_sec.resize( capacity, 0 );
-        target_edge.resize( capacity, 0 );
+        waypoints.resize( capacity );
+        total_waypoints.resize( capacity, 0 );
+        next_waypoint_idx.resize( capacity, 0 );
         is_active.resize( capacity, 0 );
 
         // Initial capacity for transitions to avoid allocations during tick

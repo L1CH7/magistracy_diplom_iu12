@@ -34,7 +34,7 @@ public:
     std::expected< void, std::string > Init( const std::string & data_path );
 
     // Simulation Flow
-    void SpawnAgents( uint32_t num_agents, uint16_t asf );
+    void SpawnAgents( uint32_t num_agents, uint16_t asf, const std::vector< double > & wp_probs = { 0.90, 0.05, 0.03, 0.02 } );
     void Warmup();
     void Step( float dt );
     void ForceReroute( const std::vector< common::net::RouteRequest > & requests );

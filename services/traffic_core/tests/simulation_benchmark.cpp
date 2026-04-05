@@ -43,6 +43,7 @@ int main( int argc, char ** argv )
     uint32_t affinity_sim = 1;
     bool use_affinity = true;
     uint32_t chaos_percent = 0;
+    std::vector< double > wp_dist = { 0.90, 0.05, 0.03, 0.02 };
 
     for( int i = 1; i < argc; ++i )
     {
@@ -54,6 +55,17 @@ int main( int argc, char ** argv )
         else if( arg == "--affinity_sim" && i + 1 < argc ) affinity_sim = std::stoul( argv[ ++i ] );
         else if( arg == "--use_affinity" && i + 1 < argc ) use_affinity = ( std::stoul( argv[ ++i ] ) != 0 );
         else if( arg == "--chaos" && i + 1 < argc ) chaos_percent = std::stoul( argv[ ++i ] );
+        else if( arg == "--wp_dist" && i + 1 < argc )
+        {
+            std::string dist_str = argv[ ++i ];
+            wp_dist.clear();
+            std::stringstream ss( dist_str );
+            std::string val;
+            while( std::getline( ss, val, ',' ) )
+            {
+                wp_dist.push_back( std::stod( val ) );
+            }
+        }
         else if( arg == "--data" && i + 1 < argc ) data_path = argv[ ++i ];
     }
 
@@ -83,6 +95,9 @@ int main( int argc, char ** argv )
     std::cout << " Accel:    " << accel << "x" << std::endl;
     std::cout << " Duration: " << duration_sim_sec << "s (Simulation time)" << std::endl;
     std::cout << " Chaos:    " << chaos_percent << "%" << std::endl;
+    std::cout << " WP Dist:  ";
+    for( size_t i = 0; i < wp_dist.size(); ++i ) std::cout << wp_dist[ i ] << ( i == wp_dist.size() - 1 ? "" : "," );
+    std::cout << std::endl;
     std::cout << " Data:     " << data_path << std::endl;
     std::cout << "================================================" << std::endl;
 
@@ -111,7 +126,7 @@ int main( int argc, char ** argv )
     std::cout << " [2/3] num_edges=" << engine.GetRouterManager().num_edges() << std::endl;
 
     // Populating agents
-    engine.SpawnAgents( num_agents, asf );
+    engine.SpawnAgents( num_agents, asf, wp_dist );
 
     auto init_end_wall = std::chrono::steady_clock::now();
     float init_sec = std::chrono::duration< float >( init_end_wall - init_start_wall ).count();

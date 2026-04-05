@@ -90,7 +90,7 @@ std::expected< void, std::string > TrafficEngine::Init( const std::string & data
     return {};
 }
 
-void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf )
+void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf, const std::vector< double > & wp_probs )
 {
     if( !is_initialized_ ) return;
 
@@ -102,10 +102,10 @@ void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf )
         num_agents, 
         static_cast< uint32_t >( router_manager_.num_edges() ), 
         asf, 
-        initial_requests 
+        initial_requests,
+        wp_probs
     );
 
-    agent_pool_.Allocate( num_agents );
     // RouteArena resizes automatically in UpdateRoute
 
     // Send initial paths computation
@@ -195,7 +195,6 @@ void TrafficEngine::Step( float dt )
             while( target_edge == start_edge ) target_edge = edge_dist( rec_gen );
 
             agent_pool_.current_edge[ i ] = start_edge;
-            agent_pool_.target_edge[ i ] = target_edge;
             agent_pool_.pos_meters[ i ] = 0.0f;
             
             // СТОП! Машина не должна двигаться, пока нет маршрута (Task: Fix Respawn Loop)
@@ -209,13 +208,20 @@ void TrafficEngine::Step( float dt )
             // 2 = Состояние ожидания маршрута. Физика её не тронет.
             agent_pool_.is_active[ i ] = 2; 
 
-            mpr_requests_buffer_.push_back( {
-                .agent_id = i,
-                .start_edge = start_edge,
-                .target_edge = target_edge,
-                .asf = 50, // Default ASF for respawn
-                .current_time_sec = static_cast< uint32_t >( current_sim_time_ )
-            } );
+            agent_pool_.total_waypoints[ i ] = 2;
+            agent_pool_.next_waypoint_idx[ i ] = 1;
+            agent_pool_.waypoints[ i ][ 0 ] = start_edge;
+            agent_pool_.waypoints[ i ][ 1 ] = target_edge;
+
+            traffic::common::net::RouteRequest req;
+            req.agent_id = i;
+            req.asf = 50; // Default ASF for respawn
+            req.current_time_sec = static_cast< uint32_t >( current_sim_time_ );
+            req.num_waypoints = 2;
+            req.waypoints[ 0 ] = start_edge;
+            req.waypoints[ 1 ] = target_edge;
+
+            mpr_requests_buffer_.push_back( std::move( req ) );
         }
     }
     if( !mpr_requests_buffer_.empty() )
@@ -274,8 +280,15 @@ void TrafficEngine::StartRouterWorker()
                 for( size_t i = 0; i < req_batch.size(); ++i )
                 {
                     router_pool_.Enqueue( [ this, &req = req_batch[ i ], &res = res_batch[ i ] ]( ) {
-                        auto result = router_manager_.Route< true, false >( // Force vector overload to prevent implicit float cast
-                            std::vector< traffic::NodeID >{ req.start_edge, req.target_edge },
+                        // Convert POD array to vector for the Router interface
+                        std::vector<traffic::NodeID> wp_vec;
+                        wp_vec.reserve(req.num_waypoints);
+                        for(uint8_t w = 0; w < req.num_waypoints; ++w) {
+                            wp_vec.push_back(req.waypoints[w]);
+                        }
+
+                        auto result = router_manager_.Route< true, false >( 
+                            wp_vec,
                             req.current_time_sec
                         );
 

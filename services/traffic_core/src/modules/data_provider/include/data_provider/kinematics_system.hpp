@@ -171,6 +171,13 @@ public:
                 {
                     traffic::EdgeID next_edge = route[ next_idx ];
 
+                    // Check if we reached a waypoint
+                    if( pool_.next_waypoint_idx[ agent_idx ] < pool_.total_waypoints[ agent_idx ] &&
+                        next_edge == pool_.waypoints[ agent_idx ][ pool_.next_waypoint_idx[ agent_idx ] ] )
+                    {
+                        pool_.next_waypoint_idx[ agent_idx ]++;
+                    }
+
                     // Update physical occupancy counters
                     if( ctx.live_volumes )
                     {

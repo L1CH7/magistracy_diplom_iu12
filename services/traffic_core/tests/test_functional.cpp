@@ -300,7 +300,10 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         uint32_t agent_id = 0;
         pool.is_active[ agent_id ] = 1;
         pool.current_edge[ agent_id ] = 500;
-        pool.target_edge[ agent_id ] = 999; // Destination
+        pool.waypoints[ agent_id ][ 0 ] = 500;
+        pool.waypoints[ agent_id ][ 1 ] = 999;
+        pool.total_waypoints[ agent_id ] = 2;
+        pool.next_waypoint_idx[ agent_id ] = 1; // Destination
         pool.route_progress_idx[ agent_id ] = 0;
         pool.edge_enter_time_sec[ agent_id ] = 1000;
 
@@ -319,8 +322,8 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         engine.Tick( 1160, pool, arena, requests );
         REQUIRE( !requests.empty() );
         CHECK( requests[ 0 ].agent_id == agent_id );
-        CHECK( requests[ 0 ].start_edge == 500 );
-        CHECK( requests[ 0 ].target_edge == 999 );
+        CHECK( requests[ 0 ].waypoints[ 0 ] == 500 );
+        CHECK( requests[ 0 ].waypoints[ requests[ 0 ].num_waypoints - 1 ] == 999 );
         MESSAGE("  [OK] Reroute request generated for 1.6x delay.");
     }
 
@@ -334,7 +337,10 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
             pool.is_active[ i ] = 1;
             pool.edge_enter_time_sec[ i ] = start_time;
             pool.route_progress_idx[ i ] = 0;
-            pool.target_edge[ i ] = 2000 + i;
+            pool.waypoints[ i ][ 0 ] = 1000;
+            pool.waypoints[ i ][ 1 ] = 2000 + i;
+            pool.total_waypoints[ i ] = 2;
+            pool.next_waypoint_idx[ i ] = 1;
             
             std::vector< traffic::EdgeID > path = { 1000 };
             std::vector< uint32_t > etas = { 100 };
@@ -355,7 +361,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         for( size_t i = 0; i < requests.size(); ++i )
         {
             CHECK( requests[ i ].agent_id == static_cast< uint32_t >( i ) );
-            CHECK( requests[ i ].target_edge == 2000 + i );
+            CHECK( requests[ i ].waypoints[ requests[ i ].num_waypoints - 1 ] == 2000 + i );
         }
         MESSAGE("  [SUCCESS] Batch scan correctly identified exactly 5 delayed agents.");
     }
