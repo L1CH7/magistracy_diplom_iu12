@@ -38,6 +38,14 @@ public:
         }
     }
 
+    void Clear() noexcept {
+        for (auto& b : buckets_) {
+            for (uint32_t i = 0; i < traffic::router::compute::NUM_BUCKETS; ++i) {
+                b.volumes[i].store(0, std::memory_order_relaxed);
+            }
+        }
+    }
+
 private:
     std::vector<traffic::router::compute::VolumeBucket> buckets_;
 };

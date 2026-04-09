@@ -86,6 +86,17 @@ public:
         return false;
     }
 
+    /**
+     * @brief Clears pending data from the endpoint.
+     */
+    void Clear()
+    {
+        if( transport_ )
+        {
+            transport_->Clear();
+        }
+    }
+
 private:
     std::unique_ptr< ITransport > transport_;
 };

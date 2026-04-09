@@ -622,27 +622,25 @@ class MainWindowHandlers:
                 self._run_sim_worker(1, params) # Opcode 1: START
             
         elif state == SimState.PAUSED:
-            # Resume: use SET_SPEED with acceleration from spin
+            # Resume: use RESUME opcode
             log.info(f"simulation_resuming with acceleration={params['acceleration']}")
-            self._run_sim_worker(3, params) # Opcode 3: SET_SPEED
+            self._run_sim_worker(8, params) # Opcode 8: RESUME
             self.sim_fsm.transition_to(SimState.RUNNING)
     
     def _on_pause_simulation(self) -> None:
         """Handle Pause Simulation."""
         if self.sim_fsm.transition_to(SimState.PAUSED):
             params = self.sidebar.simulation_panel.get_sim_params()
-            log.info("simulation_pausing (accel=0)")
-            # Opcode 3: SET_SPEED with accel=0
-            pause_params = params.copy()
-            pause_params["acceleration"] = 0.0
-            self._run_sim_worker(3, pause_params)
+            log.info("simulation_pausing (Opcode 7 PAUSE)")
+            self._run_sim_worker(7, params) # Opcode 7: PAUSE
     
     def _on_stop_simulation(self) -> None:
         """Handle Stop Simulation."""
         from loguru import logger
         logger.info("simulation_stopping")
-        # Do NOT transition state immediately. Disable button to prevent double-clicks.
-        self.sidebar.simulation_panel.stop_btn.setEnabled(False)
+        # Immediately reset UI state to IDLE to show Start button
+        self.sim_fsm.transition_to(SimState.IDLE)
+        self.sidebar.simulation_panel.update_ui_for_state(SimState.IDLE)
         self._run_sim_worker(2, {}) # Opcode 2: STOP
         
     def _on_step_simulation(self) -> None:
@@ -689,6 +687,8 @@ class MainWindowHandlers:
             engine_state = data.get("engine_state")
             if engine_state == "RUNNING":
                 self.sim_fsm.transition_to(SimState.RUNNING)
+            elif engine_state == "PAUSED":
+                self.sim_fsm.transition_to(SimState.PAUSED)
             elif engine_state == "IDLE":
                 self.sim_fsm.transition_to(SimState.IDLE)
         else:

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <iostream>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -92,11 +93,48 @@ std::expected< void, std::string > TrafficEngine::Init( const std::string & data
     return {};
 }
 
+void TrafficEngine::ResetState()
+{
+    router_pool_.ClearTasks();
+    router_ep_->Clear();
+    mpr_ep_->Clear();
+
+    route_arena_.agent_spans.clear();
+    route_arena_.flat_edges.clear();
+    route_arena_.flat_etas_sec.clear();
+
+    auto vol_mgr = router_manager_.get_volume_manager();
+    if( vol_mgr )
+    {
+        vol_mgr->Clear();
+    }
+
+    num_agents_ = 0;
+    routes_computed_.store(0);
+    total_completed_routes_ = 0;
+    total_successful_routes_ = 0;
+    total_failed_routes_ = 0;
+    current_sim_time_ = 0.0f;
+    last_mpr_tick_sim_sec_ = 0;
+    
+    std::fill( live_edge_volumes_.begin(), live_edge_volumes_.end(), 0 );
+    std::fill( max_live_volumes_.begin(), max_live_volumes_.end(), 0 );
+    std::fill( agent_pool_.is_active.begin(), agent_pool_.is_active.end(), 0 );
+
+    if( num_agents_ > 0 )
+    {
+        route_arena_.flat_edges.reserve( static_cast<size_t>(num_agents_) * 600 );
+        route_arena_.flat_etas_sec.reserve( static_cast<size_t>(num_agents_) * 600 );
+    }
+}
+
 void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf, const std::vector< double > & wp_probs )
 {
     if( !is_initialized_ ) return;
 
+    ResetState();
     num_agents_ = num_agents;
+
     std::vector< RouteRequest > initial_requests;
     
     data_provider::ScenarioGenerator::SpawnRandomAgents( 
@@ -125,21 +163,24 @@ void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf, const std::v
     }
 }
 
-void TrafficEngine::Warmup()
+void TrafficEngine::Warmup( const std::atomic<bool>* abort_flag )
 {
     if( !is_initialized_ ) return;
 
+    size_t last_log = 0;
     while( routes_computed_.load() < num_agents_ )
     {
+        if (abort_flag && !abort_flag->load()) break;
+
         HandleResponses();
         std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
     }
 }
 
-void TrafficEngine::Warmup( uint32_t num_agents )
+void TrafficEngine::Warmup( uint32_t num_agents, const std::atomic<bool>* abort_flag )
 {
     SpawnAgents( num_agents, 50 );
-    Warmup();
+    Warmup( abort_flag );
 }
 
 void TrafficEngine::Run()
@@ -390,7 +431,8 @@ void TrafficEngine::StartRouterWorker()
                 }
 
                 router_pool_.WaitForAll();
-                routes_computed_.fetch_add( static_cast< uint32_t >( req_batch.size() ), std::memory_order_relaxed );
+                size_t added = req_batch.size();
+                routes_computed_.fetch_add( static_cast< uint32_t >( added ), std::memory_order_relaxed );
                 
                 router_ep_->Send( res_batch );
                 empty_polls = 0;

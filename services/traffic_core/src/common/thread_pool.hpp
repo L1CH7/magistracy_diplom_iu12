@@ -125,16 +125,29 @@ public:
     {
         stop_.store( true, std::memory_order_release );
         task_sem_.release( static_cast< std::ptrdiff_t >( workers_.size() ) );
-        
-        // Safely drain the queue to cancel pending tasks and unblock WaitForAll
+        ClearTasks();
+    }
+
+    void ClearTasks()
+    {
         std::function< void() > dummy_task;
         while( tasks_.try_dequeue( dummy_task ) )
         {
+            task_sem_.try_acquire();
             auto prev = active_tasks_.fetch_sub( 1, std::memory_order_release );
             if( prev == 1 )
             {
                 active_tasks_.notify_all();
             }
+        }
+    }
+
+    void SetPaused(bool paused)
+    {
+        paused_.store(paused, std::memory_order_release);
+        if(!paused) {
+            // Wake up any workers that might be sleeping 
+            task_sem_.release(static_cast<std::ptrdiff_t>(workers_.size()));
         }
     }
 
@@ -157,6 +170,11 @@ private:
     {
         while( true )
         {
+            if (paused_.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            }
+
             std::function< void() > task;
             if( tasks_.try_dequeue( task ) )
             {
@@ -176,8 +194,9 @@ private:
 private:
     std::vector< std::thread > workers_;
     moodycamel::ConcurrentQueue< std::function< void() > > tasks_;
-    std::atomic< bool > stop_;
-    std::atomic< int > active_tasks_;
+    std::atomic< bool > stop_{ false };
+    std::atomic< bool > paused_{ false };
+    std::atomic< int > active_tasks_{ 0 };
     std::counting_semaphore< 1000000 > task_sem_{ 0 };
 };
 

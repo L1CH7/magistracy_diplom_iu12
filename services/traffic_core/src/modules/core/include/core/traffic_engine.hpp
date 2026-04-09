@@ -35,17 +35,21 @@ public:
 
     // Simulation Flow
     void SpawnAgents( uint32_t num_agents, uint16_t asf, const std::vector< double > & wp_probs = { 0.90, 0.05, 0.03, 0.02 } );
-    void Warmup();
-    void Warmup( uint32_t num_agents ); // Spawn + Warmup
+    void Warmup( const std::atomic<bool>* abort_flag = nullptr );
+    void Warmup( uint32_t num_agents, const std::atomic<bool>* abort_flag = nullptr ); // Spawn + Warmup
     void Run(); // Uses internal atomic settings
     void Run( float requested_accel ); // Managed simulation loop
     void Step( float dt );
     void ForceReroute( const std::vector< common::net::RouteRequest > & requests );
 
     // Control
+    void ResetState();
     void Stop();
+    void PauseRouter(bool paused) { router_pool_.SetPaused(paused); }
     void SetAcceleration( float accel ) { target_accel_.store( accel ); }
     float GetCurrentAcceleration() const { return target_accel_.load(); }
+    float GetCurrentFps() const { return telemetry_fps_.load(); }
+    float GetCurrentChaos() const { return chaos_factor_.load(); }
     void ApplySettings( float accel, float fps, float chaos );
     void SetRespawn( bool enabled ) { respawn_enabled_.store( enabled ); }
 
@@ -61,12 +65,12 @@ public:
     router::control::RouterManager & GetRouterManager() { return router_manager_; }
     data_provider::AgentPool & GetAgentPool() { return agent_pool_; }
 
+    void UpdateTelemetry();
     void SetTelemetryWorker( class TelemetryWorker * worker ) { telemetry_worker_ = worker; }
 
 private:
     void StartRouterWorker();
     void HandleResponses();
-    void UpdateTelemetry();
     data_provider::PhysicsContext MakePhysicsContext( uint32_t time_sec ) const noexcept;
 
 private:

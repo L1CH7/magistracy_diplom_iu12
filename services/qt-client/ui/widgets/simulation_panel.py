@@ -144,7 +144,7 @@ class SimulationPanel(QWidget):
         self.start_pause_btn.clicked.connect(self._on_start_pause_clicked)
         lifecycle_layout.addWidget(self.start_pause_btn)
 
-        self.stop_btn = QPushButton(self.tr("Stop"))
+        self.stop_btn = QPushButton(self.tr("Reset"))
         self.stop_btn.clicked.connect(self._on_stop_clicked)
         lifecycle_layout.addWidget(self.stop_btn)
 
@@ -256,7 +256,7 @@ class SimulationPanel(QWidget):
             self.start_pause_btn.setEnabled(True)
             self.start_pause_btn.setText(self.tr("Start"))
             self.start_pause_btn.setChecked(False)
-            self.stop_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
             self.step_btn.setEnabled(False)
             self.apply_btn.setEnabled(True)
             self.status_label.setText(self.tr("Ready (Idle)"))
@@ -264,7 +264,7 @@ class SimulationPanel(QWidget):
         elif state == SimState.WARMUP:
             self.start_pause_btn.setEnabled(False)
             self.start_pause_btn.setText(self.tr("Starting..."))
-            self.stop_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
             self.step_btn.setEnabled(False)
             self.apply_btn.setEnabled(False)
             self.status_label.setText(self.tr("Wait: Core Warmup..."))

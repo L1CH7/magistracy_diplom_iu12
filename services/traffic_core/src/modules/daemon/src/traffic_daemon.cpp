@@ -92,13 +92,13 @@ int main( int argc, char ** argv )
         
         // Настройка таймаута сокета вместо dontwait-спиннинга
         int timeout_ms = 500;
-        rep_socket.setsockopt(ZMQ_RCVTIMEO, &timeout_ms, sizeof(timeout_ms));
+        rep_socket.set(zmq::sockopt::rcvtimeo, timeout_ms);
         
         LOG_INFO( "Daemon listening: CMD={} PUB={} SIM_CPU={}", 
                   cmd_addr, pub_addr, sim_affinity );
 
         std::thread engine_thread;
-        bool engine_running = false;
+        std::atomic<bool> engine_running{false};
 
         while( keep_running )
         {
@@ -124,19 +124,19 @@ int main( int argc, char ** argv )
                 case common::net::CommandOpcode::STOP:
                     LOG_INFO("Command: STOP");
                     engine_running = false;
-                    engine.Stop();
                     if (engine_thread.joinable()) {
                         engine_thread.join();
                         LOG_INFO("Engine thread joined successfully.");
                     }
+                    engine.ResetState();
                     break;
 
                 case common::net::CommandOpcode::START:
                     if (engine_running) {
                         LOG_WARN("START received while engine is running. Forcing stop...");
                         engine_running = false;
-                        engine.Stop();
                         if (engine_thread.joinable()) engine_thread.join();
+                        engine.ResetState();
                     }
 
                     LOG_INFO("Command: START agents={} asf={} accel={} fps={} chaos={} respawn={}", 
@@ -145,10 +145,80 @@ int main( int argc, char ** argv )
                     
                     engine.ApplySettings(cmd->acceleration, cmd->telemetry_fps, cmd->chaos_factor);
                     engine.SetRespawn(cmd->respawn_enabled > 0);
-                    engine.Warmup(cmd->num_agents);
+                    engine.PauseRouter(false);
+
+                    // If we already have agents, skip spawning to allow resuming warmup
+                    if (engine.GetActiveAgents() != cmd->num_agents || engine.GetActiveAgents() == 0) {
+                        engine.SpawnAgents(cmd->num_agents, cmd->asf);
+                    }
+
+                    engine_running = true;
+                    engine_thread = std::thread([&engine, &engine_running, sim_affinity, num_agents = cmd->num_agents]() {
+#ifdef __linux__
+                        cpu_set_t cpuset_sim;
+                        CPU_ZERO(&cpuset_sim);
+                        CPU_SET(sim_affinity, &cpuset_sim);
+                        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset_sim);
+#endif
+                        uint32_t active = engine.GetActiveAgents();
+                        if (engine.GetRoutesComputed() < active) {
+                            LOG_INFO("Engine WARMING UP...");
+                            engine.Warmup(&engine_running);
+                            if (!engine_running) {
+                                LOG_INFO("Engine Warmup aborted");
+                                return;
+                            }
+                            LOG_INFO("Engine Warmed up. Active agents: {}", engine.GetActiveAgents());
+                        } else {
+                            LOG_INFO("Engine already warmed up with {} agents, resuming...", active);
+                        }
+
+                        float dt = 5.0f;
+                        while (engine_running) {
+                            auto tick_start = std::chrono::steady_clock::now();
+                            
+                            float accel = engine.GetCurrentAcceleration();
+                            if (accel > 0.0f) {
+                                engine.Step(dt);
+                                engine.UpdateTelemetry();
+
+                                auto tick_end = std::chrono::steady_clock::now();
+                                auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(tick_end - tick_start);
+                                auto target_micros = static_cast<long long>((dt / accel) * 1000000.0f);
+                                if (elapsed.count() < target_micros) {
+                                    std::this_thread::sleep_for(std::chrono::microseconds(target_micros - elapsed.count()));
+                                }
+                            } else {
+                                // Paused
+                                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                            }
+                        }
+                    });
+                    break;
+                case common::net::CommandOpcode::PAUSE:
+                    LOG_INFO("Command: PAUSE");
+                    engine_running = false;
+                    engine.PauseRouter(true);
+                    if (engine_thread.joinable()) {
+                        engine_thread.join();
+                        LOG_INFO("Engine thread joined successfully. Simulation paused.");
+                    }
+                    break;
+                
+                case common::net::CommandOpcode::RESUME:
+                    if (engine_running) {
+                        LOG_WARN("RESUME received while engine is running. Ignoring...");
+                        break;
+                    }
+
+                    LOG_INFO("Command: RESUME accel={} fps={} chaos={} respawn={}", 
+                             cmd->acceleration, cmd->telemetry_fps, 
+                             cmd->chaos_factor, cmd->respawn_enabled);
                     
-                    LOG_INFO("Engine Warmed up. Active agents: {}", engine.GetActiveAgents());
-                    
+                    engine.ApplySettings(cmd->acceleration, cmd->telemetry_fps, cmd->chaos_factor);
+                    engine.SetRespawn(cmd->respawn_enabled > 0);
+                    engine.PauseRouter(false);
+
                     engine_running = true;
                     engine_thread = std::thread([&engine, &engine_running, sim_affinity]() {
 #ifdef __linux__
@@ -157,16 +227,41 @@ int main( int argc, char ** argv )
                         CPU_SET(sim_affinity, &cpuset_sim);
                         pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset_sim);
 #endif
-                        float dt = 5.0f;
+                        uint32_t active = engine.GetActiveAgents();
+                        if (engine.GetRoutesComputed() < active) {
+                            LOG_INFO("Engine WARMING UP (Resumed)...");
+                            engine.Warmup(&engine_running);
+                            if (!engine_running) {
+                                LOG_INFO("Engine Warmup aborted");
+                                return;
+                            }
+                            LOG_INFO("Engine Warmed up. Active agents: {}", active);
+                        } else {
+                            LOG_INFO("Engine resuming with {} agents", active);
+                        }
+
+                        auto last_time = std::chrono::steady_clock::now();
                         while (engine_running) {
-                            auto tick_start = std::chrono::steady_clock::now();
-                            engine.Step(dt);
-                            auto tick_end = std::chrono::steady_clock::now();
-                            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(tick_end - tick_start);
-                            auto target_micros = static_cast<long long>((dt / engine.GetCurrentAcceleration()) * 1000000.0f);
+                            auto now = std::chrono::steady_clock::now();
+                            std::chrono::duration<float> dt_duration = now - last_time;
+                            float dt = dt_duration.count();
+                            last_time = now;
+
+                            float accel = engine.GetCurrentAcceleration();
+                            if (accel > 0.0f) {
+                                engine.Step(dt);
+                                engine.UpdateTelemetry();
+                            } else {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                            }
                             
-                            if (elapsed.count() < target_micros) {
-                                std::this_thread::sleep_for(std::chrono::microseconds(target_micros - elapsed.count()));
+                            float target_fps = engine.GetCurrentFps();
+                            if (target_fps > 0.0f) {
+                                auto elapsed = std::chrono::steady_clock::now() - now;
+                                float target_micros = (1.0f / target_fps) * 1000000.0f;
+                                if (elapsed.count() < target_micros) {
+                                    std::this_thread::sleep_for(std::chrono::microseconds(static_cast<long>(target_micros - elapsed.count())));
+                                }
                             }
                         }
                     });
@@ -281,15 +376,15 @@ int main( int argc, char ** argv )
                     break;
             }
 
-            ack.engine_state = engine_running ? 1 : 0;
+            if (engine_running) ack.engine_state = 1;
+            else if (engine.GetActiveAgents() > 0) ack.engine_state = 2; // PAUSED
+            else ack.engine_state = 0; // IDLE
             rep_socket.send( zmq::message_t( &ack, sizeof( ack ) ), zmq::send_flags::none );
         }
 
-        if( engine_running )
-        {
-            engine.Stop();
-            if( engine_thread.joinable() ) engine_thread.join();
-        }
+        engine_running = false;
+        engine.Stop();
+        if( engine_thread.joinable() ) engine_thread.join();
         
         telemetry.Stop();
         LOG_INFO( "Traffic Core Daemon stopped cleanly." );

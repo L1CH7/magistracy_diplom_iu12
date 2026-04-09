@@ -90,9 +90,10 @@ async def sim_control(request: Request):
             return JSONResponse({"status": "error", "message": "Invalid ACK from Traffic Core"}, status_code=500)
         
         success, state = struct.unpack("<BB", ack_raw)
+        state_map = {0: "IDLE", 1: "RUNNING", 2: "PAUSED"}
         return {
             "status": "success" if success else "failed",
-            "engine_state": "RUNNING" if state == 1 else "IDLE"
+            "engine_state": state_map.get(state, "IDLE")
         }
     except HTTPException:
         raise

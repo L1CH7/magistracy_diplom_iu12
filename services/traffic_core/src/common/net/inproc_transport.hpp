@@ -85,6 +85,18 @@ public:
         return false;
     }
 
+    /**
+     * @brief Drains the ready queue and releases all buffers to the pool.
+     */
+    void Clear()
+    {
+        std::vector< uint8_t > buf;
+        while( ready_queue_.try_dequeue( buf ) )
+        {
+            pool_.Release( std::move( buf ) );
+        }
+    }
+
 private:
     MessagePool pool_;
     moodycamel::ConcurrentQueue< std::vector< uint8_t > > ready_queue_;

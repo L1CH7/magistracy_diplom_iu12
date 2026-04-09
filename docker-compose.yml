@@ -43,7 +43,7 @@ services:
       - "5556:5556" # Telemetry PUB
     cap_add:
       - SYS_NICE
-    cpuset: "0-8" 
+    cpuset: "0-15" 
     depends_on:
       postgis:
         condition: service_healthy

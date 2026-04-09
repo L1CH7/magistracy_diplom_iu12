@@ -37,6 +37,11 @@ public:
      * @brief Checks if the transport is network-based or local.
      */
     virtual bool IsNetwork() const noexcept = 0;
+
+    /**
+     * @brief Clears any pending data in the transport's queues.
+     */
+    virtual void Clear() {}
 };
 
 } // namespace net

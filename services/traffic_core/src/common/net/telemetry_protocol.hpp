@@ -20,7 +20,9 @@ enum class CommandOpcode : uint8_t
     SET_SPEED = 3,
     SET_RESPAWN = 4,
     ROUTE_ONE_OFF = 5,
-    STEP = 6
+    STEP = 6,
+    PAUSE = 7,
+    RESUME = 8
 };
 
 /**
