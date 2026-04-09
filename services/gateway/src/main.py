@@ -113,9 +113,9 @@ async def calculate_route(request: Request):
             return JSONResponse({"status": "error", "detail": "At least 2 waypoints required"}, status_code=400)
         
         logger.debug(f"Calculating route for {len(waypoints)} points")
-        # CommandRequest (20b) + OneOffRouteHeader (5b)
-        # opcode=5 (ROUTE_ONE_OFF)
-        cmd_head = struct.pack("<BIIIHfB", 5, 0, 0, 0, 0, 0.0, 0)
+        # CommandRequest (30b) + OneOffRouteHeader (5b)
+        # opcode=5 (ROUTE_ONE_OFF), followed by reserved/default fields for agents/sim params
+        cmd_head = struct.pack("<BIIIHfff3B", 5, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0)
         # OneOffRouteHeader: num_waypoints (B), start_time (I)
         route_head = struct.pack("<BI", len(waypoints), 0) 
         
