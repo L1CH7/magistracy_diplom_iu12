@@ -40,8 +40,22 @@ int main( int argc, char ** argv )
     core::logging::init_logger();
     LOG_INFO( "=== Traffic Core Daemon Starting ===" );
 
-    // 1. Читаем Router Cores из ENV
+#ifndef TOSTRING
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+#endif
+
+    // 1. Читаем Router Cores из ENV или CMake
+#ifdef TRAFFIC_ROUTER_CORES
+    std::string cores_str = TOSTRING(TRAFFIC_ROUTER_CORES);
+    // Remove extra quotes if CMake passed them
+    if(cores_str.size() >= 2 && cores_str.front() == '"' && cores_str.back() == '"') {
+        cores_str = cores_str.substr(1, cores_str.size() - 2);
+    }
+#else
     std::string cores_str = "2,8,3,9,4,10,5,11";
+#endif
+
     if (const char* env_cores = std::getenv("TRAFFIC_ROUTER_CORES")) {
         cores_str = env_cores;
     }
@@ -53,8 +67,12 @@ int main( int argc, char ** argv )
         if (!item.empty()) router_cores.push_back(std::stoi(item));
     }
 
-    // 2. Читаем Sim Affinity из ENV
+    // 2. Читаем Sim Affinity из ENV или CMake
+#ifdef TRAFFIC_SIM_AFFINITY
+    int sim_affinity = TRAFFIC_SIM_AFFINITY;
+#else
     int sim_affinity = 1;
+#endif
     if (const char* env_sim = std::getenv("TRAFFIC_SIM_AFFINITY")) {
         sim_affinity = std::stoi(env_sim);
     }
