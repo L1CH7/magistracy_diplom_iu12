@@ -12,12 +12,8 @@ set(TRAFFIC_MPR_TOLERANCE_DEN 2 CACHE STRING "MPR ETA Tolerance Denominator (e.g
 set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteResponse POD")
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
 
-# Hardware Topology Configuration
-set(TRAFFIC_ROUTER_THREADS "12" CACHE STRING "Number of threads for router pool")
-set(TRAFFIC_ROUTER_CORES "2,10,3,11,4,12,5,13,6,14,7,15" CACHE STRING "Explicit logical CPUs for router pool (12 threads on cores 2-7)")
-set(TRAFFIC_SIM_AFFINITY "1" CACHE STRING "Core 1 (Thread 1) for Main Simulator + MPR")
-set(TRAFFIC_DISPATCH_AFFINITY "9" CACHE STRING "Core 1 (Thread 9) for Router Dispatcher")
-set(TRAFFIC_AVOID_OS_CORES "1" CACHE STRING "Reserved Core 0 (Threads 0, 8) for OS")
+# Hardware Topology Configuration (авто-вычисление — см. cmake/thread-affinity.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/thread-affinity.cmake)
 
 # Add definitions to be visible in C++
 add_compile_definitions(
