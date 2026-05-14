@@ -58,6 +58,22 @@ void TelemetryWorker::SendEvent( common::net::EventType type, uint32_t agent_id,
     pub_socket_.send( zmq::message_t( path.data(), path.size() * sizeof( traffic::EdgeID ) ), zmq::send_flags::none );
 }
 
+void TelemetryWorker::PublishHeatmap( const common::net::HeatmapHeader & hdr,
+                                      std::span< const common::net::HeatmapEntry > entries )
+{
+    if ( entries.empty() ) return;
+
+    std::lock_guard< std::mutex > lock( event_mutex_ );
+
+    // Frame 1: HeatmapHeader (msg_type=2)
+    pub_socket_.send( zmq::message_t( &hdr, sizeof( hdr ) ), zmq::send_flags::sndmore );
+
+    // Frame 2: HeatmapEntry[] packed flat array
+    pub_socket_.send(
+        zmq::message_t( entries.data(), entries.size() * sizeof( common::net::HeatmapEntry ) ),
+        zmq::send_flags::none );
+}
+
 void TelemetryWorker::WorkerLoop()
 {
 #ifdef __linux__

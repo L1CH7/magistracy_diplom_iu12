@@ -5,6 +5,7 @@
 #include <vector>
 #include <array>
 #include <mutex>
+#include <span>
 #include <zmq.hpp>
 
 #include "common/net/telemetry_protocol.hpp"
@@ -47,6 +48,14 @@ public:
     void Publish( const common::net::TelemetryHeader & header );
 
     /**
+     * @brief Publish heatmap volume snapshot (~1Hz).
+     * Sends HeatmapHeader + HeatmapEntry[] as a separate ZMQ multipart message.
+     * Thread-safe (uses event_mutex_).
+     */
+    void PublishHeatmap( const common::net::HeatmapHeader & header,
+                         std::span< const common::net::HeatmapEntry > entries );
+
+    /**
      * @brief Send a discrete event packet (SPAWN/REROUTE) with a path payload.
      * Sent immediately as a separate multi-frame message.
      */
@@ -67,7 +76,7 @@ private:
     std::atomic< bool > keep_running_{ false };
     
     std::thread worker_thread_;
-    std::mutex event_mutex_; // Events are rare, mutex is acceptable here
+    std::mutex event_mutex_; // Events and heatmap are rare, mutex is acceptable here
 };
 
 } // namespace traffic::core

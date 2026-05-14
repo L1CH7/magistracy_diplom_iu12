@@ -256,13 +256,16 @@ class SimulationWorker(QThread):
             url = f"{self.gateway_url}/api/v1/sim/control"
             
             # Prepare payload matching CommandRequest structure
-            # params might contain: num_agents, acceleration, fps, chaos
+            # params might contain: num_agents, acceleration, fps, chaos, asf, duration_sec, respawn_enabled
             payload = {
                 "opcode": self.command,
                 "num_agents": self.params.get("num_agents", 1000),
                 "acceleration": self.params.get("acceleration", 1.0),
                 "fps": self.params.get("fps", 10.0),
-                "chaos": self.params.get("chaos", 0.0)
+                "chaos": self.params.get("chaos", 0.0),
+                "asf": self.params.get("asf", 50),
+                "duration_sec": self.params.get("duration_sec", 0),
+                "respawn_enabled": self.params.get("respawn_enabled", True)
             }
             
             log.info(f"[SimulationWorker] Sending command {self.command} to {url}")

@@ -171,7 +171,10 @@ int main( int argc, char ** argv )
                     }
 
                     engine_running = true;
-                    engine_thread = std::thread([&engine, &engine_running, sim_affinity, num_agents = cmd->num_agents]() {
+                    engine_thread = std::thread([&engine, &engine_running, sim_affinity, num_agents = cmd->num_agents, &telemetry]() {
+                        auto centroid_cache = engine.GetRouterManager().BuildEdgeCentroidCache();
+                        auto last_heatmap_time = std::chrono::steady_clock::now();
+                        const auto heatmap_interval = std::chrono::milliseconds(1000);
 #ifdef __linux__
                         cpu_set_t cpuset_sim;
                         CPU_ZERO(&cpuset_sim);
@@ -199,6 +202,40 @@ int main( int argc, char ** argv )
                             if (accel > 0.0f) {
                                 engine.Step(dt);
                                 engine.UpdateTelemetry();
+
+                                auto now = std::chrono::steady_clock::now();
+                                if (now - last_heatmap_time >= heatmap_interval) {
+                                    last_heatmap_time = now;
+                                    auto* vol_mgr = engine.GetRouterManager().get_volume_manager();
+                                    if (vol_mgr) {
+                                        std::vector<common::net::HeatmapEntry> entries;
+                                        const auto* buckets = vol_mgr->data();
+                                        uint32_t num_nodes = engine.GetRouterManager().num_nodes();
+                                        entries.reserve(num_nodes / 100);
+                                        
+                                        uint32_t current_time_sec = static_cast<uint32_t>(engine.GetCurrentSimTime());
+                                        uint32_t current_idx = (current_time_sec / traffic::router::compute::BUCKET_INTERVAL_SEC) % traffic::router::compute::NUM_BUCKETS;
+                                        uint32_t next_idx = (current_idx + 1) % traffic::router::compute::NUM_BUCKETS;
+
+                                        for (uint32_t edge_id = 0; edge_id < num_nodes; ++edge_id) {
+                                            uint32_t total_volume = buckets[edge_id].volumes[current_idx].load(std::memory_order_relaxed) + 
+                                                                    buckets[edge_id].volumes[next_idx].load(std::memory_order_relaxed);
+                                            if (total_volume > 0) {
+                                                int64_t osm_id = engine.GetRouterManager().get_osm_id(edge_id);
+                                                if (osm_id > 0) {
+                                                    entries.push_back(common::net::HeatmapEntry{
+                                                        static_cast<uint64_t>(osm_id),
+                                                        static_cast<uint16_t>(std::min<uint32_t>(total_volume, 65535)), 100
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        if (!entries.empty()) {
+                                            common::net::HeatmapHeader header{2, 0, 0.0f, static_cast<uint32_t>(entries.size())};
+                                            telemetry.PublishHeatmap(header, std::span<const common::net::HeatmapEntry>(entries));
+                                        }
+                                    }
+                                }
 
                                 auto tick_end = std::chrono::steady_clock::now();
                                 auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(tick_end - tick_start);
@@ -238,7 +275,10 @@ int main( int argc, char ** argv )
                     engine.PauseRouter(false);
 
                     engine_running = true;
-                    engine_thread = std::thread([&engine, &engine_running, sim_affinity]() {
+                    engine_thread = std::thread([&engine, &engine_running, sim_affinity, &telemetry]() {
+                        auto centroid_cache = engine.GetRouterManager().BuildEdgeCentroidCache();
+                        auto last_heatmap_time = std::chrono::steady_clock::now();
+                        const auto heatmap_interval = std::chrono::milliseconds(1000);
 #ifdef __linux__
                         cpu_set_t cpuset_sim;
                         CPU_ZERO(&cpuset_sim);
@@ -269,6 +309,40 @@ int main( int argc, char ** argv )
                             if (accel > 0.0f) {
                                 engine.Step(dt);
                                 engine.UpdateTelemetry();
+
+                                auto now = std::chrono::steady_clock::now();
+                                if (now - last_heatmap_time >= heatmap_interval) {
+                                    last_heatmap_time = now;
+                                    auto* vol_mgr = engine.GetRouterManager().get_volume_manager();
+                                    if (vol_mgr) {
+                                        std::vector<common::net::HeatmapEntry> entries;
+                                        const auto* buckets = vol_mgr->data();
+                                        uint32_t num_nodes = engine.GetRouterManager().num_nodes();
+                                        entries.reserve(num_nodes / 100);
+                                        
+                                        uint32_t current_time_sec = static_cast<uint32_t>(engine.GetCurrentSimTime());
+                                        uint32_t current_idx = (current_time_sec / traffic::router::compute::BUCKET_INTERVAL_SEC) % traffic::router::compute::NUM_BUCKETS;
+                                        uint32_t next_idx = (current_idx + 1) % traffic::router::compute::NUM_BUCKETS;
+
+                                        for (uint32_t edge_id = 0; edge_id < num_nodes; ++edge_id) {
+                                            uint32_t total_volume = buckets[edge_id].volumes[current_idx].load(std::memory_order_relaxed) + 
+                                                                    buckets[edge_id].volumes[next_idx].load(std::memory_order_relaxed);
+                                            if (total_volume > 0) {
+                                                int64_t osm_id = engine.GetRouterManager().get_osm_id(edge_id);
+                                                if (osm_id > 0) {
+                                                    entries.push_back(common::net::HeatmapEntry{
+                                                        static_cast<uint64_t>(osm_id),
+                                                        static_cast<uint16_t>(std::min<uint32_t>(total_volume, 65535)), 100
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        if (!entries.empty()) {
+                                            common::net::HeatmapHeader header{2, 0, 0.0f, static_cast<uint32_t>(entries.size())};
+                                            telemetry.PublishHeatmap(header, std::span<const common::net::HeatmapEntry>(entries));
+                                        }
+                                    }
+                                }
                             } else {
                                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                             }

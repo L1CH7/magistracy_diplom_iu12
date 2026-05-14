@@ -79,3 +79,19 @@ layers:
     show_maxspeed: true   # Show speed limit
     show_surface: true    # Road surface (asphalt/concrete)
     base_width: 2.5
+
+# Маска режимов визуализации.
+# Ленивая загрузка: режим не в списке → гарантированно нет запросов к сервисам.
+# highway_type  — раскраска по типу дороги (существующее поведение)
+# traffic_load  — тепловая карта нагрузки от симулятора
+visualization_modes:
+  - highway_type
+  # - traffic_load   # Раскомментировать для включения тепловой карты
+
+# Настройки тепловой карты (только при traffic_load в visualization_modes)
+traffic_heatmap:
+  capacity_overload_k: 2.0     # При volume > k*capacity → черный цвет
+  update_interval_ms: 1000     # Частота обновления (мс)
+  heatmap_opacity: 0.75        # Прозрачность слоя
+  heatmap_radius: 18           # Радиус ядра (пикселей при zoom=14)
+  heatmap_intensity: 1.0       # Интенсивность плотности

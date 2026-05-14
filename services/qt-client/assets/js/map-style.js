@@ -18,15 +18,39 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
       logger.log_info(`[LOD] ${name}: z${minzoom}-${maxzoom}, highways: ${highways?.length || 0}`);
     }
 
-    // Build color pairs
-    const colorPairs = [];
-    for (const hw of highways) {
-      if (colors[hw]) {
-        colorPairs.push(hw, colors[hw]);
-      }
-    }
+    const capacityOverloadK = 2.0;
+    
+    const fallbackColor = ['match', ['get', 'highway'], 
+        'motorway', '#888888',
+        'motorway_link', '#888888',
+        'trunk', '#777777',
+        'trunk_link', '#777777',
+        'primary', '#666666',
+        'primary_link', '#666666',
+        'secondary', '#555555',
+        'secondary_link', '#555555',
+        'tertiary_link', '#444444',
+        '#333333'
+    ];
 
-    const colorExpression = ['match', ['get', 'highway'], ...colorPairs, '#353535ff'];
+    const trafficLoadColorExpression = [
+        'let',
+        'ratio', ['/', 
+            ['coalesce', ['feature-state', 'volume'], 0], 
+            ['max', ['coalesce', ['feature-state', 'capacity'], 1], 1]
+        ],
+        ['case',
+            ['>', ['coalesce', ['feature-state', 'volume'], 0], 0],
+            ['interpolate',
+                ['linear'],
+                ['var', 'ratio'],
+                0.0, 'hsla(120, 100%, 50%, 0.95)',
+                1.0, 'hsla(0, 100%, 50%, 0.95)',
+                capacityOverloadK, 'hsla(0, 100%, 15%, 0.95)'
+            ],
+            fallbackColor
+        ]
+    ];
 
     // Build line-width based on per-highway target width
     const baseWidth = lod.base_width || 1.0;
@@ -35,8 +59,39 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
       highwayWidthMatch.push(hw, widths[hw] || widths.default || 1.0);
     }
     highwayWidthMatch.push(1.0); // Default multiplier
+    
+    // Casing layer for contrast (rendered under the main layer)
+    const casingLayerDef = {
+      id: `graph-${name}-casing`,
+      type: 'line',
+      source: 'graph-vector',
+      'source-layer': 'ways',
+      minzoom,
+      ...(maxzoom !== undefined && maxzoom !== null ? { maxzoom } : {}),
+      ...(filter !== null ? { filter } : {}),
+      layout: {
+        'line-join': 'round',
+        'line-cap': 'round'
+      },
+      paint: {
+        'line-color': '#111111',
+        'line-opacity': [
+            'case',
+            ['>', ['coalesce', ['feature-state', 'volume'], 0], 0],
+            0.8,
+            0.0
+        ],
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          minzoom, ['+', ['*', baseWidth, 1.2], 1.5],
+          18, ['+', ['*', highwayWidthMatch, 1.5 * 1.2], 2.0]
+        ]
+      }
+    };
+    layers.push(casingLayerDef);
 
-    const layerDef = {
+    // 1. Base layer (colored by feature-state)
+    const baseLayerDef = {
       id: `graph-${name}`,
       type: 'line',
       source: 'graph-vector',
@@ -49,16 +104,25 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
         'line-cap': 'round'
       },
       paint: {
-        'line-color': colorExpression,
+        'line-color': trafficLoadColorExpression,
         'line-width': [
           'interpolate', ['linear'], ['zoom'],
-          minzoom, baseWidth,
-          18, ['*', highwayWidthMatch, 1.5]
+          minzoom, [
+            'case',
+            ['>', ['coalesce', ['feature-state', 'volume'], 0], 0],
+            ['*', baseWidth, 1.2],
+            baseWidth
+          ],
+          18, [
+            'case',
+            ['>', ['coalesce', ['feature-state', 'volume'], 0], 0],
+            ['*', highwayWidthMatch, 1.5 * 1.2],
+            ['*', highwayWidthMatch, 1.5]
+          ]
         ]
       }
     };
-
-    layers.push(layerDef);
+    layers.push(baseLayerDef);
 
     if (show_names && includeLabels) {
       const labelFilter = ['has', 'name'];

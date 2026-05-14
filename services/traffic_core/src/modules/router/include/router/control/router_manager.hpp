@@ -176,6 +176,11 @@ public:
 
     const common::GeometryStore* get_geometry_store() const { return mapped_graph_.geometry_store.get(); }
 
+    int64_t get_osm_id(traffic::NodeID edge_id) const {
+        if (!mapped_graph_.osm_ids_region || edge_id >= num_nodes()) return -1;
+        return static_cast<const int64_t*>(mapped_graph_.osm_ids_region->data())[edge_id];
+    }
+
     // Helpers for benchmarking
     // Helpers for benchmarking
     traffic::PointCount num_nodes() const noexcept;
@@ -199,6 +204,17 @@ public:
     
     // Прямой доступ к менеджеру корзинок для Симулятора
     traffic::router::control::VolumeManager* get_volume_manager() noexcept { return volume_manager_.get(); }
+
+    /**
+     * @brief Построить кэш центроидов рёбер из SpatialGrid (однократно при старте).
+     * @return unordered_map<EdgeID, pair<lon, lat>>
+     */
+    [[nodiscard]] std::unordered_map<traffic::EdgeID, std::pair<float, float>>
+    BuildEdgeCentroidCache() const noexcept
+    {
+        if ( spatial_grid_ ) return spatial_grid_->BuildEdgeCentroidCache();
+        return {};
+    }
 
 private:
     // Вычисляет длину ребра в метрах на основе его реальной геометрии

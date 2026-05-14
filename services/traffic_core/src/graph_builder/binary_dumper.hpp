@@ -22,6 +22,7 @@ struct RamEdge {
 
 struct RamNode {
     int64_t orig_db_id;
+    int64_t osm_way_id;
     float length_m;
     float speed_kmh;
     float t_free_base;

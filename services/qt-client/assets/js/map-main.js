@@ -8,6 +8,7 @@ import { PointsManager } from './points-manager.js';
 import { AgentAnimator } from './agent-animator.js';
 import { MapAPI } from './map-api.js';
 import { connectDataProcessorWS } from './data-ws-client.js';
+import { TrafficHeatmap } from './traffic-heatmap.js';
 
 let mapInitialized = false;
 let map = null;
@@ -78,6 +79,7 @@ export async function initializeMap() {
   // Initialize managers
   pointsManager = new PointsManager(map);
   agentAnimator = new AgentAnimator(map);
+  const trafficHeatmap = new TrafficHeatmap(map);
   mapAPI = new MapAPI(map, pointsManager, agentAnimator);
 
   // Expose globally

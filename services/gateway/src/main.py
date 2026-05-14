@@ -6,6 +6,7 @@ from services.common.config import Settings, config_loader
 from src.proxy import reverse_proxy
 from src.ws_proxy import websocket_proxy
 from loguru import logger
+import json
 
 # Load Global Settings
 settings = Settings()
@@ -15,6 +16,52 @@ import zmq.asyncio
 import struct
 import httpx
 import asyncio
+from fastapi import WebSocketDisconnect
+
+async def zmq_heatmap_subscriber(app: FastAPI):
+    ctx = app.state.zmq_ctx
+    sub_socket = ctx.socket(zmq.SUB)
+    sub_socket.connect("tcp://traffic-core:5556")
+    sub_socket.setsockopt(zmq.SUBSCRIBE, b'')
+    
+    while True:
+        try:
+            frames = await sub_socket.recv_multipart()
+            if not frames or len(frames) < 2:
+                continue
+                
+            header_data = frames[0]
+            if len(header_data) >= 13 and header_data[0] == 2:
+                msg_type, tick_id, sim_time, num_entries = struct.unpack('<BIfI', header_data[:13])
+                
+                if num_entries > 0:
+                    payload = frames[1]
+                    entries = []
+                    for chunk in struct.iter_unpack('<QHH', payload):
+                        entries.append({
+                            "id": chunk[0],
+                            "v": chunk[1],
+                            "c": chunk[2]
+                        })
+                    
+                    msg_text = json.dumps(entries)
+                    disconnected = []
+                    
+                    for ws in app.state.sim_telemetry_clients:
+                        try:
+                            await ws.send_text(msg_text)
+                        except Exception:
+                            disconnected.append(ws)
+                    
+                    for ws in disconnected:
+                        app.state.sim_telemetry_clients.discard(ws)
+                        
+                    # logger.info(f"Broadcasted heatmap with {len(entries)} edges to {len(app.state.sim_telemetry_clients)} clients")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"ZMQ Heatmap Subscriber Error: {e}")
+            await asyncio.sleep(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,11 +76,15 @@ async def lifespan(app: FastAPI):
     app.state.zmq_socket = app.state.zmq_ctx.socket(zmq.REQ)
     app.state.zmq_socket.connect("tcp://traffic-core:5555")
     
+    app.state.sim_telemetry_clients = set()
+    app.state.heatmap_task = asyncio.create_task(zmq_heatmap_subscriber(app))
+    
     yield
     # Cleanup
     await app.state.client.aclose()
     app.state.zmq_socket.close()
     app.state.zmq_ctx.term()
+    app.state.heatmap_task.cancel()
     logger.info("Stopping Gateway Service")
 
 async def send_core_command(app, payload: bytes, timeout: float = 5.0):
@@ -221,6 +272,16 @@ async def ws_data_updates(websocket: WebSocket):
     data_processor_url = settings.services.data_processor.url
     target = data_processor_url.replace("http://", "ws://").replace("https://", "wss://")
     await websocket_proxy(websocket, f"{target}/ws/data_updates")
+
+@app.websocket("/ws/sim_telemetry")
+async def ws_sim_telemetry(websocket: WebSocket):
+    await websocket.accept()
+    websocket.app.state.sim_telemetry_clients.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        websocket.app.state.sim_telemetry_clients.discard(websocket)
 
 # --- Dynamic Route Registration ---
 

@@ -74,10 +74,11 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
 
         // ST_AsBinary(geom) для получения WKB
         auto node_res = work.exec(
-            "SELECT id, length_m, speed_kmh, t_free, lanes, highway, oneway, "
-            "ST_XMin(geom), ST_YMin(geom), ST_XMax(geom), ST_YMax(geom), "
-            "ST_AsBinary(geom) "
-            "FROM graphs.eb_nodes"
+            "SELECT en.id, en.length_m, en.speed_kmh, en.t_free, en.lanes, en.highway, en.oneway, "
+            "ST_XMin(en.geom), ST_YMin(en.geom), ST_XMax(en.geom), ST_YMax(en.geom), "
+            "ST_AsBinary(en.geom), COALESCE(e.osm_way_id, 0) "
+            "FROM graphs.eb_nodes en "
+            "LEFT JOIN graphs.edges e ON en.orig_edge_id = e.id"
         );
 
         ram_nodes_.reserve(node_res.size());
@@ -104,6 +105,8 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             
             n.min_x = row[7].template as<float>(); n.min_y = row[8].template as<float>();
             n.max_x = row[9].template as<float>(); n.max_y = row[10].template as<float>();
+            
+            n.osm_way_id = row[12].template as<int64_t>();
 
             if (n.min_x < global_min_x) global_min_x = n.min_x;
             if (n.min_y < global_min_y) global_min_y = n.min_y;
@@ -338,6 +341,15 @@ std::expected<void, std::string> BinaryDumper::DumpExtendedAttributes() {
             out_attr.write(reinterpret_cast<const char*>(&e.static_weight), sizeof(e.static_weight));
         }
         out_attr.close();
+
+        // Дамп OSM ID
+        DrawProgressBar(25, "Writing osm_ids.bin...");
+        std::ofstream out_osm("/app/data/osm_ids.bin", std::ios::binary);
+        if (!out_osm) return std::unexpected("Cannot write /app/data/osm_ids.bin");
+        for (const auto& n : ram_nodes_) {
+            out_osm.write(reinterpret_cast<const char*>(&n.osm_way_id), sizeof(n.osm_way_id));
+        }
+        out_osm.close();
 
         DrawProgressBar(50, "Writing flat geometry (geometry_flat.bin)...");
         std::ofstream out_geom("/app/data/geometry_flat.bin", std::ios::binary);

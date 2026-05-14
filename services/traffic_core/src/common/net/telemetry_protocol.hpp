@@ -91,6 +91,7 @@ struct CommandAck
  */
 struct TelemetryHeader
 {
+    uint8_t  msg_type = 1;    ///< 1 = agent states, 2 = heatmap volumes
     uint32_t tick_id;
     float current_sim_time;
     float current_tps;
@@ -105,6 +106,30 @@ struct AgentState
     uint32_t agent_id;
     traffic::EdgeID current_edge;
     float pos_meters;
+};
+
+/**
+ * @brief Header for heatmap volume PUB messages (msg_type=2).
+ * Followed by an array of HeatmapEntry.
+ * Sent ~1Hz as a separate ZMQ message (not part of the 25Hz agent telemetry).
+ */
+struct HeatmapHeader
+{
+    uint8_t  msg_type = 2;
+    uint32_t tick_id;
+    float    sim_time;
+    uint32_t num_entries;   ///< Number of HeatmapEntry records following
+};
+
+/**
+ * @brief Single edge heatmap record: centroid + current volume.
+ * Only non-zero volume edges are included.
+ */
+struct HeatmapEntry
+{
+    uint64_t osm_id;    ///< OpenStreetMap Way ID
+    uint16_t volume;    ///< Agent count (clamped to 65535)
+    uint16_t capacity;  ///< Computed capacity (lanes * speed factor), 0 = unknown
 };
 
 /**
