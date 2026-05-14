@@ -95,6 +95,18 @@ std::expected< void, std::string > TrafficEngine::Init( const std::string & data
 
 void TrafficEngine::ResetState()
 {
+    // Ensure the router worker is completely stopped before we start resetting state
+    // to prevent any async queue insertions during clear.
+    bool was_running = keep_running_.load();
+    if (was_running) {
+        keep_running_ = false;
+        router_pool_.SetPaused(false); // wake up if paused
+        router_pool_.ClearTasks();
+        if( router_worker_.joinable() ) {
+            router_worker_.join();
+        }
+    }
+
     router_pool_.ClearTasks();
     router_ep_->Clear();
     mpr_ep_->Clear();
@@ -125,6 +137,12 @@ void TrafficEngine::ResetState()
     {
         route_arena_.flat_edges.reserve( static_cast<size_t>(num_agents_) * 600 );
         route_arena_.flat_etas_sec.reserve( static_cast<size_t>(num_agents_) * 600 );
+    }
+
+    // Restart router worker if it was running
+    if (was_running) {
+        keep_running_ = true;
+        StartRouterWorker();
     }
 }
 

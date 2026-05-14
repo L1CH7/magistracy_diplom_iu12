@@ -19,6 +19,7 @@ struct RouteArena
     {
         uint32_t offset;
         uint16_t length;
+        uint16_t capacity;
     };
 
     std::vector< traffic::EdgeID > flat_edges;
@@ -70,13 +71,13 @@ struct RouteArena
     {
         if( agent_id >= agent_spans.size() )
         {
-            agent_spans.resize( agent_id + 1, { 0, 0 } );
+            agent_spans.resize( agent_id + 1, { 0, 0, 0 } );
         }
 
         Span & span = agent_spans[ agent_id ];
 
-        // If new path fits in existing span, just overwrite to maintain locality (optimistic path)
-        if( new_path.size() <= span.length )
+        // If new path fits in existing span capacity, just overwrite to maintain locality
+        if( new_path.size() <= span.capacity )
         {
             std::copy( new_path.begin(), new_path.end(), flat_edges.begin() + span.offset );
             std::copy( new_etas.begin(), new_etas.end(), flat_etas_sec.begin() + span.offset );
@@ -86,6 +87,7 @@ struct RouteArena
         {
             // Allocate at the end of the flat buffers to ensure contiguous storage for the agent
             span.offset = static_cast< uint32_t >( flat_edges.size() );
+            span.capacity = static_cast< uint16_t >( new_path.size() );
             span.length = static_cast< uint16_t >( new_path.size() );
             
             flat_edges.insert( flat_edges.end(), new_path.begin(), new_path.end() );
