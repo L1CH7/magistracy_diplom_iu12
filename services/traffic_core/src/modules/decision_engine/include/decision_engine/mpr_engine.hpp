@@ -33,7 +33,8 @@ public:
    */
   void Tick(uint32_t current_time_sec, data_provider::AgentPool &pool,
             data_provider::RouteArena &arena,
-            std::vector<traffic::common::net::RouteRequest> &out_requests) {
+            std::vector<traffic::common::net::RouteRequest> &out_requests,
+            int reroute_tokens) {
     // === PHASE 1: Hot Path Scan for delayed agents (AVX2-friendly) ===
     stuck_indices_.clear();
     const size_t agent_count = pool.Size();
@@ -47,13 +48,16 @@ public:
     }
 
     const uint8_t *__restrict active = pool.is_active.data();
+    const uint8_t *__restrict waiting = pool.is_waiting_route.data();
     const uint32_t *__restrict enter_times = pool.edge_enter_time_sec.data();
     const uint16_t *__restrict progress_idxs = pool.route_progress_idx.data();
 
+    int tokens_left = reroute_tokens;
+
 #pragma GCC ivdep
     for (size_t i = 0; i < agent_count; ++i) {
-      if (active[i] ==
-          1) // Only truly active agents (not is_active=2 waiting-for-route)
+      // Only truly active agents that are not already waiting for a route
+      if (active[i] == 1 && waiting[i] == 0)
       {
         const uint32_t elapsed = current_time_sec - enter_times[i];
 
@@ -73,8 +77,11 @@ public:
         if (elapsed > allowed_time) {
           // Anti-Flood Check (30 sim-seconds cooldown)
           if (current_time_sec - last_route_request_time_[i] >= 30.0f) {
-            stuck_indices_.push_back(static_cast<uint32_t>(i));
-            last_route_request_time_[i] = static_cast<float>(current_time_sec);
+            if (tokens_left > 0) {
+              stuck_indices_.push_back(static_cast<uint32_t>(i));
+              last_route_request_time_[i] = static_cast<float>(current_time_sec);
+              tokens_left--;
+            }
           }
         }
       }
@@ -82,8 +89,12 @@ public:
 
     // === PHASE 2: Prepare reroute requests ===
     for (uint32_t idx : stuck_indices_) {
+      pool.is_waiting_route[idx] = 1;
+      pool.route_epoch[idx]++;
+
       traffic::common::net::RouteRequest req;
       req.agent_id = idx;
+      req.epoch = pool.route_epoch[idx];
       req.asf = 1; // Default ASF for rerouting
       req.current_time_sec = current_time_sec;
 

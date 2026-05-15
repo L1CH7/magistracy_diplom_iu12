@@ -61,6 +61,8 @@ public:
     size_t GetTotalCompletedRoutes() const { return total_completed_routes_; }
     float GetCurrentSimTime() const { return current_sim_time_; }
     const std::vector< uint32_t >& GetMaxLiveVolumes() const { return max_live_volumes_; }
+    const uint32_t* GetLiveVolumes() const { return live_edge_volumes_.data(); }
+    uint16_t GetASF() const { return asf_; }
 
     router::control::RouterManager & GetRouterManager() { return router_manager_; }
     data_provider::AgentPool & GetAgentPool() { return agent_pool_; }
@@ -114,6 +116,7 @@ private:
     float current_sim_time_{ 0.0f };
     uint32_t last_mpr_tick_sim_sec_{ 0 };
     uint32_t num_agents_{ 0 };
+    uint16_t asf_{ 1 };
     bool is_initialized_{ false };
 
     // Physics cache

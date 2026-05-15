@@ -18,7 +18,7 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
       logger.log_info(`[LOD] ${name}: z${minzoom}-${maxzoom}, highways: ${highways?.length || 0}`);
     }
 
-    const capacityOverloadK = 2.0;
+    const capacityOverloadK = 4.0;
     
     const fallbackColor = ['match', ['get', 'highway'], 
         'motorway', '#888888',
@@ -45,8 +45,10 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
                 ['linear'],
                 ['var', 'ratio'],
                 0.0, 'hsla(120, 100%, 50%, 0.95)',
+                0.3, 'hsla(60, 100%, 50%, 0.95)',
+                0.6, 'hsla(30, 100%, 50%, 0.95)',
                 1.0, 'hsla(0, 100%, 50%, 0.95)',
-                capacityOverloadK, 'hsla(0, 100%, 15%, 0.95)'
+                capacityOverloadK, 'hsla(0, 0%, 0%, 0.95)'
             ],
             fallbackColor
         ]

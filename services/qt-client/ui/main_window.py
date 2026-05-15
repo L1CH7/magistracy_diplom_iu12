@@ -213,11 +213,17 @@ class MainWindow(QMainWindow, MainWindowHandlers, MainWindowUI):
         # 3. Explicitly set page background to white to prevent "black/system theme" issues
         self.map_widget.page().setBackgroundColor(QColor("white"))
         
-        # 4. Connect map loadFinished signal
+        # 4. Force cache clear to prevent "old client" issues (Switching computers/commits)
+        log.info("[UI] Clearing WebEngine cache and profile data...")
+        self.map_widget.page().profile().clearHttpCache()
+        self.map_widget.page().profile().clearAllVisitedLinks()
+        
+        # 5. Connect map loadFinished signal
         self.map_widget.loadFinished.connect(self._on_map_loaded)
         
-        # 5. Load map HTML via HTTP server
-        map_url = f"http://127.0.0.1:{self._assets_port}/map.html"
+        # 5. Load map HTML via HTTP server (with cache-busting)
+        import time
+        map_url = f"http://127.0.0.1:{self._assets_port}/map.html?v={int(time.time())}"
         log.debug("loading_map_html", url=map_url)
         self.map_widget.load(QUrl(map_url))
         

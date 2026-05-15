@@ -314,12 +314,12 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         std::vector< RouteRequest > requests;
 
         // Test A: Within tolerance (elapsed = 140s, expected = 100s, ratio = 1.4 < 1.5)
-        engine.Tick( 1140, pool, arena, requests );
+        engine.Tick( 1140, pool, arena, requests, 1000 );
         CHECK( requests.empty() );
         MESSAGE("  [OK] No reroute for 1.4x delay.");
 
         // Test B: Exceeds tolerance (elapsed = 160s, expected = 100s, ratio = 1.6 > 1.5)
-        engine.Tick( 1160, pool, arena, requests );
+        engine.Tick( 1160, pool, arena, requests, 1000 );
         REQUIRE( !requests.empty() );
         CHECK( requests[ 0 ].agent_id == agent_id );
         CHECK( requests[ 0 ].waypoints[ 0 ] == 500 );
@@ -355,7 +355,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         }
 
         std::vector< RouteRequest > requests;
-        engine.Tick( current_time, pool, arena, requests );
+        engine.Tick( current_time, pool, arena, requests, 1000 );
         
         CHECK( requests.size() == 5 ); // Only agents 0, 1, 2, 3, 4 should be stuck
         for( size_t i = 0; i < requests.size(); ++i )
