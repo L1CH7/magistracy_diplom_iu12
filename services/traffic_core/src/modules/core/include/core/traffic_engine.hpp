@@ -59,10 +59,19 @@ public:
     size_t GetTotalSuccessfulRoutes() const { return total_successful_routes_; }
     size_t GetTotalFailedRoutes() const { return total_failed_routes_; }
     size_t GetTotalCompletedRoutes() const { return total_completed_routes_; }
+    size_t GetTotalReroutes() const { return reroute_count_.load(); }
+    size_t GetTotalSpawns() const { return total_spawns_.load(); }
+    float  GetTTI() const
+    {
+        uint64_t cnt = tti_count_.load( std::memory_order_relaxed );
+        return ( cnt > 0 ) ? static_cast<float>( tti_sum_ / static_cast<double>( cnt ) ) : 0.0f;
+    }
+    uint64_t GetTTISampleCount() const { return tti_count_.load(); }
     float GetCurrentSimTime() const { return current_sim_time_; }
     const std::vector< uint32_t >& GetMaxLiveVolumes() const { return max_live_volumes_; }
     const uint32_t* GetLiveVolumes() const { return live_edge_volumes_.data(); }
     uint16_t GetASF() const { return asf_; }
+    uint32_t GetNumAgentsConfig() const { return num_agents_; }
 
     router::control::RouterManager & GetRouterManager() { return router_manager_; }
     data_provider::AgentPool & GetAgentPool() { return agent_pool_; }
@@ -99,9 +108,21 @@ private:
     std::atomic< bool >  respawn_enabled_{ true };
     std::atomic< bool >  settings_changed_{ false };
     
+    std::atomic< size_t > reroute_count_{ 0 };
+    std::atomic< uint64_t > total_spawns_{ 0 };
+
     size_t total_successful_routes_{ 0 };
     size_t total_failed_routes_{ 0 };
     size_t total_completed_routes_{ 0 };
+
+    // TTI accumulators — written only from the engine step thread (no data race),
+    // read from daemon thread only during STATS command (rare, acceptable torn read for diagnostics)
+    std::atomic< uint64_t > tti_count_{ 0 };
+    double                  tti_sum_{ 0.0 };
+
+    // Per-agent free-flow trip cost (set on first successful route, used on trip completion for TTI)
+    std::vector< float > trip_free_flow_sec_;
+    std::vector< float > trip_spawn_sim_time_;
 
     // Telemetry & Throttling
     class TelemetryWorker * telemetry_worker_{ nullptr };

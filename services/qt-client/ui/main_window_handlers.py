@@ -654,12 +654,7 @@ class MainWindowHandlers:
         """Handle settings apply (accel, fps, etc.)."""
         from loguru import logger
         logger.info(f"Applying dynamic settings: {params}")
-        api_params = {
-            "acceleration": params.get("accel", 1.0),
-            "fps": params.get("fps", 10.0),
-            "chaos": params.get("chaos", 0.0)
-        }
-        self._run_sim_worker(3, api_params) # Opcode 3: SET_SPEED
+        self._run_sim_worker(3, params) # Opcode 3: SET_SPEED
 
     def _run_sim_worker(self, opcode: int, params: dict):
         """Internal helper to spawn simulation worker (Native Qt Management with Lockout)."""

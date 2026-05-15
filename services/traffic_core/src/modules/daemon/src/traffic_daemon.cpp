@@ -194,6 +194,11 @@ int main( int argc, char ** argv )
                             LOG_INFO("Engine already warmed up with {} agents, resuming...", active);
                         }
 
+                        // EMA buffer: сглаживает «рваность» live_volumes, визуально имитируя распространение очереди
+                        const uint32_t hm_nodes = engine.GetRouterManager().num_nodes();
+                        std::vector<float> heatmap_smooth(hm_nodes, 0.0f);
+                        constexpr float HEATMAP_ALPHA = 0.1f;
+
                         float dt = 5.0f;
                         while (engine_running) {
                             auto tick_start = std::chrono::steady_clock::now();
@@ -206,33 +211,52 @@ int main( int argc, char ** argv )
                                 auto now = std::chrono::steady_clock::now();
                                 if (now - last_heatmap_time >= heatmap_interval) {
                                     last_heatmap_time = now;
-                                    auto* vol_mgr = engine.GetRouterManager().get_volume_manager();
-                                    if (vol_mgr) {
-                                        std::vector<common::net::HeatmapEntry> entries;
-                                        const auto* buckets = vol_mgr->data();
-                                        uint32_t num_nodes = engine.GetRouterManager().num_nodes();
-                                        entries.reserve(num_nodes / 100);
-                                        
-                                        uint32_t current_time_sec = static_cast<uint32_t>(engine.GetCurrentSimTime());
-                                        uint32_t current_idx = (current_time_sec / traffic::router::compute::BUCKET_INTERVAL_SEC) % traffic::router::compute::NUM_BUCKETS;
-                                        uint32_t next_idx = (current_idx + 1) % traffic::router::compute::NUM_BUCKETS;
+                                    const uint32_t* live_volumes = engine.GetLiveVolumes();
+                                    if (live_volumes) {
+                                        auto& rm = engine.GetRouterManager();
 
-                                        for (uint32_t edge_id = 0; edge_id < num_nodes; ++edge_id) {
-                                            uint32_t total_volume = buckets[edge_id].volumes[current_idx].load(std::memory_order_relaxed) + 
-                                                                    buckets[edge_id].volumes[next_idx].load(std::memory_order_relaxed);
-                                            if (total_volume > 0) {
-                                                int64_t osm_id = engine.GetRouterManager().get_osm_id(edge_id);
-                                                if (osm_id > 0) {
-                                                    entries.push_back(common::net::HeatmapEntry{
-                                                        static_cast<uint64_t>(osm_id),
-                                                        static_cast<uint16_t>(std::min<uint32_t>(total_volume, 65535)), 100
-                                                    });
-                                                }
-                                            }
+                                        // EMA: decay previous + blend current live data
+                                        float peak_smooth = 0.0f;
+                                        for (uint32_t i = 0; i < hm_nodes; ++i) {
+                                            heatmap_smooth[i] = HEATMAP_ALPHA * static_cast<float>(live_volumes[i])
+                                                              + (1.0f - HEATMAP_ALPHA) * heatmap_smooth[i];
+                                            if (heatmap_smooth[i] > peak_smooth) peak_smooth = heatmap_smooth[i];
                                         }
-                                        if (!entries.empty()) {
-                                            common::net::HeatmapHeader header{2, 0, 0.0f, static_cast<uint32_t>(entries.size())};
-                                            telemetry.PublishHeatmap(header, std::span<const common::net::HeatmapEntry>(entries));
+
+                                        if (peak_smooth >= 0.5f) {
+                                            const auto* kmagic_ptr = rm.get_kmagic_ptr();
+                                            const auto* static_weights = rm.get_view().static_weights;
+                                            const uint32_t asf = engine.GetASF();
+
+                                            std::vector<common::net::HeatmapEntry> entries;
+                                            entries.reserve(hm_nodes / 50);
+
+                                            for (uint32_t edge_id = 0; edge_id < hm_nodes; ++edge_id) {
+                                                const auto sv = static_cast<uint32_t>(std::ceil(heatmap_smooth[edge_id]));
+                                                if (sv == 0) continue;
+                                                const int64_t osm_id = rm.get_osm_id(edge_id);
+                                                if (osm_id <= 0) continue;
+
+                                                uint32_t vol_cars = sv * asf;
+                                                uint16_t true_cap = 1;
+                                                if (kmagic_ptr && static_weights && kmagic_ptr[edge_id] > 0) {
+                                                    float cap_f = std::sqrt(1048576.0f * static_cast<float>(static_weights[edge_id]) / static_cast<float>(kmagic_ptr[edge_id]));
+                                                    true_cap = static_cast<uint16_t>(std::min<float>(cap_f, 65535.0f));
+                                                }
+                                                if (true_cap == 0) true_cap = 1;
+
+                                                entries.push_back(common::net::HeatmapEntry{
+                                                    static_cast<uint64_t>(osm_id),
+                                                    static_cast<uint16_t>(std::min<uint32_t>(vol_cars, 65535u)),
+                                                    true_cap
+                                                });
+                                            }
+                                            if (!entries.empty()) {
+                                                LOG_INFO("Heatmap: {} entries, peak_smooth_agents={:.2f}",
+                                                         entries.size(), peak_smooth);
+                                                common::net::HeatmapHeader header{2, 0, 0.0f, static_cast<uint32_t>(entries.size())};
+                                                telemetry.PublishHeatmap(header, std::span<const common::net::HeatmapEntry>(entries));
+                                            }
                                         }
                                     }
                                 }
@@ -298,6 +322,11 @@ int main( int argc, char ** argv )
                             LOG_INFO("Engine resuming with {} agents", active);
                         }
 
+                        // EMA buffer для RESUME (идентично START блоку)
+                        const uint32_t hm_nodes_r = engine.GetRouterManager().num_nodes();
+                        std::vector<float> heatmap_smooth_r(hm_nodes_r, 0.0f);
+                        constexpr float HEATMAP_ALPHA_R = 0.1f;
+
                         auto last_time = std::chrono::steady_clock::now();
                         while (engine_running) {
                             auto now = std::chrono::steady_clock::now();
@@ -313,35 +342,51 @@ int main( int argc, char ** argv )
                                 auto now = std::chrono::steady_clock::now();
                                 if (now - last_heatmap_time >= heatmap_interval) {
                                     last_heatmap_time = now;
-                                    auto* vol_mgr = engine.GetRouterManager().get_volume_manager();
-                                    if (vol_mgr) {
-                                        std::vector<common::net::HeatmapEntry> entries;
-                                        const auto* buckets = vol_mgr->data();
-                                        uint32_t num_nodes = engine.GetRouterManager().num_nodes();
-                                        entries.reserve(num_nodes / 100);
-                                        
-                                        uint32_t current_time_sec = static_cast<uint32_t>(engine.GetCurrentSimTime());
-                                        uint32_t current_idx = (current_time_sec / traffic::router::compute::BUCKET_INTERVAL_SEC) % traffic::router::compute::NUM_BUCKETS;
-                                        uint32_t next_idx = (current_idx + 1) % traffic::router::compute::NUM_BUCKETS;
+                                    const uint32_t* live_volumes = engine.GetLiveVolumes();
+                                    if (live_volumes) {
+                                        auto& rm = engine.GetRouterManager();
 
-                                        for (uint32_t edge_id = 0; edge_id < num_nodes; ++edge_id) {
-                                            uint32_t total_volume = buckets[edge_id].volumes[current_idx].load(std::memory_order_relaxed) + 
-                                                                    buckets[edge_id].volumes[next_idx].load(std::memory_order_relaxed);
-                                            if (total_volume > 0) {
-                                                int64_t osm_id = engine.GetRouterManager().get_osm_id(edge_id);
-                                                if (osm_id > 0) {
-                                                    uint32_t capacity = engine.GetRouterManager().get_edge_capacity(edge_id);
-                                                    entries.push_back(common::net::HeatmapEntry{
-                                                        static_cast<uint64_t>(osm_id),
-                                                        static_cast<uint16_t>(std::min<uint32_t>(total_volume, 65535)),
-                                                        static_cast<uint16_t>(std::min<uint32_t>(capacity, 65535))
-                                                    });
-                                                }
-                                            }
+                                        float peak_smooth_r = 0.0f;
+                                        for (uint32_t i = 0; i < hm_nodes_r; ++i) {
+                                            heatmap_smooth_r[i] = HEATMAP_ALPHA_R * static_cast<float>(live_volumes[i])
+                                                                + (1.0f - HEATMAP_ALPHA_R) * heatmap_smooth_r[i];
+                                            if (heatmap_smooth_r[i] > peak_smooth_r) peak_smooth_r = heatmap_smooth_r[i];
                                         }
-                                        if (!entries.empty()) {
-                                            common::net::HeatmapHeader header{2, 0, 0.0f, static_cast<uint32_t>(entries.size())};
-                                            telemetry.PublishHeatmap(header, std::span<const common::net::HeatmapEntry>(entries));
+
+                                        if (peak_smooth_r >= 0.5f) {
+                                            const auto* kmagic_ptr = rm.get_kmagic_ptr();
+                                            const auto* static_weights = rm.get_view().static_weights;
+                                            const uint32_t asf = engine.GetASF();
+
+                                            std::vector<common::net::HeatmapEntry> entries;
+                                            entries.reserve(hm_nodes_r / 50);
+
+                                            for (uint32_t edge_id = 0; edge_id < hm_nodes_r; ++edge_id) {
+                                                const auto sv = static_cast<uint32_t>(std::ceil(heatmap_smooth_r[edge_id]));
+                                                if (sv == 0) continue;
+                                                const int64_t osm_id = rm.get_osm_id(edge_id);
+                                                if (osm_id <= 0) continue;
+
+                                                uint32_t vol_cars = sv * asf;
+                                                uint16_t true_cap = 1;
+                                                if (kmagic_ptr && static_weights && kmagic_ptr[edge_id] > 0) {
+                                                    float cap_f = std::sqrt(1048576.0f * static_cast<float>(static_weights[edge_id]) / static_cast<float>(kmagic_ptr[edge_id]));
+                                                    true_cap = static_cast<uint16_t>(std::min<float>(cap_f, 65535.0f));
+                                                }
+                                                if (true_cap == 0) true_cap = 1;
+
+                                                entries.push_back(common::net::HeatmapEntry{
+                                                    static_cast<uint64_t>(osm_id),
+                                                    static_cast<uint16_t>(std::min<uint32_t>(vol_cars, 65535u)),
+                                                    true_cap
+                                                });
+                                            }
+                                            if (!entries.empty()) {
+                                                LOG_INFO("Heatmap(R): {} entries, peak_agents={:.2f}",
+                                                         entries.size(), peak_smooth_r);
+                                                common::net::HeatmapHeader header{2, 0, 0.0f, static_cast<uint32_t>(entries.size())};
+                                                telemetry.PublishHeatmap(header, std::span<const common::net::HeatmapEntry>(entries));
+                                            }
                                         }
                                     }
                                 }
@@ -371,6 +416,29 @@ int main( int argc, char ** argv )
                     LOG_INFO("Command: STEP");
                     engine.Step(0.1f);
                     break;
+
+                case common::net::CommandOpcode::STATS:
+                {
+                    // For diagnostic purposes, return a JSON string instead of standard Ack
+                    std::ostringstream json;
+                    json << "{";
+                    json << "\"sim_time\":" << engine.GetCurrentSimTime() << ",";
+                    json << "\"active_agents\":" << engine.GetActiveAgents() << ",";
+                    json << "\"total_spawns\":" << engine.GetTotalSpawns() << ",";
+                    json << "\"reroutes\":" << engine.GetTotalReroutes() << ",";
+                    json << "\"routes_computed\":" << engine.GetRoutesComputed() << ",";
+                    json << "\"routes_completed\":" << engine.GetTotalCompletedRoutes() << ",";
+                    json << "\"routes_failed\":" << engine.GetTotalFailedRoutes() << ",";
+                    json << "\"tti_global\":" << engine.GetTTI() << ",";
+                    json << "\"tti_samples\":" << engine.GetTTISampleCount() << ",";
+                    json << "\"current_accel\":" << engine.GetCurrentAcceleration() << ",";
+                    json << "\"asf\":" << engine.GetASF() << ",";
+                    json << "\"configured_agents\":" << engine.GetNumAgentsConfig();
+                    json << "}";
+                    std::string payload = json.str();
+                    rep_socket.send( zmq::message_t( payload.data(), payload.size() ), zmq::send_flags::none );
+                    continue; // Skip standard Ack
+                }
 
                 case common::net::CommandOpcode::ROUTE_ONE_OFF:
                 {

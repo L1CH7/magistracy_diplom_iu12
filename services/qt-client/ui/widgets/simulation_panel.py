@@ -197,11 +197,7 @@ class SimulationPanel(QWidget):
 
     def _on_apply_clicked(self):
         """Handle Apply button click."""
-        params = {
-            "acceleration": self.sim_speed_spin.value(),
-            "fps": self.fps_spin.value(),
-            "chaos": self.chaos_spin.value()
-        }
+        params = self.get_sim_params()
         log.info(f"Apply sim settings: {params}")
         self.apply_clicked.emit(params)
 

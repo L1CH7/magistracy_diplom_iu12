@@ -126,12 +126,18 @@ void TrafficEngine::ResetState()
     total_completed_routes_ = 0;
     total_successful_routes_ = 0;
     total_failed_routes_ = 0;
+    reroute_count_.store(0);
+    total_spawns_.store(0);
+    tti_count_.store(0);
+    tti_sum_ = 0.0;
     current_sim_time_ = 0.0f;
     last_mpr_tick_sim_sec_ = 0;
     
     std::fill( live_edge_volumes_.begin(), live_edge_volumes_.end(), 0 );
     std::fill( max_live_volumes_.begin(), max_live_volumes_.end(), 0 );
     std::fill( agent_pool_.is_active.begin(), agent_pool_.is_active.end(), 0 );
+    std::fill( trip_free_flow_sec_.begin(), trip_free_flow_sec_.end(), 0.0f );
+    std::fill( trip_spawn_sim_time_.begin(), trip_spawn_sim_time_.end(), 0.0f );
 
     if( num_agents_ > 0 )
     {
@@ -167,14 +173,13 @@ void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf, const std::v
 
     // RouteArena resizes automatically in UpdateRoute
 
+    // Allocate per-agent trip tracking buffers
+    trip_free_flow_sec_.assign( num_agents, 0.0f );
+    trip_spawn_sim_time_.assign( num_agents, 0.0f );
+
     // Send initial paths computation
     mpr_ep_->Send( initial_requests );
 
-    // Task 1: Fix physics initialization
-    // - [x] Update `traffic_engine.cpp`
-    // - [x] Initialize `max_live_volumes_` in `Init()`
-    // - [x] Pass `max_live_volumes_.data()` in `MakePhysicsContext()`
-    // - [x] Update peak volumes in `HandleResponses()` for initial activation
     for( uint32_t i = 0; i < num_agents; ++i )
     {
         float length = router_manager_.get_edge_length( agent_pool_.current_edge[ i ] );
@@ -280,19 +285,46 @@ void TrafficEngine::Step( float dt )
     int sub_steps = std::max(1, static_cast<int>(std::ceil(dt / MAX_SAFE_DT)));
     float actual_dt = dt / static_cast<float>(sub_steps);
 
+    std::vector<uint32_t> completed_agents_buf;
+
     for (int i = 0; i < sub_steps; ++i)
     {
         kin_system_.AdvanceKinematics( actual_dt );
-        total_completed_routes_ += kin_system_.ProcessTransitions(
-            MakePhysicsContext( static_cast< uint32_t >( current_sim_time_ ) )
-        );
+        auto ctx = MakePhysicsContext( static_cast< uint32_t >( current_sim_time_ ) );
+        ctx.completed_agents_out = &completed_agents_buf;
+        
+        total_completed_routes_ += kin_system_.ProcessTransitions( ctx );
         current_sim_time_ += actual_dt;
+
+        // Process completed agents for TTI calculation
+        if (!completed_agents_buf.empty()) {
+            double local_tti_sum = 0.0;
+            uint32_t local_tti_count = 0;
+
+            for (uint32_t agent_id : completed_agents_buf) {
+                float free_flow = trip_free_flow_sec_[agent_id];
+                float real_time = current_sim_time_ - trip_spawn_sim_time_[agent_id];
+                
+                if (free_flow > 1.0f && real_time > 1.0f) {
+                    local_tti_sum += static_cast<double>(real_time / free_flow);
+                    local_tti_count++;
+                }
+            }
+
+            if (local_tti_count > 0) {
+                tti_count_.fetch_add(local_tti_count, std::memory_order_relaxed);
+                // Simple non-atomic sum since this is the only writer thread (engine step)
+                tti_sum_ += local_tti_sum;
+            }
+            completed_agents_buf.clear();
+        }
     }
 
     // Phase 2: Decision Making (MPR - Mesoscopic Path Rerouting)
     uint32_t sim_sec = static_cast< uint32_t >( current_sim_time_ );
-    if( sim_sec > last_mpr_tick_sim_sec_ )
+    while( sim_sec > last_mpr_tick_sim_sec_ )
     {
+        last_mpr_tick_sim_sec_++;
         // Допустим, роутер держит 4000 QPS. 
         // ticks_per_real_sec = 25.0f * (accel / 10.0f);
         // tokens_this_tick = 4000 / ticks_per_real_sec;
@@ -300,7 +332,7 @@ void TrafficEngine::Step( float dt )
         int reroute_tokens = std::max(1, static_cast<int>(4000.0f / (25.0f * (accel / 10.0f))));
 
         mpr_requests_buffer_.clear();
-        mpr_engine_->Tick( sim_sec, agent_pool_, route_arena_, mpr_requests_buffer_, reroute_tokens );
+        mpr_engine_->Tick( last_mpr_tick_sim_sec_, agent_pool_, route_arena_, mpr_requests_buffer_, reroute_tokens );
 
         if( !mpr_requests_buffer_.empty() )
         {
@@ -311,12 +343,11 @@ void TrafficEngine::Step( float dt )
                 {
                     auto path = route_arena_.GetRoute( req.agent_id );
                     auto etas = route_arena_.GetEtas( req.agent_id );
-                    if( !path.empty() ) vol_mgr->unbook_route( path, etas, 1 );
+                    if( !path.empty() ) vol_mgr->unbook_route( path, etas, asf_ );
                 }
             }
             mpr_ep_->Send( mpr_requests_buffer_ );
         }
-        last_mpr_tick_sim_sec_ = sim_sec;
     }
 
     // Сдвигаем окно времени в корзинках, чтобы зачистить прошедший трафик
@@ -489,7 +520,7 @@ void TrafficEngine::StartRouterWorker()
 void TrafficEngine::HandleResponses()
 {
     std::vector< RouteResponse > incoming_resps;
-    if( mpr_ep_->Receive( incoming_resps ) )
+    while( mpr_ep_->Receive( incoming_resps ) )
     {
         for( const auto & r : incoming_resps )
         {
@@ -504,33 +535,50 @@ void TrafficEngine::HandleResponses()
 
             if( r.success )
             {
+                const bool was_active = ( agent_pool_.is_active[ r.agent_id ] == 1 );
+
+                // Reroute counter: agent already had a route and is getting a new one
+                if( was_active )
+                    reroute_count_.fetch_add( 1, std::memory_order_relaxed );
+                else
+                    total_spawns_.fetch_add( 1, std::memory_order_relaxed );
+
                 total_successful_routes_++;
                 route_arena_.UpdateRoute( r.agent_id,
                                           { r.path.data(), r.path_len },
                                           { r.edge_etas_sec.data(), r.path_len } );
+
+                // TTI: record TRUE free-flow trip cost
+                if( r.path_len > 0 )
+                {
+                    auto view = router_manager_.get_view();
+                    float free_flow_sec = 0.0f;
+                    for (size_t k = 0; k < r.path_len; ++k) {
+                        free_flow_sec += static_cast<float>(view.static_weights[r.path[k]]);
+                    }
+                    trip_free_flow_sec_[ r.agent_id ] = free_flow_sec;
+                    trip_spawn_sim_time_[ r.agent_id ] = current_sim_time_;
+                }
 
                 auto vol_mgr = router_manager_.get_volume_manager();
                 if( vol_mgr )
                 {
                     vol_mgr->book_route( route_arena_.GetRoute( r.agent_id ),
                                          route_arena_.GetEtas( r.agent_id ),
-                                         1 /* weight */ );
+                                         asf_ );
                 }
 
-                // Task 3: Unconditional reset to prevent race conditions
                 agent_pool_.route_progress_idx[ r.agent_id ] = 0;
                 agent_pool_.edge_enter_time_sec[ r.agent_id ] = static_cast< uint32_t >( current_sim_time_ );
 
-                // Маршрут получен. Обновляем геометрию начальный ребра и скорость по BPR.
                 traffic::EdgeID first_edge = route_arena_.GetRoute( r.agent_id )[ 0 ];
                 float first_len = edge_lengths_cache_.empty()
                                       ? router_manager_.get_edge_length( first_edge )
                                       : edge_lengths_cache_[ first_edge ];
-                agent_pool_.inv_edge_length_m[ r.agent_id ] =
-                    ( first_len > 0.001f ) ? ( 1.0f / first_len ) : 1.0f;
+                if( first_len < 0.1f ) first_len = 0.1f;
+                agent_pool_.inv_edge_length_m[ r.agent_id ] = 1.0f / first_len;
 
-                // Увеличиваем счетчик реальной загрузки только если агент только что активировался (чтобы не дублировать при MPR-рероутах)
-                if( agent_pool_.is_active[ r.agent_id ] != 1 )
+                if( !was_active )
                 {
                     live_edge_volumes_[ first_edge ]++;
                     if( live_edge_volumes_[ first_edge ] > max_live_volumes_[ first_edge ] )
@@ -544,7 +592,6 @@ void TrafficEngine::HandleResponses()
                     first_len
                 );
 
-                // Notify Telemetry of new path
                 if( telemetry_worker_ )
                 {
                     telemetry_worker_->SendEvent( 
@@ -578,6 +625,7 @@ data_provider::PhysicsContext TrafficEngine::MakePhysicsContext( uint32_t time_s
 {
     data_provider::PhysicsContext ctx;
     ctx.current_time_sec = time_sec;
+    ctx.asf = asf_;
     ctx.edge_lengths_m = edge_lengths_cache_.empty() ? nullptr : edge_lengths_cache_.data();
     ctx.live_volumes   = const_cast< uint32_t * >( live_edge_volumes_.data() );
     ctx.max_volumes    = const_cast< uint32_t * >( max_live_volumes_.data() );

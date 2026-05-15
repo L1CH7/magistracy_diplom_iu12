@@ -51,8 +51,8 @@ export class TrafficHeatmap {
     updateHeatmap(data) {
         if (!this.map.isStyleLoaded()) return;
 
-        // Clear old states
-        this.map.removeFeatureState({ source: 'graph-vector', sourceLayer: 'ways' });
+        // Clear old states - disabled to prevent flickering/holey map
+        // this.map.removeFeatureState({ source: 'graph-vector', sourceLayer: 'ways' });
 
         if (!this.loggedOnce && data.length > 0) {
             logToPython(`[Heatmap] First update applied to ${data.length} active edges. Sample OSM ID: ${data[0].id}, Vol: ${data[0].v}, Cap: ${data[0].c}`);

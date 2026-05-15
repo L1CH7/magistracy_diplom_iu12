@@ -22,7 +22,8 @@ enum class CommandOpcode : uint8_t
     ROUTE_ONE_OFF = 5,
     STEP = 6,
     PAUSE = 7,
-    RESUME = 8
+    RESUME = 8,
+    STATS = 9   ///< Request engine diagnostics, response is JSON text (not binary ACK)
 };
 
 /**
