@@ -330,9 +330,11 @@ int main( int argc, char ** argv )
                                             if (total_volume > 0) {
                                                 int64_t osm_id = engine.GetRouterManager().get_osm_id(edge_id);
                                                 if (osm_id > 0) {
+                                                    uint32_t capacity = engine.GetRouterManager().get_edge_capacity(edge_id);
                                                     entries.push_back(common::net::HeatmapEntry{
                                                         static_cast<uint64_t>(osm_id),
-                                                        static_cast<uint16_t>(std::min<uint32_t>(total_volume, 65535)), 100
+                                                        static_cast<uint16_t>(std::min<uint32_t>(total_volume, 65535)),
+                                                        static_cast<uint16_t>(std::min<uint32_t>(capacity, 65535))
                                                     });
                                                 }
                                             }

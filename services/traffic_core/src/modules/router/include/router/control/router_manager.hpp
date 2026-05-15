@@ -10,6 +10,7 @@
 #include <expected>
 #include <memory>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #include <format>
 
@@ -179,6 +180,91 @@ public:
     int64_t get_osm_id(traffic::NodeID edge_id) const {
         if (!mapped_graph_.osm_ids_region || edge_id >= num_nodes()) return -1;
         return static_cast<const int64_t*>(mapped_graph_.osm_ids_region->data())[edge_id];
+    }
+
+    /**
+     * @brief Вернуть вместимость ребра (кол-во машин) по запечённым lanes, length_m и speed_kmh.
+     *
+     * Формула динамического слота (Правило N секунд):
+     *   slot_m = CAR_LENGTH_M + (speed_mps * safe_time_sec)
+     *   capacity = floor(length_m / slot_m) * lanes
+     *
+     * Пороги и константы задаются через cmake/options.cmake:
+     *   TRAFFIC_CAR_LENGTH_M, TRAFFIC_SAFE_TIME_{HIGHWAY,URBAN,DENSE}_SEC,
+     *   TRAFFIC_SPEED_{HIGHWAY,DENSE}_KMH, TRAFFIC_DEFAULT_LANES
+     *
+     * Структура attributes.bin per-node (stride=28 байт, заголовок 8 байт):
+     *   offset 0: float  speed_kmh
+     *   offset 4: uint8  lanes
+     *   offset 5: uint8  highway_class
+     *   offset 6: uint8  oneway
+     *   offset 7: uint8  pad
+     *   offset 8: float  length_m
+     *   offset 12: float t_free_base
+     *   offset 16: int32 k_magic
+     *   offset 20: float min_x
+     *   offset 24: float min_y
+     */
+    [[nodiscard]] uint32_t get_edge_capacity(traffic::NodeID edge_id) const noexcept {
+        // Compile-time constants from cmake/options.cmake
+#ifndef TRAFFIC_CAR_LENGTH_M
+#  define TRAFFIC_CAR_LENGTH_M 7
+#endif
+#ifndef TRAFFIC_SAFE_TIME_HIGHWAY_SEC
+#  define TRAFFIC_SAFE_TIME_HIGHWAY_SEC 3
+#endif
+#ifndef TRAFFIC_SAFE_TIME_URBAN_SEC
+#  define TRAFFIC_SAFE_TIME_URBAN_SEC 2
+#endif
+#ifndef TRAFFIC_SAFE_TIME_DENSE_SEC
+#  define TRAFFIC_SAFE_TIME_DENSE_SEC 15   // x10: 1.5 sec
+#endif
+#ifndef TRAFFIC_SPEED_HIGHWAY_KMH
+#  define TRAFFIC_SPEED_HIGHWAY_KMH 90
+#endif
+#ifndef TRAFFIC_SPEED_DENSE_KMH
+#  define TRAFFIC_SPEED_DENSE_KMH 40
+#endif
+#ifndef TRAFFIC_DEFAULT_LANES
+#  define TRAFFIC_DEFAULT_LANES 1
+#endif
+        constexpr float  CAR_LEN_M        = static_cast<float>(TRAFFIC_CAR_LENGTH_M);
+        constexpr float  T_HIGHWAY        = static_cast<float>(TRAFFIC_SAFE_TIME_HIGHWAY_SEC);
+        constexpr float  T_URBAN          = static_cast<float>(TRAFFIC_SAFE_TIME_URBAN_SEC);
+        constexpr float  T_DENSE          = static_cast<float>(TRAFFIC_SAFE_TIME_DENSE_SEC) / 10.0f;
+        constexpr float  SPD_HIGHWAY      = static_cast<float>(TRAFFIC_SPEED_HIGHWAY_KMH);
+        constexpr float  SPD_DENSE        = static_cast<float>(TRAFFIC_SPEED_DENSE_KMH);
+        constexpr uint8_t DEF_LANES       = static_cast<uint8_t>(TRAFFIC_DEFAULT_LANES);
+
+        constexpr size_t HEADER_SIZE  = 8;   // num_nodes(4) + num_edges(4)
+        constexpr size_t NODE_STRIDE  = 28;
+        constexpr size_t SPD_OFFSET   = 0;
+        constexpr size_t LANES_OFFSET = 4;
+        constexpr size_t LEN_OFFSET   = 8;
+
+        if (!mapped_graph_.attributes_region || edge_id >= num_nodes()) return 1u;
+        const uint8_t* ptr = static_cast<const uint8_t*>(mapped_graph_.attributes_region->data())
+                             + HEADER_SIZE + edge_id * NODE_STRIDE;
+
+        float speed_kmh = 0.0f;
+        std::memcpy(&speed_kmh, ptr + SPD_OFFSET, sizeof(float));
+
+        uint8_t lanes = ptr[LANES_OFFSET];
+        if (lanes == 0) lanes = DEF_LANES;
+
+        float length_m = 0.0f;
+        std::memcpy(&length_m, ptr + LEN_OFFSET, sizeof(float));
+        if (length_m <= 0.0f) return static_cast<uint32_t>(lanes);
+
+        // Правило N секунд: безопасная дистанция зависит от скоростного режима
+        float safe_t = T_URBAN;
+        if      (speed_kmh >= SPD_HIGHWAY) safe_t = T_HIGHWAY;
+        else if (speed_kmh <= SPD_DENSE)   safe_t = T_DENSE;
+
+        float speed_mps   = speed_kmh / 3.6f;
+        float slot_m      = CAR_LEN_M + speed_mps * safe_t;
+        uint32_t cap      = static_cast<uint32_t>(length_m / slot_m) * lanes;
+        return std::max<uint32_t>(cap, 1u);
     }
 
     // Helpers for benchmarking

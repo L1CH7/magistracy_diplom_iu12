@@ -12,6 +12,22 @@ set(TRAFFIC_MPR_TOLERANCE_DEN 2 CACHE STRING "MPR ETA Tolerance Denominator (e.g
 set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteResponse POD")
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
 
+# === Capacity / BPR Physics Constants ===
+# Физический размер одной машины (корпус + минимальный зазор) в метрах
+set(TRAFFIC_CAR_LENGTH_M 7 CACHE STRING "Physical car slot length in meters (body + min gap)")
+# Время реакции водителя (сек) для расчёта дистанции на высокой скорости (магистраль ≥ 90 км/ч)
+set(TRAFFIC_SAFE_TIME_HIGHWAY_SEC 3 CACHE STRING "Safe following time on highway (speed >= 90 km/h), seconds")
+# Время реакции для городских дорог (40–90 км/ч)
+set(TRAFFIC_SAFE_TIME_URBAN_SEC 2 CACHE STRING "Safe following time in urban flow (40-90 km/h), seconds")
+# Время реакции для плотной застройки / пробок (≤ 40 км/ч)
+set(TRAFFIC_SAFE_TIME_DENSE_SEC 15 CACHE STRING "Safe following time in dense/jam flow (speed <= 40 km/h), seconds x10 (1.5s)")
+# Порог скорости (км/ч) разделяющий магистраль и город
+set(TRAFFIC_SPEED_HIGHWAY_KMH 90 CACHE STRING "Speed threshold for highway capacity calc, km/h")
+# Порог скорости (км/ч) разделяющий городской и плотный поток
+set(TRAFFIC_SPEED_DENSE_KMH 40 CACHE STRING "Speed threshold for dense/jam capacity calc, km/h")
+# Дефолтное кол-во полос если поле lanes = NULL в OSM
+set(TRAFFIC_DEFAULT_LANES 1 CACHE STRING "Default number of lanes when OSM lanes tag is missing")
+
 # Hardware Topology Configuration (авто-вычисление — см. cmake/thread-affinity.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/thread-affinity.cmake)
 
@@ -30,4 +46,12 @@ add_compile_definitions(
     TRAFFIC_SIM_AFFINITY=${TRAFFIC_SIM_AFFINITY}
     TRAFFIC_DISPATCH_AFFINITY=${TRAFFIC_DISPATCH_AFFINITY}
     TRAFFIC_AVOID_OS_CORES=${TRAFFIC_AVOID_OS_CORES}
+    # Capacity / BPR Physics
+    TRAFFIC_CAR_LENGTH_M=${TRAFFIC_CAR_LENGTH_M}
+    TRAFFIC_SAFE_TIME_HIGHWAY_SEC=${TRAFFIC_SAFE_TIME_HIGHWAY_SEC}
+    TRAFFIC_SAFE_TIME_URBAN_SEC=${TRAFFIC_SAFE_TIME_URBAN_SEC}
+    TRAFFIC_SAFE_TIME_DENSE_SEC=${TRAFFIC_SAFE_TIME_DENSE_SEC}
+    TRAFFIC_SPEED_HIGHWAY_KMH=${TRAFFIC_SPEED_HIGHWAY_KMH}
+    TRAFFIC_SPEED_DENSE_KMH=${TRAFFIC_SPEED_DENSE_KMH}
+    TRAFFIC_DEFAULT_LANES=${TRAFFIC_DEFAULT_LANES}
 )
