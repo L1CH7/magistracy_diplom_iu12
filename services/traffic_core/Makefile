@@ -9,9 +9,8 @@ DATA_VOLUME ?= traffic_data
 BUILDER_IMAGE = traffic_core_builder
 
 build-builder:
-	@echo ">>> Checking/Building builder image..."
-	@docker image inspect $(BUILDER_IMAGE) >/dev/null 2>&1 || \
-	DOCKER_BUILDKIT=1 docker build --target builder -t $(BUILDER_IMAGE) -f Dockerfile ../..
+	@echo ">>> Building builder image (using docker cache)..."
+	@DOCKER_BUILDKIT=1 docker build --target builder -t $(BUILDER_IMAGE) -f Dockerfile ../..
 
 run-builder: build-builder
 	docker run --rm --init --network host \

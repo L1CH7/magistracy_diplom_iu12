@@ -37,6 +37,9 @@ struct RamNode {
 
     // Геометрия (WKB)
     std::vector<uint8_t> wkb_geom;
+
+    uint16_t visual_capacity = 0;
+    uint16_t jam_capacity = 0;
 };
 
 class BinaryDumper {

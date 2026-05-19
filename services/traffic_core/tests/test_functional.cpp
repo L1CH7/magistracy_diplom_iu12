@@ -198,7 +198,13 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         REQUIRE( pool.transition_queue.size() == 1 );
         CHECK( pool.transition_queue[ 0 ] == agent_id );
 
-        system.ProcessTransitions( traffic::data_provider::PhysicsContext{} );
+        float mock_lengths[200] = {0.0f};
+        mock_lengths[101] = 100.0f;
+        mock_lengths[102] = 100.0f;
+        traffic::data_provider::PhysicsContext mock_ctx{};
+        mock_ctx.edge_lengths_m = mock_lengths;
+
+        system.ProcessTransitions( mock_ctx );
         
         // After transition: 
         // pos_meters = 110 - 100 = 10m
@@ -252,7 +258,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
     TypedEndpoint< RouteRequest, traffic::common::net::RouteResponse > mpr_ep( std::move( mpr_transport ) );
     TypedEndpoint< traffic::common::net::RouteResponse, RouteRequest > router_ep( std::move( router_transport ) );
 
-    MprEngine engine;
+
 
     SUBCASE( "1. Phase 1: Route Application (Manual via Arena)" )
     {
@@ -312,6 +318,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         arena.UpdateRoute( agent_id, path, etas ); // Expected 100s for first edge
 
         std::vector< RouteRequest > requests;
+        MprEngine engine;
 
         // Test A: Within tolerance (elapsed = 140s, expected = 100s, ratio = 1.4 < 1.5)
         engine.Tick( 1140, pool, arena, requests );
@@ -342,8 +349,8 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
             pool.total_waypoints[ i ] = 2;
             pool.next_waypoint_idx[ i ] = 1;
             
-            std::vector< traffic::EdgeID > path = { 1000 };
-            std::vector< uint32_t > etas = { 100 };
+            std::vector< traffic::EdgeID > path = { 1000, 1001 };
+            std::vector< uint32_t > etas = { 100, 200 };
             arena.UpdateRoute( i, path, etas ); // All expect 100s
         }
 
@@ -355,6 +362,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         }
 
         std::vector< RouteRequest > requests;
+        MprEngine engine;
         engine.Tick( current_time, pool, arena, requests );
         
         CHECK( requests.size() == 5 ); // Only agents 0, 1, 2, 3, 4 should be stuck

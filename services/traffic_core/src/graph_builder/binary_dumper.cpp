@@ -113,16 +113,45 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             if (n.max_x > global_max_x) global_max_x = n.max_x;
             if (n.max_y > global_max_y) global_max_y = n.max_y;
 
-            // Расчет K_magic (Fixed-Point Math)
+            // Расчет K_magic (Fixed-Point Math) и пространственных / временных вместимостей
             float v_free = EffectiveSpeedKmh(n.speed_kmh, config.default_speed_kmh);
-            float c_300 = static_cast<float>(config.default_lanes) * 150.0f;
-            if (c_300 <= 0.0f) c_300 = 150.0f;
-            
+            if (v_free < 5.0f) v_free = 5.0f; // Защита от деления на 0
+
+            float speed_mps = v_free / 3.6f;
+            uint8_t lanes = (n.lanes > 0) ? n.lanes : static_cast<uint8_t>(config.default_lanes);
+            if (lanes == 0) lanes = 1;
+
+            // Время реакции на основе констант из CMake
+            float t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_URBAN_SEC);
+            if (v_free >= static_cast<float>(TRAFFIC_SPEED_HIGHWAY_KMH)) {
+                t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_HIGHWAY_SEC);
+            } else if (v_free <= static_cast<float>(TRAFFIC_SPEED_DENSE_KMH)) {
+                t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_DENSE_SEC) / 10.0f; // Переводим 15 в 1.5 сек
+            }
+
+            // Физический динамический слот одной машины (в метрах)
+            float dynamic_slot_m = static_cast<float>(TRAFFIC_CAR_LENGTH_M) + (speed_mps * t_safe);
+
+            // Расчет трех типов вместимости
+            // А. Временная (c_temporal) - сколько машин проедет за один BUCKET_INTERVAL (TRAFFIC_SLOT_SEC)
+            float c_temporal = (speed_mps / dynamic_slot_m) * static_cast<float>(TRAFFIC_SLOT_SEC) * lanes;
+            if (c_temporal <= 0.0f) c_temporal = 150.0f; // Fallback
+
+            // Б. Пространственная динамическая (c_spatial) - используется тепловой картой
+            float c_spatial = (n.length_m / dynamic_slot_m) * lanes;
+
+            // В. Пространственная статическая (c_jam) - используется физическим движком для Spillback
+            float c_jam = (n.length_m / static_cast<float>(TRAFFIC_CAR_LENGTH_M)) * lanes;
+
+            // Запекаем k_magic для роутера через c_temporal
             float t_f = std::max(n.t_free_base, 1.0f);
-            double k_magic_base_f = (t_f * ((v_free / 5.0f) - 1.0f)) / (c_300 * c_300) * K_MAGIC_SHIFT;
+            double k_magic_base_f = (t_f * ((v_free / 5.0f) - 1.0f)) / (c_temporal * c_temporal) * static_cast<double>(1 << 20); // 2^20
             if (k_magic_base_f <= 0.0) k_magic_base_f = 10.0;
-            
             n.k_magic = static_cast<int32_t>(std::floor(k_magic_base_f));
+
+            // Записываем пространственные лимиты в структуру (с защитой от нуля)
+            n.visual_capacity = static_cast<uint16_t>(std::max<float>(1.0f, c_spatial));
+            n.jam_capacity = static_cast<uint16_t>(std::max<float>(1.0f, c_jam));
 
             if (!row[11].is_null()) {
                 auto wkb_field = row[11].template as<pqxx::binarystring>();
@@ -320,17 +349,21 @@ std::expected<void, std::string> BinaryDumper::DumpExtendedAttributes() {
 
         // Дамп узлов
         for (const auto& n : ram_nodes_) {
-            uint8_t pad = 0;
-            out_attr.write(reinterpret_cast<const char*>(&n.speed_kmh), sizeof(n.speed_kmh));
-            out_attr.write(reinterpret_cast<const char*>(&n.lanes), sizeof(n.lanes));
-            out_attr.write(reinterpret_cast<const char*>(&n.highway_class), sizeof(n.highway_class));
-            out_attr.write(reinterpret_cast<const char*>(&n.oneway), sizeof(n.oneway));
-            out_attr.write(reinterpret_cast<const char*>(&pad), sizeof(pad));
-            out_attr.write(reinterpret_cast<const char*>(&n.length_m), sizeof(n.length_m));
-            out_attr.write(reinterpret_cast<const char*>(&n.t_free_base), sizeof(n.t_free_base));
-            out_attr.write(reinterpret_cast<const char*>(&n.k_magic), sizeof(n.k_magic));
-            out_attr.write(reinterpret_cast<const char*>(&n.min_x), sizeof(n.min_x));
-            out_attr.write(reinterpret_cast<const char*>(&n.min_y), sizeof(n.min_y));
+            traffic::ExtendedAttributes attr;
+            attr.speed_kmh = n.speed_kmh;
+            attr.lanes = n.lanes;
+            attr.highway_class = n.highway_class;
+            attr.oneway = n.oneway;
+            attr.pad = 0;
+            attr.length_m = n.length_m;
+            attr.t_free_base = n.t_free_base;
+            attr.k_magic = n.k_magic;
+            attr.min_x = n.min_x;
+            attr.min_y = n.min_y;
+            attr.visual_capacity = n.visual_capacity;
+            attr.jam_capacity = n.jam_capacity;
+
+            out_attr.write(reinterpret_cast<const char*>(&attr), sizeof(attr));
         }
 
         // Дамп маневров
