@@ -18,20 +18,16 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
       logger.log_info(`[LOD] ${name}: z${minzoom}-${maxzoom}, highways: ${highways?.length || 0}`);
     }
 
-    const capacityOverloadK = 4.0;
+    const config = getMapConfig();
+    const visualizationModes = (config && config.visualizationModes) || ['highway_type'];
+    const isHeatmapEnabled = visualizationModes.includes('traffic_load');
+    const capacityOverloadK = (config && config.trafficHeatmap && config.trafficHeatmap.capacity_overload_k) || 2.0;
     
-    const fallbackColor = ['match', ['get', 'highway'], 
-        'motorway', '#888888',
-        'motorway_link', '#888888',
-        'trunk', '#777777',
-        'trunk_link', '#777777',
-        'primary', '#666666',
-        'primary_link', '#666666',
-        'secondary', '#555555',
-        'secondary_link', '#555555',
-        'tertiary_link', '#444444',
-        '#333333'
-    ];
+    const fallbackColor = ['match', ['get', 'highway']];
+    for (const [hwType, hwColor] of Object.entries(colors || {})) {
+      fallbackColor.push(hwType, hwColor);
+    }
+    fallbackColor.push('#333333'); // Default fallback
 
     const trafficLoadColorExpression = [
         'let',
@@ -50,9 +46,11 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
                 1.0, 'hsla(0, 100%, 50%, 0.95)',
                 capacityOverloadK, 'hsla(0, 0%, 0%, 0.95)'
             ],
-            fallbackColor
+            isHeatmapEnabled ? 'hsla(120, 100%, 50%, 0.95)' : fallbackColor
         ]
     ];
+
+    const mainColorExpression = isHeatmapEnabled ? trafficLoadColorExpression : fallbackColor;
 
     // Build line-width based on per-highway target width
     const baseWidth = lod.base_width || 1.0;
@@ -106,7 +104,7 @@ function generateLodLayers(lodConfig, colors, widths, includeLabels = true) {
         'line-cap': 'round'
       },
       paint: {
-        'line-color': trafficLoadColorExpression,
+        'line-color': mainColorExpression,
         'line-width': [
           'interpolate', ['linear'], ['zoom'],
           minzoom, [

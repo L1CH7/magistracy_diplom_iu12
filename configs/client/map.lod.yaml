@@ -86,11 +86,11 @@ layers:
 # traffic_load  — тепловая карта нагрузки от симулятора
 visualization_modes:
   - highway_type
-  # - traffic_load   # Раскомментировать для включения тепловой карты
+  - traffic_load   # Раскомментировать для включения тепловой карты
 
 # Настройки тепловой карты (только при traffic_load в visualization_modes)
 traffic_heatmap:
-  capacity_overload_k: 2.0     # При volume > k*capacity → черный цвет
+  capacity_overload_k: 4.0     # При volume > k*capacity → черный цвет
   update_interval_ms: 1000     # Частота обновления (мс)
   heatmap_opacity: 0.75        # Прозрачность слоя
   heatmap_radius: 18           # Радиус ядра (пикселей при zoom=14)

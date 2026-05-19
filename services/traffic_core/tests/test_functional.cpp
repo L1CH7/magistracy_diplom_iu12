@@ -288,6 +288,126 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
     }
 }
 
+TEST_CASE("Spillback & Deadlock Elasticity Mechanics Unit Test") {
+    using namespace traffic;
+    using namespace traffic::data_provider;
+
+    AgentPool pool;
+    RouteArena arena;
+    KinematicsSystem system(pool, arena);
+
+    uint32_t agent_id = 0;
+    std::vector<traffic::EdgeID> route = {101, 102};
+    std::vector<uint32_t> etas = {100, 200};
+    arena.UpdateRoute(agent_id, route, etas);
+
+    pool.Allocate(1);
+    pool.is_active[agent_id] = 1;
+    pool.current_edge[agent_id] = route[0];
+    pool.velocity_mps[agent_id] = 10.0f;
+    pool.inv_edge_length_m[agent_id] = 0.01f; // Length 100m
+    pool.route_progress_idx[agent_id] = 0;
+
+    // Target edge length
+    float mock_lengths[200] = {0.0f};
+    mock_lengths[101] = 100.0f;
+    mock_lengths[102] = 100.0f;
+
+    SUBCASE("1. Under physical capacity - transition accepted") {
+        uint32_t mock_live_volumes[200] = {0};
+        mock_live_volumes[102] = 1; // 1 agent there (1 * asf 1 = load 1)
+
+        ExtendedAttributes mock_attrs[200] = {};
+        mock_attrs[102].jam_capacity = 2; // jam_cap = 2
+
+        PhysicsContext mock_ctx{};
+        mock_ctx.edge_lengths_m = mock_lengths;
+        mock_ctx.live_volumes = mock_live_volumes;
+        mock_ctx.edge_attributes = mock_attrs;
+        mock_ctx.asf = 1;
+
+        // Move agent to overshoot edge 101 boundary
+        pool.pos_meters[agent_id] = 110.0f;
+        system.AdvanceKinematics(0.0f); // trigger transition check
+        REQUIRE(pool.transition_queue.size() == 1);
+
+        system.ProcessTransitions(mock_ctx);
+
+        // Transition should succeed
+        CHECK(pool.current_edge[agent_id] == 102);
+        CHECK(pool.route_progress_idx[agent_id] == 1);
+        CHECK(pool.pos_meters[agent_id] == doctest::Approx(10.0f));
+    }
+
+    SUBCASE("2. At capacity - Spillback blocks 95% of the time, lets 5% through") {
+        uint32_t mock_live_volumes[200] = {0};
+        mock_live_volumes[102] = 2; // 2 agents there (load 2)
+
+        ExtendedAttributes mock_attrs[200] = {};
+        mock_attrs[102].jam_capacity = 2; // jam_cap = 2
+
+        PhysicsContext mock_ctx{};
+        mock_ctx.edge_lengths_m = mock_lengths;
+        mock_ctx.live_volumes = mock_live_volumes;
+        mock_ctx.edge_attributes = mock_attrs;
+        mock_ctx.asf = 1;
+
+        // We run multiple iterations to verify the probability distribution (95% block, 5% bypass)
+        uint32_t blocked_count = 0;
+        uint32_t bypassed_count = 0;
+        const uint32_t iterations = 500;
+
+        uint32_t invalid_blocked_speed_count = 0;
+        uint32_t invalid_blocked_pos_count = 0;
+        uint32_t invalid_bypassed_pos_count = 0;
+
+        for (uint32_t i = 0; i < iterations; ++i) {
+            // Re-allocate / reset pool for clean state
+            pool.Allocate(1);
+            pool.is_active[agent_id] = 1;
+            pool.current_edge[agent_id] = route[0];
+            pool.pos_meters[agent_id] = 110.0f;
+            pool.velocity_mps[agent_id] = 10.0f;
+            pool.inv_edge_length_m[agent_id] = 0.01f;
+            pool.route_progress_idx[agent_id] = 0;
+
+            system.AdvanceKinematics(0.0f);
+            system.ProcessTransitions(mock_ctx);
+
+            if (pool.current_edge[agent_id] == 101) {
+                blocked_count++;
+                if (pool.velocity_mps[agent_id] != 0.0f) {
+                    invalid_blocked_speed_count++;
+                }
+                if (std::abs(pool.pos_meters[agent_id] - 100.0f) > 0.001f) {
+                    invalid_blocked_pos_count++;
+                }
+            } else {
+                bypassed_count++;
+                if (std::abs(pool.pos_meters[agent_id] - 10.0f) > 0.001f) {
+                    invalid_bypassed_pos_count++;
+                }
+            }
+        }
+
+        // Single assertions outside the loop to follow doctest best practices
+        INFO("Blocked speed violations (expected 0): " << invalid_blocked_speed_count);
+        CHECK(invalid_blocked_speed_count == 0);
+
+        INFO("Blocked position violations (expected 0): " << invalid_blocked_pos_count);
+        CHECK(invalid_blocked_pos_count == 0);
+
+        INFO("Bypassed position violations (expected 0): " << invalid_bypassed_pos_count);
+        CHECK(invalid_bypassed_pos_count == 0);
+
+        // With 500 iterations, 95% block is ~475, 5% bypass is ~25.
+        // We set very safe boundaries to avoid test flakiness while ensuring statistical correctness.
+        CHECK(blocked_count > 400);
+        CHECK(bypassed_count > 0);
+        CHECK(bypassed_count < 100);
+    }
+}
+
 TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
 {
     using namespace traffic;

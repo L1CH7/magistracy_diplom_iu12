@@ -13,7 +13,16 @@ export class TrafficHeatmap {
         this.map = map;
         this.ws = null;
         this.loggedOnce = false;
-        this.initWebSocket();
+        
+        const config = getMapConfig();
+        const visualizationModes = (config && config.visualizationModes) || ['highway_type'];
+        this.isHeatmapEnabled = visualizationModes.includes('traffic_load');
+
+        if (this.isHeatmapEnabled) {
+            this.initWebSocket();
+        } else {
+            logToPython("[Heatmap] Disabled by visualization_modes. Telemetry will not be started.");
+        }
     }
 
     initWebSocket() {
