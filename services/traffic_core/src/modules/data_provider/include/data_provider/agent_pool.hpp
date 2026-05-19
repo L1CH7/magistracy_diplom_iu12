@@ -28,6 +28,8 @@ struct AgentPool
     std::vector< uint8_t > total_waypoints;
     std::vector< uint8_t > next_waypoint_idx; // Индекс точки, к которой агент едет сейчас
     std::vector< uint8_t > is_active;           // 1 for active, 0 for despawned/wait
+    std::vector< uint8_t > is_waiting_route;   // true if agent has an active reroute request
+    std::vector< uint32_t > route_epoch;       // Current routing epoch to filter stale responses
 
     // === Buffer for agents finishing their current edge ===
     std::vector< uint32_t > transition_queue;
@@ -38,17 +40,19 @@ struct AgentPool
      */
     void Allocate( size_t capacity )
     {
-        pos_meters.resize( capacity, 0.0f );
-        velocity_mps.resize( capacity, 0.0f );
-        inv_edge_length_m.resize( capacity, 0.0f );
+        pos_meters.assign( capacity, 0.0f );
+        velocity_mps.assign( capacity, 0.0f );
+        inv_edge_length_m.assign( capacity, 0.0f );
 
-        current_edge.resize( capacity, 0 );
-        route_progress_idx.resize( capacity, 0 );
-        edge_enter_time_sec.resize( capacity, 0 );
+        current_edge.assign( capacity, 0 );
+        route_progress_idx.assign( capacity, 0 );
+        edge_enter_time_sec.assign( capacity, 0 );
         waypoints.resize( capacity );
-        total_waypoints.resize( capacity, 0 );
-        next_waypoint_idx.resize( capacity, 0 );
-        is_active.resize( capacity, 0 );
+        total_waypoints.assign( capacity, 0 );
+        next_waypoint_idx.assign( capacity, 0 );
+        is_active.assign( capacity, 0 );
+        is_waiting_route.assign( capacity, 0 );
+        route_epoch.assign( capacity, 0 );
 
         // Initial capacity for transitions to avoid allocations during tick
         transition_queue.reserve( capacity / 10 );

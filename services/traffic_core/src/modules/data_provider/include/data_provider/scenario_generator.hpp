@@ -60,6 +60,9 @@ public:
 
       // Populate SoA (Structure of Arrays)
       pool.is_active[i] = 2; // 2 = Waiting for route
+      pool.is_waiting_route[i] = 1;
+      pool.route_epoch[i] = 1;
+
       pool.current_edge[i] = req_wps[0];
       pool.velocity_mps[i] = 15.0f; // Standard ~50 km/h
       pool.pos_meters[i] = 0.0f;
@@ -69,6 +72,7 @@ public:
       // Prepare Request POD for transmission
       traffic::common::net::RouteRequest req;
       req.agent_id = i;
+      req.epoch = pool.route_epoch[i];
       req.num_waypoints = static_cast<uint8_t>(num_wp);
       for (uint8_t w = 0; w < req.num_waypoints; ++w) {
         req.waypoints[w] = req_wps[w];

@@ -37,6 +37,7 @@ struct PhysicsContext
 
     uint32_t current_time_sec = 0;
     uint16_t asf = 1;
+    std::vector<uint32_t>* completed_agents_out = nullptr;
 };
 
 /**
@@ -53,6 +54,8 @@ struct PhysicsContext
     const PhysicsContext & ctx,
     float                 length_m ) noexcept
 {
+    if( length_m < 0.1f ) length_m = 0.1f;
+
     // w = static free-flow weight in seconds.
     // Matches TdAltRouter: the CSR `w` IS the free-flow travel time.
     float w = ( ctx.static_weights )
@@ -66,13 +69,15 @@ struct PhysicsContext
         uint32_t current_vol = ctx.live_volumes[ edge_id ];
         uint64_t scale       = static_cast< uint64_t >( ctx.k_magic[ edge_id ] );
 
-        // Penalty computation directly from current physical volume
-        uint32_t penalty = static_cast< uint32_t >( ( scale * current_vol * current_vol ) >> 20 );
+        // Penalty computation: scale by ASF because agents represent multiple cars
+        uint64_t scaled_vol = static_cast< uint64_t >( current_vol ) * ctx.asf;
+        uint32_t penalty = static_cast< uint32_t >( ( scale * scaled_vol * scaled_vol ) >> 20 );
 
         // Cap at 10x free-flow, same as TdAltRouter
-        uint32_t w_sec = static_cast< uint32_t >( w );
-        if( penalty > w_sec * 10 )
-            penalty = w_sec * 10;
+        // Use float to avoid zero-cap for short edges (w < 1s)
+        const float max_penalty = w * 10.0f;
+        if( static_cast< float >( penalty ) > max_penalty )
+            penalty = static_cast< uint32_t >( max_penalty );
 
         w += static_cast< float >( penalty );
     }
@@ -225,7 +230,8 @@ public:
                     float len = ( ctx.edge_lengths_m )
                                     ? ctx.edge_lengths_m[ next_edge ]
                                     : 1.0f;
-                    pool_.inv_edge_length_m[ agent_idx ] = ( len > 0.001f ) ? ( 1.0f / len ) : 1.0f;
+                    if( len < 0.1f ) len = 0.1f;
+                    pool_.inv_edge_length_m[ agent_idx ] = 1.0f / len;
                 }
                 else
                 {
@@ -239,6 +245,9 @@ public:
                     pool_.is_active[ agent_idx ]  = 0;
                     pool_.pos_meters[ agent_idx ] = 0.0f;
                     completed_agents++;
+                    if (ctx.completed_agents_out) {
+                        ctx.completed_agents_out->push_back(agent_idx);
+                    }
                 }
             }
 

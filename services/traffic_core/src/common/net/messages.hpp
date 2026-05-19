@@ -15,6 +15,7 @@ static constexpr uint32_t MAX_ROUTE_PATH = TRAFFIC_MAX_ROUTE_PATH;
  */
 struct RouteRequest {
   uint32_t agent_id;
+  uint32_t epoch;
   std::array<traffic::EdgeID, 16> waypoints;
   uint8_t num_waypoints;
   uint16_t asf; // Availability Search Factor
@@ -28,6 +29,7 @@ struct RouteRequest {
  */
 struct RouteResponse {
   uint32_t agent_id;
+  uint32_t epoch;
   uint16_t path_len;
   bool success;
 

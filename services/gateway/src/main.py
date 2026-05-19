@@ -152,6 +152,36 @@ async def sim_control(request: Request):
         logger.error(f"Sim control error: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
+@app.get("/api/v1/sim/stats")
+async def sim_stats(request: Request):
+    """
+    Get simulation diagnostics (TTI, spawns, reroutes, active agents).
+    Sends opcode 9 (STATS) to Traffic Core.
+    """
+    try:
+        # Pack binary structure for STATS opcode: < B I I I H f f f 3B (30 bytes, packed)
+        payload = struct.pack("<BIIIHfff3B", 9, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0)
+        
+        # Call encapsulated ZMQ logic. Use 5.0s timeout.
+        response_raw = await send_core_command(request.app, payload, timeout=5.0)
+        
+        if not response_raw:
+            return JSONResponse({"status": "error", "message": "Empty response from Traffic Core"}, status_code=500)
+            
+        # Parse the JSON string returned by Traffic Core
+        try:
+            json_str = response_raw.decode('utf-8')
+            stats_data = json.loads(json_str)
+            return JSONResponse({"status": "success", "data": stats_data})
+        except json.JSONDecodeError as e:
+            return JSONResponse({"status": "error", "message": f"Invalid JSON from core: {str(e)}", "raw": response_raw.decode('utf-8', errors='ignore')}, status_code=500)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Sim stats error: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 @app.post("/routing/calculate")
 async def calculate_route(request: Request):
     """
