@@ -226,12 +226,19 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         pool.pos_meters[ agent_id ] = 95.0f; // 5m before end
 
         system.AdvanceKinematics( 1.0f ); // Move 10m -> 105m pos.
-        system.ProcessTransitions( traffic::data_provider::PhysicsContext{} );
+        
+        std::vector<uint32_t> completed_agents;
+        traffic::data_provider::PhysicsContext mock_ctx{};
+        mock_ctx.completed_agents_out = &completed_agents;
+
+        system.ProcessTransitions( mock_ctx );
         
         // End of route detected
         CHECK( pool.is_active[ agent_id ] == 0 );
         CHECK( pool.pos_meters[ agent_id ] == 0.0f );
-        MESSAGE("  [OK] Agent successfully despawned (is_active = 0).");
+        REQUIRE( completed_agents.size() == 1 );
+        CHECK( completed_agents[ 0 ] == agent_id );
+        MESSAGE("  [OK] Agent successfully despawned and tracked for TTI (is_active = 0).");
     }
  
     SUBCASE( "4. Spillback & Queue Propagation (Hard Capacity)" )
@@ -418,6 +425,44 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
             CHECK( requests[ i ].waypoints[ requests[ i ].num_waypoints - 1 ] == 2000 + i );
         }
         MESSAGE("  [SUCCESS] Batch scan correctly identified exactly 5 delayed agents.");
+    }
+
+    SUBCASE( "4. Rate Limiting (Token Bucket)" )
+    {
+        MESSAGE("Testing MPR Rate Limiting: 10 agents (5 delayed), but only 2 tokens allowed...");
+        uint32_t start_time = 1000;
+        
+        for( uint32_t i = 0; i < 10; ++i )
+        {
+            pool.is_active[ i ] = 1;
+            pool.is_waiting_route[ i ] = 0; // Reset waiting status
+            pool.edge_enter_time_sec[ i ] = start_time;
+            pool.route_progress_idx[ i ] = 0;
+            pool.waypoints[ i ][ 0 ] = 1000;
+            pool.waypoints[ i ][ 1 ] = 2000 + i;
+            pool.total_waypoints[ i ] = 2;
+            pool.next_waypoint_idx[ i ] = 1;
+            
+            std::vector< traffic::EdgeID > path = { 1000, 1001 };
+            std::vector< uint32_t > etas = { 100, 200 };
+            arena.UpdateRoute( i, path, etas );
+        }
+
+        // 0-4 are delayed (160s elapsed), 5-9 are okay (110s elapsed)
+        uint32_t current_time = start_time + 160;
+        for( uint32_t i = 5; i < 10; ++i )
+        {
+            pool.edge_enter_time_sec[ i ] = start_time + 70; // Only 90s elapsed
+        }
+
+        std::vector< RouteRequest > requests;
+        MprEngine engine;
+        
+        // Pass 2 tokens!
+        engine.Tick( current_time, pool, arena, requests, 2 );
+        
+        CHECK( requests.size() == 2 ); // Only 2 requests should be allowed due to rate limiting
+        MESSAGE("  [SUCCESS] Rate limiter successfully restricted requests to exactly 2 tokens.");
     }
 }
 
