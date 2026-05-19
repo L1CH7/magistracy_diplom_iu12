@@ -126,24 +126,43 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             if (v_free >= static_cast<float>(TRAFFIC_SPEED_HIGHWAY_KMH)) {
                 t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_HIGHWAY_SEC);
             } else if (v_free <= static_cast<float>(TRAFFIC_SPEED_DENSE_KMH)) {
-                t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_DENSE_SEC) / 10.0f; // Переводим 15 в 1.5 сек
+                t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_DENSE_SEC) / 10.0f;
             }
 
-            // Физический динамический слот одной машины (в метрах)
+            // Физический динамический слот одной машины (в метрах).
+            // Включает физическую длину автомобиля TRAFFIC_CAR_LENGTH_M (7м) + безопасную дистанцию до впереди идущего автомобиля.
+            // Безопасная дистанция рассчитывается на основе времени реакции водителя t_safe, зависящего от скорости v_free.
             float dynamic_slot_m = static_cast<float>(TRAFFIC_CAR_LENGTH_M) + (speed_mps * t_safe);
 
-            // Расчет трех типов вместимости
-            // А. Временная (c_temporal) - сколько машин проедет за один BUCKET_INTERVAL (TRAFFIC_SLOT_SEC)
+            // === РАСЧЕТ ТРЕХ ТИПОВ ВМЕСТИМОСТИ (ФИЗИЧЕСКОЕ ОБОСНОВАНИЕ) ===
+            
+            // А. Временная вместимость (c_temporal):
+            // Рассчитывает предельный входящий поток (пропускную способность сечения) за временной интервал TRAFFIC_SLOT_SEC (300 сек).
+            // Формула: (speed_mps / dynamic_slot_m) дает поток машин в секунду на полосу. Умножение на TRAFFIC_SLOT_SEC и lanes
+            // дает суммарное число машин, способных пересечь сечение за 5 минут.
+            // Используется исключительно роутером для вычисления BPR-штрафов и нормирования k_magic.
             float c_temporal = (speed_mps / dynamic_slot_m) * static_cast<float>(TRAFFIC_SLOT_SEC) * lanes;
-            if (c_temporal <= 0.0f) c_temporal = 150.0f; // Fallback
+            if (c_temporal <= 0.0f) c_temporal = 150.0f; // Предотвращение деления на ноль
 
-            // Б. Пространственная динамическая (c_spatial) - используется тепловой картой
+            // Б. Пространственная динамическая вместимость (c_spatial / visual_capacity):
+            // Определяет количество машин, способных одновременно находиться на всей длине ребра на свободной скорости v_free
+            // при соблюдении безопасных динамических дистанций (t_safe).
+            // Формула: (length_m / dynamic_slot_m) * lanes.
+            // Используется тепловой картой для визуализации реального уровня загрузки дороги (LOD/Heatmap).
             float c_spatial = (n.length_m / dynamic_slot_m) * lanes;
 
-            // В. Пространственная статическая (c_jam) - используется физическим движком для Spillback
+            // В. Пространственная статическая вместимость (c_jam / jam_capacity):
+            // Физический предел вместимости дороги при нулевой скорости (мертвый затор / бампер к бамперу).
+            // Расстояние между машинами сокращается до физического размера кузова TRAFFIC_CAR_LENGTH_M (7м).
+            // Формула: (length_m / TRAFFIC_CAR_LENGTH_M) * lanes.
+            // Используется физическим движком симуляции для расчета Spillback (обратного распространения очередей).
             float c_jam = (n.length_m / static_cast<float>(TRAFFIC_CAR_LENGTH_M)) * lanes;
 
-            // Запекаем k_magic для роутера через c_temporal
+            // === ЗАПЕКАНИЕ КОЭФФИЦИЕНТА BPR-ЗАДЕРЖКИ (k_magic) ===
+            // k_magic регулирует крутизну BPR-функции задержки: t_actual = t_free * (1 + alpha * (flow / capacity)^beta).
+            // Здесь в качестве alpha выступает динамический коэффициент ((v_free / 5.0f) - 1.0f), зависящий от свободной скорости ребра.
+            // В качестве capacity используется временная вместимость c_temporal, соответствующая 5-минутному слоту накопления потока.
+            // Множитель (1 << 20) переводит дробный коэффициент в целочисленный fixed-point формат для SIMD-оптимизации в роутере.
             float t_f = std::max(n.t_free_base, 1.0f);
             double k_magic_base_f = (t_f * ((v_free / 5.0f) - 1.0f)) / (c_temporal * c_temporal) * static_cast<double>(1 << 20); // 2^20
             if (k_magic_base_f <= 0.0) k_magic_base_f = 10.0;

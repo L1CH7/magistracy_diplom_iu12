@@ -114,6 +114,7 @@ private:
     float current_sim_time_{ 0.0f };
     uint32_t last_mpr_tick_sim_sec_{ 0 };
     uint32_t num_agents_{ 0 };
+    uint16_t asf_{ 1 };
     bool is_initialized_{ false };
 
     // Physics cache

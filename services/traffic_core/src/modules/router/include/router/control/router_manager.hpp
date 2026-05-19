@@ -190,6 +190,14 @@ public:
         return reinterpret_cast<const ExtendedAttributes*>(ptr);
     }
 
+    [[nodiscard]] const ExtendedAttributes* get_edge_attributes_ptr() const noexcept {
+        constexpr size_t HEADER_SIZE  = 8;
+        if (!mapped_graph_.attributes_region) return nullptr;
+        return reinterpret_cast<const ExtendedAttributes*>(
+            static_cast<const uint8_t*>(mapped_graph_.attributes_region->data()) + HEADER_SIZE
+        );
+    }
+
     uint8_t get_edge_lanes(traffic::NodeID edge_id) const noexcept {
 #ifndef TRAFFIC_DEFAULT_LANES
 #  define TRAFFIC_DEFAULT_LANES 1

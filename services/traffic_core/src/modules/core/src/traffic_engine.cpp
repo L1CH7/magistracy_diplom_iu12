@@ -152,6 +152,7 @@ void TrafficEngine::SpawnAgents( uint32_t num_agents, uint16_t asf, const std::v
 
     ResetState();
     num_agents_ = num_agents;
+    asf_ = asf;
 
     std::vector< RouteRequest > initial_requests;
     
@@ -295,7 +296,7 @@ void TrafficEngine::Step( float dt )
                 {
                     auto path = route_arena_.GetRoute( req.agent_id );
                     auto etas = route_arena_.GetEtas( req.agent_id );
-                    if( !path.empty() ) vol_mgr->unbook_route( path, etas, 1 );
+                    if( !path.empty() ) vol_mgr->unbook_route( path, etas, asf_ );
                 }
             }
             mpr_ep_->Send( mpr_requests_buffer_ );
@@ -371,7 +372,7 @@ void TrafficEngine::Step( float dt )
             {
                 auto path = route_arena_.GetRoute( req.agent_id );
                 auto etas = route_arena_.GetEtas( req.agent_id );
-                if( !path.empty() ) vol_mgr->unbook_route( path, etas, 1 );
+                if( !path.empty() ) vol_mgr->unbook_route( path, etas, asf_ );
             }
         }
         mpr_ep_->Send( mpr_requests_buffer_ );
@@ -488,7 +489,7 @@ void TrafficEngine::HandleResponses()
                 {
                     vol_mgr->book_route( route_arena_.GetRoute( r.agent_id ),
                                          route_arena_.GetEtas( r.agent_id ),
-                                         1 /* weight */ );
+                                         asf_ /* weight */ );
                 }
 
                 // Task 3: Unconditional reset to prevent race conditions
@@ -556,6 +557,8 @@ data_provider::PhysicsContext TrafficEngine::MakePhysicsContext( uint32_t time_s
     ctx.live_volumes   = const_cast< uint32_t * >( live_edge_volumes_.data() );
     ctx.max_volumes    = const_cast< uint32_t * >( max_live_volumes_.data() );
     ctx.k_magic        = router_manager_.get_kmagic_ptr();
+    ctx.edge_attributes = router_manager_.get_edge_attributes_ptr();
+    ctx.asf            = asf_;
 
     // Expose the static CSR weights (free-flow travel time per edge in seconds)
     const auto & view = router_manager_.get_view();

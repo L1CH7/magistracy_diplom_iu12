@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <atomic>
+#include <cstdlib>
 
 #include "agent_pool.hpp"
 #include "route_arena.hpp"
@@ -31,7 +32,11 @@ struct PhysicsContext
     // nullptr = fallback to length / 15 m/s
     const float * edge_lengths_m = nullptr;
 
+    // Pointer to mmap'd ExtendedAttributes array
+    const ExtendedAttributes * edge_attributes = nullptr;
+
     uint32_t current_time_sec = 0;
+    uint16_t asf = 1;
 };
 
 /**
@@ -150,6 +155,7 @@ public:
         uint32_t completed_agents = 0;
         for( uint32_t agent_idx : pool_.transition_queue )
         {
+            bool blocked = false;
             // --- Multi-hop loop ---
             // With large acceleration (dt >> edge_length/velocity), an agent can overshoot
             // multiple edges in a single tick. We drain the overshoot here in one call
@@ -170,6 +176,30 @@ public:
                 if( next_idx < route.size() )
                 {
                     traffic::EdgeID next_edge = route[ next_idx ];
+
+                    // Spillback & Hard Capacity Check with Deadlock Avoidance (Elasticity)
+                    uint32_t jam_cap = 150; // Fallback
+                    if ( ctx.edge_attributes )
+                    {
+                        jam_cap = ctx.edge_attributes[ next_edge ].jam_capacity;
+                    }
+                    if ( jam_cap == 0 ) jam_cap = 1;
+
+                    uint32_t current_load = 0;
+                    if ( ctx.live_volumes )
+                    {
+                        current_load = ctx.live_volumes[ next_edge ] * ctx.asf;
+                    }
+
+                    if ( current_load >= jam_cap && ( std::rand() % 100 >= 5 ) )
+                    {
+                        // Agent remains on old_edge
+                        pool_.route_progress_idx[ agent_idx ]--;
+                        pool_.pos_meters[ agent_idx ] = edge_len;
+                        pool_.velocity_mps[ agent_idx ] = 0.0f;
+                        blocked = true;
+                        break; // Stop transitioning, wait for next tick
+                    }
 
                     // Check if we reached a waypoint
                     if( pool_.next_waypoint_idx[ agent_idx ] < pool_.total_waypoints[ agent_idx ] &&
@@ -214,7 +244,7 @@ public:
 
             // Compute BPR speed ONCE for the edge the agent will actually dwell on.
             // Intermediate edges (passed through during multi-hop) are irrelevant.
-            if( pool_.is_active[ agent_idx ] == 1 )
+            if( pool_.is_active[ agent_idx ] == 1 && !blocked )
             {
                 traffic::EdgeID curr_edge = pool_.current_edge[ agent_idx ];
                 float len = ( ctx.edge_lengths_m )

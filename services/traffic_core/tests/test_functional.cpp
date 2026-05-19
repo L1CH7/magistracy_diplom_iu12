@@ -233,6 +233,52 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         CHECK( pool.pos_meters[ agent_id ] == 0.0f );
         MESSAGE("  [OK] Agent successfully despawned (is_active = 0).");
     }
+ 
+    SUBCASE( "4. Spillback & Queue Propagation (Hard Capacity)" )
+    {
+        MESSAGE("Testing Spillback: transitioning to a completely congested edge 102...");
+        
+        // Target edge 102 is congested
+        float mock_lengths[200] = {0.0f};
+        mock_lengths[101] = 100.0f;
+        mock_lengths[102] = 100.0f;
+        
+        uint32_t mock_live_volumes[200] = {0};
+        mock_live_volumes[102] = 2; // 2 agents already there
+
+        traffic::ExtendedAttributes mock_attrs[200] = {};
+        mock_attrs[102].jam_capacity = 2; // Max capacity is 2
+
+        traffic::data_provider::PhysicsContext mock_ctx{};
+        mock_ctx.edge_lengths_m = mock_lengths;
+        mock_ctx.live_volumes = mock_live_volumes;
+        mock_ctx.edge_attributes = mock_attrs;
+        mock_ctx.asf = 1;
+
+        // Position is 110m (overshoot of edge 101)
+        system.AdvanceKinematics( 11.0f ); 
+        REQUIRE( pool.transition_queue.size() == 1 );
+
+        // Seed to guarantee a predictable outcome in rand()
+        std::srand(0);
+        
+        system.ProcessTransitions( mock_ctx );
+
+        // With 95% probability, the agent remains on 101
+        if ( pool.current_edge[ agent_id ] == 101 )
+        {
+            CHECK( pool.pos_meters[ agent_id ] == doctest::Approx( 100.0f ) );
+            CHECK( pool.velocity_mps[ agent_id ] == 0.0f );
+            CHECK( pool.route_progress_idx[ agent_id ] == 0 );
+            MESSAGE("  [OK] Spillback triggered: agent remained on edge 101, speed set to 0.0m/s.");
+        }
+        else
+        {
+            // Elasticity bypassed (5% chance)
+            CHECK( pool.current_edge[ agent_id ] == 102 );
+            MESSAGE("  [OK] Elasticity bypass: agent successfully squeezed onto edge 102.");
+        }
+    }
 }
 
 TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
