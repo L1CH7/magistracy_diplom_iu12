@@ -249,22 +249,21 @@ int main(int argc, char **argv) {
                       if (osm_id <= 0)
                         continue;
 
-                      uint32_t vol_cars = sv * asf;
-                      uint32_t visual_capacity = rm.get_edge_capacity(edge_id);
-                      uint32_t jam_capacity = rm.get_edge_physical_capacity(edge_id);
+                      uint32_t agents_count = sv; // Real agent count on the edge
+                      uint32_t vis_cap_agents = std::max<uint32_t>(1, rm.get_edge_capacity(edge_id) / asf);
+                      uint32_t jam_cap_agents = std::max<uint32_t>(1, rm.get_edge_physical_capacity(edge_id) / asf);
 
-                      if (visual_capacity == 0) visual_capacity = 1;
-                      if (jam_capacity < visual_capacity) jam_capacity = visual_capacity + 1;
+                      if (jam_cap_agents < vis_cap_agents) jam_cap_agents = vis_cap_agents + 1;
 
                       float r = 0.0f;
-                      if (vol_cars <= visual_capacity) {
+                      if (agents_count <= vis_cap_agents) {
                           r = 0.01f;
-                      } else if (vol_cars >= jam_capacity) {
-                          float over = static_cast<float>(vol_cars - jam_capacity) / static_cast<float>(jam_capacity);
+                      } else if (agents_count >= jam_cap_agents) {
+                          float over = static_cast<float>(agents_count - jam_cap_agents) / static_cast<float>(jam_cap_agents);
                           r = 1.0f + over;
                       } else {
-                          float denom = static_cast<float>(jam_capacity - visual_capacity);
-                          r = static_cast<float>(vol_cars - visual_capacity) / denom;
+                          float denom = static_cast<float>(jam_cap_agents - vis_cap_agents);
+                          r = static_cast<float>(agents_count - vis_cap_agents) / denom;
                           if (r < 0.01f) r = 0.01f;
                       }
 
@@ -409,22 +408,21 @@ int main(int argc, char **argv) {
                       if (osm_id <= 0)
                         continue;
 
-                      uint32_t vol_cars = sv * asf;
-                      uint32_t visual_capacity = rm.get_edge_capacity(edge_id);
-                      uint32_t jam_capacity = rm.get_edge_physical_capacity(edge_id);
+                      uint32_t agents_count = sv; // Real agent count on the edge
+                      uint32_t vis_cap_agents = std::max<uint32_t>(1, rm.get_edge_capacity(edge_id) / asf);
+                      uint32_t jam_cap_agents = std::max<uint32_t>(1, rm.get_edge_physical_capacity(edge_id) / asf);
 
-                      if (visual_capacity == 0) visual_capacity = 1;
-                      if (jam_capacity < visual_capacity) jam_capacity = visual_capacity + 1;
+                      if (jam_cap_agents < vis_cap_agents) jam_cap_agents = vis_cap_agents + 1;
 
                       float r = 0.0f;
-                      if (vol_cars <= visual_capacity) {
+                      if (agents_count <= vis_cap_agents) {
                           r = 0.01f;
-                      } else if (vol_cars >= jam_capacity) {
-                          float over = static_cast<float>(vol_cars - jam_capacity) / static_cast<float>(jam_capacity);
+                      } else if (agents_count >= jam_cap_agents) {
+                          float over = static_cast<float>(agents_count - jam_cap_agents) / static_cast<float>(jam_cap_agents);
                           r = 1.0f + over;
                       } else {
-                          float denom = static_cast<float>(jam_capacity - visual_capacity);
-                          r = static_cast<float>(vol_cars - visual_capacity) / denom;
+                          float denom = static_cast<float>(jam_cap_agents - vis_cap_agents);
+                          r = static_cast<float>(agents_count - vis_cap_agents) / denom;
                           if (r < 0.01f) r = 0.01f;
                       }
 

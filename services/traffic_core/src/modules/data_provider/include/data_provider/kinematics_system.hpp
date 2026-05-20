@@ -167,11 +167,11 @@ public:
             float v_discharge = v_free_mps;
             if( ctx.edge_attributes && ctx.live_volumes )
             {
-                float C_vis = static_cast<float>( ctx.edge_attributes[ current_edge ].visual_capacity );
-                float V_live = static_cast<float>( ctx.live_volumes[ current_edge ] * ctx.asf );
-                if ( V_live > C_vis && V_live > 0.0f )
+                float C_vis_agents = std::max<float>(1.0f, static_cast<float>(ctx.edge_attributes[current_edge].visual_capacity) / static_cast<float>(ctx.asf));
+                float V_live_agents = static_cast<float>(ctx.live_volumes[current_edge]);
+                if ( V_live_agents > C_vis_agents && V_live_agents > 0.0f )
                 {
-                    v_discharge = v_free_mps * ( C_vis / V_live );
+                    v_discharge = v_free_mps * ( C_vis_agents / V_live_agents );
                 }
             }
             if( v_discharge < 1.3f ) v_discharge = 1.3f; // Минимальная скорость выползания из пробки
@@ -282,54 +282,32 @@ public:
                     }
 
                     // --- LWR FLUID DYNAMICS SPILLBACK SYSTEM ---
-                    uint32_t load_next = 0;
-                    if ( ctx.live_volumes )
-                    {
-                        load_next = ctx.live_volumes[ next_edge ] * ctx.asf;
-                    }
-                    uint32_t jam_cap_next = 1;
-                    uint32_t jam_cap_curr = 1;
+                    uint32_t agent_jam_cap_next = 1;
+                    uint32_t agent_jam_cap_curr = 1;
 
                     if ( ctx.edge_attributes )
                     {
-                        uint32_t raw_cap_next = ctx.edge_attributes[ next_edge ].jam_capacity;
-                        // Apply micro-edge guard for next_edge
-                        if ( __builtin_expect( raw_cap_next < ctx.asf, 0 ) )
-                        {
-                            raw_cap_next = ctx.asf;
-                        }
-                        jam_cap_next = std::max<uint32_t>( 1, raw_cap_next );
-
-                        uint32_t raw_cap_curr = ctx.edge_attributes[ old_edge ].jam_capacity;
-                        if ( __builtin_expect( raw_cap_curr < ctx.asf, 0 ) )
-                        {
-                            raw_cap_curr = ctx.asf;
-                        }
-                        jam_cap_curr = std::max<uint32_t>( 1, raw_cap_curr );
+                        agent_jam_cap_next = std::max<uint32_t>( 1, ctx.edge_attributes[ next_edge ].jam_capacity / ctx.asf );
+                        agent_jam_cap_curr = std::max<uint32_t>( 1, ctx.edge_attributes[ old_edge ].jam_capacity / ctx.asf );
                     }
 
-                    // 1. Check if the next edge is congested
-                    if ( __builtin_expect( load_next + ctx.asf > jam_cap_next, 0 ) )
+                    uint32_t load_next_agents = ctx.live_volumes ? ctx.live_volumes[ next_edge ] : 0;
+                    uint32_t load_curr_agents = ctx.live_volumes ? ctx.live_volumes[ old_edge ] : 0;
+
+                    // 1. Check if next edge is congested (even for 1 more agent)
+                    if ( __builtin_expect( load_next_agents + 1 > agent_jam_cap_next, 0 ) )
                     {
                         bool blocked_transition = true;
                         
-                        // 2. ABSOLUTE PHYSICAL LIMIT (Eradicate 40x overloads permanently)
-                        // Max 150% of physical capacity, with a minimum of +1 agent capacity for micro-edges
-                        uint32_t absolute_max = jam_cap_next + std::max<uint32_t>( jam_cap_next / 2, ctx.asf );
+                        // 2. Absolute limit in agents (150%, but not less than +1 agent buffer)
+                        uint32_t absolute_max_agents = agent_jam_cap_next + std::max<uint32_t>( 1, agent_jam_cap_next / 2 );
                         
-                        if ( load_next + ctx.asf <= absolute_max )
+                        if ( load_next_agents + 1 <= absolute_max_agents )
                         {
-                            // 3. HYDRAULIC PRESSURE VALVE (Compare densities / pressure gradients)
-                            uint32_t load_curr = 0;
-                            if ( ctx.live_volumes )
-                            {
-                                load_curr = ctx.live_volumes[ old_edge ] * ctx.asf;
-                            }
+                            // 3. Pressure is calculated strictly in agents!
+                            float pressure_curr = static_cast<float>( load_curr_agents ) / static_cast<float>( agent_jam_cap_curr );
+                            float pressure_next = static_cast<float>( load_next_agents ) / static_cast<float>( agent_jam_cap_next );
                             
-                            float pressure_curr = static_cast<float>( load_curr ) / static_cast<float>( jam_cap_curr );
-                            float pressure_next = static_cast<float>( load_next ) / static_cast<float>( jam_cap_next );
-                            
-                            // If pressure behind is greater or equal - allow transition chance (leak/squeeze)
                             if ( pressure_curr >= pressure_next )
                             {
                                 float next_len = 25.0f; // fallback
@@ -337,7 +315,7 @@ public:
                                 {
                                     next_len = ctx.edge_attributes[ next_edge ].length_m;
                                 }
-                                uint32_t leak_chance = ( next_len < 20.0f ) ? 15 : 5; // Higher leak chance for micro-edges
+                                uint32_t leak_chance = ( next_len < 20.0f ) ? 15 : 5;
                                 if ( static_cast<uint32_t>( std::rand() % 100 ) < leak_chance )
                                 {
                                     blocked_transition = false; // Successfully squeezed through!

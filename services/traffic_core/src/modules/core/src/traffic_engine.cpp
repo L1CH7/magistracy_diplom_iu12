@@ -28,6 +28,7 @@ TrafficEngine::TrafficEngine()
 :   is_initialized_( false ),
     keep_running_( true ),
     num_agents_( 0 ),
+    last_respawn_idx_( 0 ),
     current_sim_time_( 0.0f ),
     last_mpr_tick_sim_sec_( 0 ),
     routes_computed_( 0 ),
@@ -43,6 +44,7 @@ TrafficEngine::TrafficEngine( const std::vector< int > & router_cores )
 :   is_initialized_( false ),
     keep_running_( true ),
     num_agents_( 0 ),
+    last_respawn_idx_( 0 ),
     current_sim_time_( 0.0f ),
     last_mpr_tick_sim_sec_( 0 ),
     routes_computed_( 0 ),
@@ -124,6 +126,7 @@ void TrafficEngine::ResetState()
     }
 
     num_agents_ = 0;
+    last_respawn_idx_ = 0;
     routes_computed_.store(0);
     total_completed_routes_ = 0;
     total_successful_routes_ = 0;
@@ -376,9 +379,11 @@ void TrafficEngine::Step( float dt )
 
         uint32_t respawn_quota = 1000; // Task 3: Limit respawns per tick
         mpr_requests_buffer_.clear(); // Reuse buffer for respawn requests
-        for( uint32_t i = 0; i < num_agents_; ++i )
+
+        uint32_t i = last_respawn_idx_;
+        for( uint32_t count = 0; count < num_agents_ && respawn_quota > 0; ++count )
         {
-            if( agent_pool_.is_active[ i ] == 0 && agent_pool_.is_waiting_route[ i ] == 0 && respawn_quota > 0 )
+            if( agent_pool_.is_active[ i ] == 0 && agent_pool_.is_waiting_route[ i ] == 0 )
             {
                 respawn_quota--;
                 uint32_t start_edge = edge_dist( rec_gen );
@@ -417,8 +422,10 @@ void TrafficEngine::Step( float dt )
 
                 mpr_requests_buffer_.push_back( std::move( req ) );
             }
+            i = ( i + 1 ) % num_agents_;
         }
-}
+        last_respawn_idx_ = i;
+    }
     if( !mpr_requests_buffer_.empty() )
     {
         auto vol_mgr = router_manager_.get_volume_manager();
