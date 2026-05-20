@@ -144,6 +144,7 @@ private:
     std::vector< uint32_t > live_edge_volumes_;
     std::vector< uint32_t > max_live_volumes_;
     std::vector< float >    edge_lengths_cache_;
+    std::unique_ptr< std::atomic< uint32_t >[] > queue_edge_volumes_;
 };
 
 } // namespace traffic::core

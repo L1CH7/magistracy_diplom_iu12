@@ -22,6 +22,7 @@ struct PhysicsContext
     // Live physical occupancy data (updated by KinematicsSystem during transitions)
     uint32_t * live_volumes = nullptr;
     uint32_t * max_volumes  = nullptr;
+    std::atomic<uint32_t> * queue_volumes = nullptr;
     const traffic::PenaltyScale * k_magic = nullptr;
 
     // Static edge weights from the CSR graph (w_i = free-flow travel time in seconds).
@@ -102,7 +103,7 @@ public:
      * Uses SIMD-friendly loops and precalculated inverse lengths to maximize throughput.
      * @param dt Elapsed time in seconds.
      */
-    void AdvanceKinematics( float dt ) noexcept
+    void AdvanceKinematics( float dt, const PhysicsContext & ctx = {} ) noexcept
     {
         const size_t agent_count = pool_.Size();
         if( agent_count == 0 )
@@ -110,32 +111,104 @@ public:
             return;
         }
 
-        // --- HOT PATH: Linear kinematics (SIMD vectorizable) ---
-        // __restrict tells the compiler these arrays don't alias,
-        // enabling AVX FMA vectorization.
         float * __restrict pos    = pool_.pos_meters.data();
-        const float * __restrict vel    = pool_.velocity_mps.data();
+        float * __restrict vel    = pool_.velocity_mps.data();
         const uint8_t * __restrict active = pool_.is_active.data();
+        const traffic::EdgeID * __restrict current_edges = pool_.current_edge.data();
+        const float * __restrict inv_len = pool_.inv_edge_length_m.data();
 
-        // Hot path: only is_active==1 agents move (is_active==2 = waiting for route).
-        #pragma GCC ivdep
-        for( size_t i = 0; i < agent_count; ++i )
+        for( size_t agent_idx = 0; agent_idx < agent_count; ++agent_idx )
         {
-            if( active[ i ] == 1 )
+            if( active[ agent_idx ] != 1 )
             {
-                pos[ i ] += vel[ i ] * dt;
+                continue;
+            }
+
+            traffic::EdgeID current_edge = current_edges[ agent_idx ];
+            float edge_len = 1.0f / inv_len[ agent_idx ];
+
+            // 1. Вычисляем длину физической очереди на ребре (с учетом ASF)
+            uint32_t queue_size = 0;
+            if( ctx.queue_volumes )
+            {
+                queue_size = ctx.queue_volumes[ current_edge ].load( std::memory_order_relaxed );
+            }
+
+            uint8_t lanes = 1;
+            if( ctx.edge_attributes )
+            {
+                lanes = ctx.edge_attributes[ current_edge ].lanes;
+                if( lanes == 0 ) lanes = 1;
+            }
+
+            float queue_length_m = static_cast<float>( queue_size * ctx.asf ) * 7.0f / static_cast<float>( lanes );
+
+            // 2. Виртуальная стоп-линия (хвост пробки)
+            float stop_line_m = std::max( 0.0f, edge_len - queue_length_m );
+
+            // Определяем v_free_mps и v_discharge
+            float w = ( ctx.static_weights )
+                          ? static_cast< float >( ctx.static_weights[ current_edge ] )
+                          : ( edge_len / 15.0f );
+            if( w < 0.001f ) w = 0.001f;
+            float v_free_mps = edge_len / w;
+
+            // v_discharge = v_free * (C_vis / V_live)
+            float v_discharge = v_free_mps;
+            if( ctx.edge_attributes && ctx.live_volumes )
+            {
+                float C_vis = static_cast<float>( ctx.edge_attributes[ current_edge ].visual_capacity );
+                float V_live = static_cast<float>( ctx.live_volumes[ current_edge ] * ctx.asf );
+                if ( V_live > C_vis && V_live > 0.0f )
+                {
+                    v_discharge = v_free_mps * ( C_vis / V_live );
+                }
+            }
+            if( v_discharge < 1.3f ) v_discharge = 1.3f; // Минимальная скорость выползания из пробки
+
+            float agent_speed = v_free_mps;
+
+            // 3. Кинематика (Двухрежимная)
+            if ( !pool_.in_queue[ agent_idx ] && pos[ agent_idx ] < stop_line_m - 1.0f )
+            {
+                // РЕЖИМ 1: Свободный поток. Агент далеко от пробки, едет на V_free.
+                agent_speed = v_free_mps;
+                
+                // Двигаем агента
+                float new_pos = pos[ agent_idx ] + agent_speed * dt;
+                
+                // Если агент доехал до хвоста пробки в этом тике - он вступает в очередь
+                if ( new_pos >= stop_line_m )
+                {
+                    pos[ agent_idx ] = stop_line_m; // Упирается в хвост
+                    pool_.in_queue[ agent_idx ] = 1; // Помечаем, что агент вошел в пробку
+                    if( ctx.queue_volumes )
+                    {
+                        ctx.queue_volumes[ current_edge ].fetch_add( 1, std::memory_order_relaxed );
+                    }
+                    vel[ agent_idx ] = v_discharge; // Задаем discharge скорость
+                }
+                else
+                {
+                    pos[ agent_idx ] = new_pos;
+                    vel[ agent_idx ] = agent_speed;
+                }
+            }
+            else
+            {
+                // РЕЖИМ 2: Очередь. Агент уже в пробке.
+                agent_speed = v_discharge;
+                
+                // В очереди агент медленно ползет к финишу со скоростью вытекания
+                pos[ agent_idx ] += agent_speed * dt;
+                vel[ agent_idx ] = agent_speed;
             }
         }
 
         // --- COLD PATH FILTER: Identify agents crossing the edge boundary ---
-        const float * __restrict inv_len = pool_.inv_edge_length_m.data();
         pool_.transition_queue.clear();
-
         for( size_t i = 0; i < agent_count; ++i )
         {
-            // Only is_active==1 agents can transition (not waiting-for-route agents).
-            // __builtin_expect signals to the CPU that crossing the edge boundary is a rare event (unlikely),
-            // keeping the hot path loop branch-free and fully pipelined.
             if( active[ i ] == 1 && __builtin_expect( pos[ i ] * inv_len[ i ] >= 1.0f, 0 ) )
             {
                 pool_.transition_queue.push_back( static_cast< uint32_t >( i ) );
@@ -289,9 +362,18 @@ public:
                         if( ctx.max_volumes && ctx.live_volumes[ next_edge ] > ctx.max_volumes[ next_edge ] )
                             ctx.max_volumes[ next_edge ] = ctx.live_volumes[ next_edge ];
                     }
+                    if( ctx.queue_volumes )
+                    {
+                        uint32_t q_vol = ctx.queue_volumes[ old_edge ].load( std::memory_order_relaxed );
+                        if( q_vol > 0 )
+                        {
+                            ctx.queue_volumes[ old_edge ].fetch_sub( 1, std::memory_order_relaxed );
+                        }
+                    }
 
                     pool_.current_edge[ agent_idx ]        = next_edge;
                     pool_.edge_enter_time_sec[ agent_idx ] = ctx.current_time_sec;
+                    pool_.in_queue[ agent_idx ]            = 0;
 
                     // Update geometry immediately so the while-condition re-evaluates correctly
                     float len = ( ctx.edge_lengths_m )
@@ -308,9 +390,18 @@ public:
                         if( ctx.live_volumes[ old_edge ] > 0 )
                             ctx.live_volumes[ old_edge ]--;
                     }
+                    if( ctx.queue_volumes )
+                    {
+                        uint32_t q_vol = ctx.queue_volumes[ old_edge ].load( std::memory_order_relaxed );
+                        if( q_vol > 0 )
+                        {
+                            ctx.queue_volumes[ old_edge ].fetch_sub( 1, std::memory_order_relaxed );
+                        }
+                    }
 
                     pool_.is_active[ agent_idx ]  = 0;
                     pool_.pos_meters[ agent_idx ] = 0.0f;
+                    pool_.in_queue[ agent_idx ]   = 0;
                     completed_agents++;
                     if (ctx.completed_agents_out) {
                         ctx.completed_agents_out->push_back(agent_idx);
@@ -318,7 +409,7 @@ public:
                 }
             }
 
-            // Compute BPR speed ONCE for the edge the agent will actually dwell on.
+            // Compute static Free-Flow speed ONCE for the edge the agent will actually dwell on.
             // Intermediate edges (passed through during multi-hop) are irrelevant.
             if( pool_.is_active[ agent_idx ] == 1 && !blocked )
             {
@@ -326,7 +417,11 @@ public:
                 float len = ( ctx.edge_lengths_m )
                                 ? ctx.edge_lengths_m[ curr_edge ]
                                 : ( 1.0f / pool_.inv_edge_length_m[ agent_idx ] );
-                pool_.velocity_mps[ agent_idx ] = ComputeEdgeEntrySpeed( curr_edge, ctx, len );
+                float w = ( ctx.static_weights )
+                              ? static_cast< float >( ctx.static_weights[ curr_edge ] )
+                              : ( len / 15.0f );
+                if( w < 0.001f ) w = 0.001f;
+                pool_.velocity_mps[ agent_idx ] = len / w;
             }
         }
         return completed_agents;

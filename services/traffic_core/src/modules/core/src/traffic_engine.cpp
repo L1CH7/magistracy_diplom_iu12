@@ -85,9 +85,11 @@ std::expected< void, std::string > TrafficEngine::Init( const std::string & data
     live_edge_volumes_.assign( n_edges, 0 );
     max_live_volumes_.assign( n_edges, 0 );
     edge_lengths_cache_.resize( n_edges );
+    queue_edge_volumes_ = std::make_unique< std::atomic< uint32_t >[] >( n_edges );
     for( size_t i = 0; i < n_edges; ++i )
     {
         edge_lengths_cache_[ i ] = router_manager_.get_edge_length( static_cast< traffic::EdgeID >( i ) );
+        queue_edge_volumes_[ i ].store( 0, std::memory_order_relaxed );
     }
 
     return {};
@@ -135,7 +137,15 @@ void TrafficEngine::ResetState()
     
     std::fill( live_edge_volumes_.begin(), live_edge_volumes_.end(), 0 );
     std::fill( max_live_volumes_.begin(), max_live_volumes_.end(), 0 );
+    if( queue_edge_volumes_ )
+    {
+        for( size_t i = 0; i < router_manager_.num_edges(); ++i )
+        {
+            queue_edge_volumes_[ i ].store( 0, std::memory_order_relaxed );
+        }
+    }
     std::fill( agent_pool_.is_active.begin(), agent_pool_.is_active.end(), 0 );
+    std::fill( agent_pool_.in_queue.begin(), agent_pool_.in_queue.end(), 0 );
     std::fill( trip_free_flow_sec_.begin(), trip_free_flow_sec_.end(), 0.0f );
     std::fill( trip_spawn_sim_time_.begin(), trip_spawn_sim_time_.end(), 0.0f );
 
@@ -289,10 +299,10 @@ void TrafficEngine::Step( float dt )
 
     for (int i = 0; i < sub_steps; ++i)
     {
-        kin_system_.AdvanceKinematics( actual_dt );
         auto ctx = MakePhysicsContext( static_cast< uint32_t >( current_sim_time_ ) );
         ctx.completed_agents_out = &completed_agents_buf;
         
+        kin_system_.AdvanceKinematics( actual_dt, ctx );
         total_completed_routes_ += kin_system_.ProcessTransitions( ctx );
         current_sim_time_ += actual_dt;
 
@@ -586,11 +596,15 @@ void TrafficEngine::HandleResponses()
                 }
 
                 agent_pool_.is_active[ r.agent_id ] = 1;
-                agent_pool_.velocity_mps[ r.agent_id ] = data_provider::ComputeEdgeEntrySpeed(
-                    first_edge,
-                    MakePhysicsContext( static_cast< uint32_t >( current_sim_time_ ) ),
-                    first_len
-                );
+                
+                float w = ( first_len / 15.0f );
+                const auto & view = router_manager_.get_view();
+                if( view.static_weights )
+                {
+                    w = static_cast< float >( view.static_weights[ first_edge ] );
+                }
+                if( w < 0.001f ) w = 0.001f;
+                agent_pool_.velocity_mps[ r.agent_id ] = first_len / w;
 
                 if( telemetry_worker_ )
                 {
@@ -629,6 +643,7 @@ data_provider::PhysicsContext TrafficEngine::MakePhysicsContext( uint32_t time_s
     ctx.edge_lengths_m = edge_lengths_cache_.empty() ? nullptr : edge_lengths_cache_.data();
     ctx.live_volumes   = const_cast< uint32_t * >( live_edge_volumes_.data() );
     ctx.max_volumes    = const_cast< uint32_t * >( max_live_volumes_.data() );
+    ctx.queue_volumes  = queue_edge_volumes_.get();
     ctx.k_magic        = router_manager_.get_kmagic_ptr();
     ctx.edge_attributes = router_manager_.get_edge_attributes_ptr();
 

@@ -29,6 +29,7 @@ struct AgentPool
     std::vector< uint8_t > next_waypoint_idx; // Индекс точки, к которой агент едет сейчас
     std::vector< uint8_t > is_active;           // 1 for active, 0 for despawned/wait
     std::vector< uint8_t > is_waiting_route;   // true if agent has an active reroute request
+    std::vector< uint8_t > in_queue;           // 1 = в очереди, 0 = в свободном потоке
     std::vector< uint32_t > route_epoch;       // Current routing epoch to filter stale responses
 
     // === Buffer for agents finishing their current edge ===
@@ -52,6 +53,7 @@ struct AgentPool
         next_waypoint_idx.assign( capacity, 0 );
         is_active.assign( capacity, 0 );
         is_waiting_route.assign( capacity, 0 );
+        in_queue.assign( capacity, 0 );
         route_epoch.assign( capacity, 0 );
 
         // Initial capacity for transitions to avoid allocations during tick
