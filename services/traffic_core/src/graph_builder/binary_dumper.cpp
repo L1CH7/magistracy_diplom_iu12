@@ -96,10 +96,14 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             std::string hw = row[5].is_null() ? "" : row[5].template as<std::string>();
             const auto& config = GetRoadConfig(hw);
             
-            n.highway_class = 3; 
-            if (hw == "motorway" || hw == "trunk" || hw == "motorway_link") n.highway_class = 0;
-            else if (hw == "primary" || hw == "secondary" || hw == "primary_link") n.highway_class = 1;
-            else if (hw == "tertiary" || hw == "tertiary_link") n.highway_class = 2;
+            n.highway_class = 5; // По умолчанию unclassified (5)
+            if (hw == "motorway" || hw == "motorway_link") n.highway_class = 0;
+            else if (hw == "trunk" || hw == "trunk_link") n.highway_class = 1;
+            else if (hw == "primary" || hw == "primary_link") n.highway_class = 2;
+            else if (hw == "secondary" || hw == "secondary_link") n.highway_class = 3;
+            else if (hw == "tertiary" || hw == "tertiary_link") n.highway_class = 4;
+            else if (hw == "residential" || hw == "living_street") n.highway_class = 6;
+            else if (hw == "service" || hw == "pedestrian") n.highway_class = 7;
 
             n.oneway = row[6].is_null() ? 0 : static_cast<uint8_t>(row[6].template as<int>());
             
@@ -118,8 +122,18 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             if (v_free < 5.0f) v_free = 5.0f; // Защита от деления на 0
 
             float speed_mps = v_free / 3.6f;
-            uint8_t lanes = (n.lanes > 0) ? n.lanes : static_cast<uint8_t>(config.default_lanes);
-            if (lanes == 0) lanes = 1;
+            uint8_t lanes = n.lanes;
+            
+            // Умный дефолт полос, если в OSM они не указаны
+            if (lanes == 0) {
+                switch (n.highway_class) {
+                    case 0: lanes = 4; break; // motorway
+                    case 1: lanes = 3; break; // trunk
+                    case 2: lanes = 2; break; // primary
+                    case 3: lanes = 2; break; // secondary
+                    default: lanes = 1; break; // tertiary, unclassified, residential, service
+                }
+            }
 
             // Время реакции на основе констант из CMake
             float t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_URBAN_SEC);
@@ -224,7 +238,7 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             if (v1_ms < 1.0f) v1_ms = 1.0f;
             if (v2_ms < 1.0f) v2_ms = 1.0f;
 
-            float R = (ram_nodes_[e.from_node].highway_class == 0) ? 50.0f : 15.0f;
+            float R = (ram_nodes_[e.from_node].highway_class <= 1) ? 50.0f : 15.0f;
             float v_turn_ms = std::min({v1_ms, v2_ms, std::sqrt(MU_FRICTION * G_ACCEL * R)});
             v_turn_ms = std::max(v_turn_ms, 1.3f); 
 
