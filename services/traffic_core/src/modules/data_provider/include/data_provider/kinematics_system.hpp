@@ -147,9 +147,19 @@ public:
             float stop_line_m = std::max( 0.0f, edge_len - queue_length_m );
 
             // Определяем v_free_mps и v_discharge
-            float w = ( ctx.static_weights )
-                          ? static_cast< float >( ctx.static_weights[ current_edge ] )
-                          : ( edge_len / 15.0f );
+            float w = 0.0f;
+            if( ctx.edge_attributes )
+            {
+                w = ctx.edge_attributes[ current_edge ].t_free_base;
+            }
+            else if( ctx.static_weights )
+            {
+                w = static_cast< float >( ctx.static_weights[ current_edge ] );
+            }
+            else
+            {
+                w = edge_len / 15.0f;
+            }
             if( w < 0.001f ) w = 0.001f;
             float v_free_mps = edge_len / w;
 
@@ -417,9 +427,19 @@ public:
                 float len = ( ctx.edge_lengths_m )
                                 ? ctx.edge_lengths_m[ curr_edge ]
                                 : ( 1.0f / pool_.inv_edge_length_m[ agent_idx ] );
-                float w = ( ctx.static_weights )
-                              ? static_cast< float >( ctx.static_weights[ curr_edge ] )
-                              : ( len / 15.0f );
+                float w = 0.0f;
+                if( ctx.edge_attributes )
+                {
+                    w = ctx.edge_attributes[ curr_edge ].t_free_base;
+                }
+                else if( ctx.static_weights )
+                {
+                    w = static_cast< float >( ctx.static_weights[ curr_edge ] );
+                }
+                else
+                {
+                    w = len / 15.0f;
+                }
                 if( w < 0.001f ) w = 0.001f;
                 pool_.velocity_mps[ agent_idx ] = len / w;
             }

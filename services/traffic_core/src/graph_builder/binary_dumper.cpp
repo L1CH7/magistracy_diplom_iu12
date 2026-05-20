@@ -256,6 +256,13 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             float penalty = kinematic_penalty;
             if (std::abs(e.angle_deg) > 150.0f) penalty += 15.0f; // Разворот дороже
 
+            // Добавляем топологический штраф за класс целевой дороги (дворы, жилые улицы)
+            switch (ram_nodes_[e.to_node].highway_class) {
+                case 6: penalty += 10.0f; break; // residential / living_street (+10 сек)
+                case 7: penalty += 30.0f; break; // service / yard / pedestrian (+30 сек)
+                default: break;
+            }
+
             e.turn_penalty_sec = static_cast<uint16_t>(std::round(penalty));
             uint32_t total_weight = static_cast<uint32_t>(std::round(ram_nodes_[e.to_node].t_free_base + penalty));
             e.static_weight = total_weight;
