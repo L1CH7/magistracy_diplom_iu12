@@ -134,7 +134,9 @@ public:
         for( size_t i = 0; i < agent_count; ++i )
         {
             // Only is_active==1 agents can transition (not waiting-for-route agents).
-            if( active[ i ] == 1 && ( pos[ i ] * inv_len[ i ] >= 1.0f ) )
+            // __builtin_expect signals to the CPU that crossing the edge boundary is a rare event (unlikely),
+            // keeping the hot path loop branch-free and fully pipelined.
+            if( active[ i ] == 1 && __builtin_expect( pos[ i ] * inv_len[ i ] >= 1.0f, 0 ) )
             {
                 pool_.transition_queue.push_back( static_cast< uint32_t >( i ) );
             }
@@ -182,28 +184,93 @@ public:
                 {
                     traffic::EdgeID next_edge = route[ next_idx ];
 
-                    // Spillback & Hard Capacity Check with Deadlock Avoidance (Elasticity)
-                    uint32_t jam_cap = 150; // Fallback
-                    if ( ctx.edge_attributes )
+                    // Prefetch attributes and volumes of the subsequent edge in the route
+                    if ( next_idx + 1 < route.size() )
                     {
-                        jam_cap = ctx.edge_attributes[ next_edge ].jam_capacity;
+                        traffic::EdgeID lookahead_edge = route[ next_idx + 1 ];
+                        if ( ctx.edge_attributes )
+                        {
+                            __builtin_prefetch( &ctx.edge_attributes[ lookahead_edge ], 0, 3 );
+                        }
+                        if ( ctx.live_volumes )
+                        {
+                            __builtin_prefetch( &ctx.live_volumes[ lookahead_edge ], 1, 3 );
+                        }
                     }
-                    if ( jam_cap == 0 ) jam_cap = 1;
 
-                    uint32_t current_load = 0;
+                    // --- LWR FLUID DYNAMICS SPILLBACK SYSTEM ---
+                    uint32_t load_next = 0;
                     if ( ctx.live_volumes )
                     {
-                        current_load = ctx.live_volumes[ next_edge ] * ctx.asf;
+                        load_next = ctx.live_volumes[ next_edge ] * ctx.asf;
+                    }
+                    uint32_t jam_cap_next = 1;
+                    uint32_t jam_cap_curr = 1;
+
+                    if ( ctx.edge_attributes )
+                    {
+                        uint32_t raw_cap_next = ctx.edge_attributes[ next_edge ].jam_capacity;
+                        // Apply micro-edge guard for next_edge
+                        if ( __builtin_expect( raw_cap_next < ctx.asf, 0 ) )
+                        {
+                            raw_cap_next = ctx.asf;
+                        }
+                        jam_cap_next = std::max<uint32_t>( 1, raw_cap_next );
+
+                        uint32_t raw_cap_curr = ctx.edge_attributes[ old_edge ].jam_capacity;
+                        if ( __builtin_expect( raw_cap_curr < ctx.asf, 0 ) )
+                        {
+                            raw_cap_curr = ctx.asf;
+                        }
+                        jam_cap_curr = std::max<uint32_t>( 1, raw_cap_curr );
                     }
 
-                    if ( current_load >= jam_cap && ( std::rand() % 100 >= 5 ) )
+                    // 1. Check if the next edge is congested
+                    if ( __builtin_expect( load_next + ctx.asf > jam_cap_next, 0 ) )
                     {
-                        // Agent remains on old_edge
-                        pool_.route_progress_idx[ agent_idx ]--;
-                        pool_.pos_meters[ agent_idx ] = edge_len;
-                        pool_.velocity_mps[ agent_idx ] = 0.0f;
-                        blocked = true;
-                        break; // Stop transitioning, wait for next tick
+                        bool blocked_transition = true;
+                        
+                        // 2. ABSOLUTE PHYSICAL LIMIT (Eradicate 40x overloads permanently)
+                        // Max 150% of physical capacity, with a minimum of +1 agent capacity for micro-edges
+                        uint32_t absolute_max = jam_cap_next + std::max<uint32_t>( jam_cap_next / 2, ctx.asf );
+                        
+                        if ( load_next + ctx.asf <= absolute_max )
+                        {
+                            // 3. HYDRAULIC PRESSURE VALVE (Compare densities / pressure gradients)
+                            uint32_t load_curr = 0;
+                            if ( ctx.live_volumes )
+                            {
+                                load_curr = ctx.live_volumes[ old_edge ] * ctx.asf;
+                            }
+                            
+                            float pressure_curr = static_cast<float>( load_curr ) / static_cast<float>( jam_cap_curr );
+                            float pressure_next = static_cast<float>( load_next ) / static_cast<float>( jam_cap_next );
+                            
+                            // If pressure behind is greater or equal - allow transition chance (leak/squeeze)
+                            if ( pressure_curr >= pressure_next )
+                            {
+                                float next_len = 25.0f; // fallback
+                                if ( ctx.edge_attributes )
+                                {
+                                    next_len = ctx.edge_attributes[ next_edge ].length_m;
+                                }
+                                uint32_t leak_chance = ( next_len < 20.0f ) ? 15 : 5; // Higher leak chance for micro-edges
+                                if ( static_cast<uint32_t>( std::rand() % 100 ) < leak_chance )
+                                {
+                                    blocked_transition = false; // Successfully squeezed through!
+                                }
+                            }
+                        }
+                        
+                        if ( blocked_transition )
+                        {
+                            // Rollback transition. Agent remains at the very end of the current edge
+                            pool_.route_progress_idx[ agent_idx ]--;
+                            pool_.pos_meters[ agent_idx ] = edge_len - 0.05f; // 5 cm from the boundary
+                            pool_.velocity_mps[ agent_idx ] = 0.0f; // Stopped in queue
+                            blocked = true;
+                            break; // Stop transitioning this agent
+                        }
                     }
 
                     // Check if we reached a waypoint
