@@ -661,6 +661,12 @@ class MainWindowHandlers:
         # Block the simulation panel to prevent concurrent threads/segfaults
         self.sidebar.simulation_panel.setEnabled(False)
         
+        # Clear heatmap when starting a new simulation
+        if opcode == 1:
+            log.info("New simulation requested - clearing heatmap")
+            js_code = "if (window.app && window.app.clearHeatmap) { window.app.clearHeatmap(); }"
+            self.map_widget.page().runJavaScript(js_code)
+        
         # passing parent=self ensures that the worker is NOT garbage collected before finishing
         worker = SimulationWorker(self.gateway_url, opcode, params, parent=self)
         worker.finished.connect(self._on_simulation_finished)
