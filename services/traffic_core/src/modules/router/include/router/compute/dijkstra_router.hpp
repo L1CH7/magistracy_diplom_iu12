@@ -69,6 +69,7 @@ public:
                 traffic::PathWeight w = edge.w;
 
                 if constexpr (TrafficEnabled) {
+#ifndef TRAFFIC_DISABLE_ROUTER_BPR
                     traffic::AbsoluteTime arrival_time = start_time + g_curr;
                     uint32_t local_sec = arrival_time % traffic::router::compute::BUCKET_INTERVAL_SEC;
                     uint32_t t_idx = (arrival_time / traffic::router::compute::BUCKET_INTERVAL_SEC) % traffic::router::compute::NUM_BUCKETS;
@@ -84,7 +85,11 @@ public:
                     uint32_t dynamic_penalty = static_cast<uint32_t>((pen_1 + ((pen_2 - pen_1) * local_sec) / traffic::router::compute::BUCKET_INTERVAL_SEC) >> 20);
                     if (dynamic_penalty > static_cast<uint32_t>(w) * 10) dynamic_penalty = w * 10;
                     w += dynamic_penalty + (mpr_penalty_array ? mpr_penalty_array[v] : 0);
+#else
+                    w += (mpr_penalty_array ? mpr_penalty_array[v] : 0);
+#endif
                 }
+
 
                 traffic::PathWeight new_g = g_curr + w;
                 if (hot_states_[v].visit_id != current_visit_id_ || new_g < hot_states_[v].g_score) {

@@ -11,6 +11,8 @@ set(TRAFFIC_MPR_TOLERANCE_NUM 3 CACHE STRING "MPR ETA Tolerance Numerator (e.g.,
 set(TRAFFIC_MPR_TOLERANCE_DEN 2 CACHE STRING "MPR ETA Tolerance Denominator (e.g., 2 for 1.5x)")
 set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteResponse POD")
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
+set(TRAFFIC_DISABLE_ROUTER_BPR OFF CACHE BOOL "Disable BPR congestion weights in the router for purely static routing")
+
 
 # === Capacity / BPR Physics Constants ===
 # Физический размер одной машины (корпус + минимальный зазор) в метрах
@@ -55,3 +57,8 @@ add_compile_definitions(
     TRAFFIC_SPEED_DENSE_KMH=${TRAFFIC_SPEED_DENSE_KMH}
     TRAFFIC_DEFAULT_LANES=${TRAFFIC_DEFAULT_LANES}
 )
+
+if(TRAFFIC_DISABLE_ROUTER_BPR)
+    add_compile_definitions(TRAFFIC_DISABLE_ROUTER_BPR)
+endif()
+
