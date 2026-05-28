@@ -642,8 +642,8 @@ void TrafficEngine::HandleResponses()
                                           { r.path.data(), r.path_len },
                                           { r.edge_etas_sec.data(), r.path_len } );
 
-                // TTI: record TRUE free-flow trip cost
-                if( r.path_len > 0 )
+                // TTI: record TRUE free-flow trip cost only at initial spawn
+                if( !was_active && r.path_len > 0 )
                 {
                     auto view = router_manager_.get_view();
                     float free_flow_sec = 0.0f;

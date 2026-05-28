@@ -4,6 +4,8 @@ import json
 import sys
 import os
 import time
+import csv
+import hashlib
 import http.client
 from urllib.parse import urlparse
 import websockets
@@ -61,6 +63,45 @@ async def monitor():
     last_rps_time = time.time()
     last_actual_calculated = None
     current_rps = 0.0
+    
+    # Prepare unique CSV run file in scripts/stats/
+    stats_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats")
+    os.makedirs(stats_dir, exist_ok=True)
+    
+    # Try fetching initial stats synchronously to dynamically discover compile-time/run-time parameters
+    print(f"{C_BOLD}{C_CYAN}Получение конфигурации от демона...{C_RESET}")
+    initial_stats = {}
+    for _ in range(10):
+        initial_stats = fetch_stats()
+        if initial_stats:
+            break
+        time.sleep(0.5)
+        
+    num_buckets = initial_stats.get("num_buckets", 24)
+    slot_sec = initial_stats.get("slot_sec", 300)
+    configured_agents = initial_stats.get("configured_agents", 200000)
+    asf = initial_stats.get("asf", 1)
+    
+    stats_cache = initial_stats if initial_stats else {}
+    
+    run_hash = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
+    csv_filename = os.path.join(
+        stats_dir, 
+        f"run_{run_hash}_{num_buckets}b_{slot_sec}s_{configured_agents}a_{asf}asf.csv"
+    )
+    last_logged_sim_time = -100.0
+    
+    print(f"{C_BOLD}{C_GREEN}[+] Файл телеметрии: {os.path.basename(csv_filename)}{C_RESET}")
+    
+    # Write CSV headers
+    csv_headers = [
+        "SimTime", "TTI", "ActiveAgents", "WaitingReroute", 
+        "CompletedTrips", "DynamicReroutes", "BlackZones", 
+        "RedZones", "YellowZones", "RouterRPS", "SavedDuplicates", "RouterLoad"
+    ]
+    with open(csv_filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(csv_headers)
     
     # Background task to poll stats periodically
     async def poll_stats_loop():
@@ -149,20 +190,22 @@ async def monitor():
                 curr_real_time = time.time()
                 dt_real = curr_real_time - last_rps_time
                 if dt_real >= 0.5:
-                    if last_actual_calculated is None:
-                        # Bootstrap on first received frame when joining a running simulation
+                    if sim_time < 30.0 or last_actual_calculated is None or last_actual_calculated == 0:
+                        # Reset baseline during initial warm-up / spawning wave to ignore spawning burst
                         last_actual_calculated = actual_calculated
                         instant_rps = 0.0
+                        current_rps = 0.0
                     else:
                         instant_rps = (actual_calculated - last_actual_calculated) / dt_real
                         last_actual_calculated = actual_calculated
 
                     # Smooth with EMA: alpha = 0.2 (averages over roughly 5 seconds / 10 samples)
-                    if current_rps == 0.0 and instant_rps > 0.0:
-                        current_rps = instant_rps
-                    elif instant_rps > 0.0 or current_rps > 0.0:
-                        alpha = 0.2
-                        current_rps = alpha * instant_rps + (1.0 - alpha) * current_rps
+                    if sim_time >= 30.0:
+                        if current_rps == 0.0 and instant_rps > 0.0:
+                            current_rps = instant_rps
+                        elif instant_rps > 0.0 or current_rps > 0.0:
+                            alpha = 0.2
+                            current_rps = alpha * instant_rps + (1.0 - alpha) * current_rps
                     
                     last_rps_time = curr_real_time
 
@@ -177,6 +220,26 @@ async def monitor():
 
                 active_on_roads = agents_driving + agents_rerouting
                 inactive_agents = agents_waiting_spawn + agents_idle
+
+                # Log stats to CSV if simulation time progressed by at least 1.0s
+                if sim_time - last_logged_sim_time >= 1.0:
+                    with open(csv_filename, "a", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow([
+                            round(sim_time, 1),
+                            round(tti, 4),
+                            active_agents,
+                            agents_rerouting,
+                            routes_completed,
+                            reroutes,
+                            len(black_edges),
+                            len(red_edges),
+                            len(yellow_edges),
+                            round(current_rps, 1),
+                            routes_stale,
+                            round(router_load, 4)
+                        ])
+                    last_logged_sim_time = sim_time
 
                 # Build output screen
                 out = []

@@ -496,6 +496,8 @@ int main(int argc, char **argv) {
         json << "\"current_accel\":" << engine.GetCurrentAcceleration() << ",";
         json << "\"router_load\":" << engine.GetRouterLoadFactor() << ",";
         json << "\"asf\":" << engine.GetASF() << ",";
+        json << "\"num_buckets\":" << TRAFFIC_NUM_BUCKETS << ",";
+        json << "\"slot_sec\":" << TRAFFIC_SLOT_SEC << ",";
         json << "\"configured_agents\":" << engine.GetNumAgentsConfig();
         json << "}";
         std::string payload = json.str();
