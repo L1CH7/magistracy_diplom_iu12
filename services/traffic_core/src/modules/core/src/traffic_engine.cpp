@@ -414,7 +414,7 @@ void TrafficEngine::Step( float dt )
                 traffic::common::net::RouteRequest req;
                 req.agent_id = i;
                 req.epoch = agent_pool_.route_epoch[ i ];
-                req.asf = 50; // Default ASF for respawn
+                req.asf = asf_;
                 req.current_time_sec = static_cast< uint32_t >( current_sim_time_ );
                 req.num_waypoints = 2;
                 req.waypoints[ 0 ] = start_edge;
@@ -478,6 +478,26 @@ void TrafficEngine::StartRouterWorker()
         {
             if( router_ep_->Receive( req_batch ) )
             {
+                // Preserve the earliest queue position but update the actual start position for duplicates
+                std::vector< RouteRequest > deduped_batch;
+                deduped_batch.reserve( req_batch.size() );
+                std::unordered_map< uint32_t, size_t > agent_to_index;
+
+                for( const auto & req : req_batch )
+                {
+                    auto it = agent_to_index.find( req.agent_id );
+                    if( it != agent_to_index.end() )
+                    {
+                        deduped_batch[ it->second ] = req;
+                    }
+                    else
+                    {
+                        agent_to_index[ req.agent_id ] = deduped_batch.size();
+                        deduped_batch.push_back( req );
+                    }
+                }
+                req_batch = std::move( deduped_batch );
+
                 res_batch.resize( req_batch.size() );
                 for( size_t i = 0; i < req_batch.size(); ++i )
                 {
@@ -554,6 +574,40 @@ void TrafficEngine::HandleResponses()
             {
                 const bool was_active = ( agent_pool_.is_active[ r.agent_id ] == 1 );
 
+                // Verify that the agent is still on a valid segment of the calculated path.
+                // If it has moved, but is still on one of the edges in the new path, we align its progress index.
+                // Otherwise, if its current edge is not found in the path, we discard it.
+                int found_idx = -1;
+                if( was_active && r.path_len > 0 )
+                {
+                    traffic::EdgeID curr_edge = agent_pool_.current_edge[ r.agent_id ];
+                    for( size_t k = 0; k < r.path_len; ++k )
+                    {
+                        if( r.path[ k ] == curr_edge )
+                        {
+                            found_idx = static_cast< int >( k );
+                            break;
+                        }
+                    }
+                    if( found_idx == -1 )
+                    {
+                        // Current edge is not part of the calculated path. Discard it.
+                        continue;
+                    }
+                }
+
+                auto vol_mgr = router_manager_.get_volume_manager();
+                if( vol_mgr )
+                {
+                    // Unbook old route first
+                    auto old_path = route_arena_.GetRoute( r.agent_id );
+                    auto old_etas = route_arena_.GetEtas( r.agent_id );
+                    if( !old_path.empty() )
+                    {
+                        vol_mgr->unbook_route( old_path, old_etas, asf_ );
+                    }
+                }
+
                 // Reroute counter: agent already had a route and is getting a new one
                 if( was_active )
                     reroute_count_.fetch_add( 1, std::memory_order_relaxed );
@@ -577,7 +631,6 @@ void TrafficEngine::HandleResponses()
                     trip_spawn_sim_time_[ r.agent_id ] = current_sim_time_;
                 }
 
-                auto vol_mgr = router_manager_.get_volume_manager();
                 if( vol_mgr )
                 {
                     vol_mgr->book_route( route_arena_.GetRoute( r.agent_id ),
@@ -585,33 +638,37 @@ void TrafficEngine::HandleResponses()
                                          asf_ /* weight */ );
                 }
 
-                agent_pool_.route_progress_idx[ r.agent_id ] = 0;
-                agent_pool_.edge_enter_time_sec[ r.agent_id ] = static_cast< uint32_t >( current_sim_time_ );
-
-                traffic::EdgeID first_edge = route_arena_.GetRoute( r.agent_id )[ 0 ];
-                float first_len = edge_lengths_cache_.empty()
-                                      ? router_manager_.get_edge_length( first_edge )
-                                      : edge_lengths_cache_[ first_edge ];
-                if( first_len < 0.1f ) first_len = 0.1f;
-                agent_pool_.inv_edge_length_m[ r.agent_id ] = 1.0f / first_len;
-
                 if( !was_active )
                 {
+                    agent_pool_.route_progress_idx[ r.agent_id ] = 0;
+                    agent_pool_.edge_enter_time_sec[ r.agent_id ] = static_cast< uint32_t >( current_sim_time_ );
+
+                    traffic::EdgeID first_edge = route_arena_.GetRoute( r.agent_id )[ 0 ];
+                    float first_len = edge_lengths_cache_.empty()
+                                          ? router_manager_.get_edge_length( first_edge )
+                                          : edge_lengths_cache_[ first_edge ];
+                    if( first_len < 0.1f ) first_len = 0.1f;
+                    agent_pool_.inv_edge_length_m[ r.agent_id ] = 1.0f / first_len;
+
                     live_edge_volumes_[ first_edge ]++;
                     if( live_edge_volumes_[ first_edge ] > max_live_volumes_[ first_edge ] )
                         max_live_volumes_[ first_edge ] = live_edge_volumes_[ first_edge ];
-                }
 
-                agent_pool_.is_active[ r.agent_id ] = 1;
-                
-                float w = ( first_len / 15.0f );
-                const auto & view = router_manager_.get_view();
-                if( view.static_weights )
-                {
-                    w = static_cast< float >( view.static_weights[ first_edge ] );
+                    agent_pool_.is_active[ r.agent_id ] = 1;
+
+                    float w = ( first_len / 15.0f );
+                    const auto & view = router_manager_.get_view();
+                    if( view.static_weights )
+                    {
+                        w = static_cast< float >( view.static_weights[ first_edge ] );
+                    }
+                    if( w < 0.001f ) w = 0.001f;
+                    agent_pool_.velocity_mps[ r.agent_id ] = first_len / w;
                 }
-                if( w < 0.001f ) w = 0.001f;
-                agent_pool_.velocity_mps[ r.agent_id ] = first_len / w;
+                else
+                {
+                    agent_pool_.route_progress_idx[ r.agent_id ] = found_idx;
+                }
 
                 if( telemetry_worker_ )
                 {
@@ -640,6 +697,58 @@ uint32_t TrafficEngine::GetActiveAgents() const
         if( agent_pool_.is_active[ i ] ) active++;
     }
     return active;
+}
+
+uint32_t TrafficEngine::GetDrivingAgents() const
+{
+    uint32_t cnt = 0;
+    for( uint32_t i = 0; i < agent_pool_.is_active.size(); ++i )
+    {
+        if( agent_pool_.is_active[ i ] == 1 && agent_pool_.is_waiting_route[ i ] == 0 )
+        {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+uint32_t TrafficEngine::GetReroutingAgents() const
+{
+    uint32_t cnt = 0;
+    for( uint32_t i = 0; i < agent_pool_.is_active.size(); ++i )
+    {
+        if( agent_pool_.is_active[ i ] == 1 && agent_pool_.is_waiting_route[ i ] == 1 )
+        {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+uint32_t TrafficEngine::GetWaitingSpawnAgents() const
+{
+    uint32_t cnt = 0;
+    for( uint32_t i = 0; i < agent_pool_.is_active.size(); ++i )
+    {
+        if( agent_pool_.is_active[ i ] == 2 )
+        {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+uint32_t TrafficEngine::GetIdleAgents() const
+{
+    uint32_t cnt = 0;
+    for( uint32_t i = 0; i < agent_pool_.is_active.size(); ++i )
+    {
+        if( agent_pool_.is_active[ i ] == 0 && agent_pool_.is_waiting_route[ i ] == 0 )
+        {
+            cnt++;
+        }
+    }
+    return cnt;
 }
 
 data_provider::PhysicsContext TrafficEngine::MakePhysicsContext( uint32_t time_sec ) const noexcept

@@ -56,8 +56,8 @@ public:
 
 #pragma GCC ivdep
     for (size_t i = 0; i < agent_count; ++i) {
-      // Only truly active agents that are not already waiting for a route
-      if (active[i] == 1 && waiting[i] == 0)
+      // Only truly active agents
+      if (active[i] == 1)
       {
         const uint32_t elapsed = current_time_sec - enter_times[i];
 

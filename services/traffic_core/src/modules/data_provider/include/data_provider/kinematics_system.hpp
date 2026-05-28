@@ -388,6 +388,7 @@ public:
                     }
 
                     pool_.is_active[ agent_idx ]  = 0;
+                    pool_.is_waiting_route[ agent_idx ] = 0;
                     pool_.pos_meters[ agent_idx ] = 0.0f;
                     pool_.in_queue[ agent_idx ]   = 0;
                     completed_agents++;

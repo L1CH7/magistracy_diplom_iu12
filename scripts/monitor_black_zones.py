@@ -133,25 +133,48 @@ async def monitor():
                 routes_completed = stats_cache.get("routes_completed", 0)
                 routes_failed = stats_cache.get("routes_failed", 0)
 
+                agents_driving = stats_cache.get("agents_driving", 0)
+                agents_rerouting = stats_cache.get("agents_rerouting", 0)
+                agents_waiting_spawn = stats_cache.get("agents_waiting_spawn", 0)
+                agents_idle = stats_cache.get("agents_idle", 0)
+
+                sum_agents = agents_driving + agents_rerouting + agents_waiting_spawn + agents_idle
                 total_cars = active_agents * asf
                 stuck_cars_est = int(total_cars * (p_black / 100.0))
+
+                active_on_roads = agents_driving + agents_rerouting
+                inactive_agents = agents_waiting_spawn + agents_idle
 
                 # Build output screen
                 out = []
                 out.append("\033[H\033[J") # Clear screen & home cursor
                 out.append(f"{C_BOLD}{C_BG_BLACK}  TRAFFIC SIMULATION DIAGNOSTICS & BOTTLENECK MONITOR  {C_RESET}")
                 out.append(f"Время симуляции: {C_BOLD}{sim_time:.1f} сек.{C_RESET} | TTI: {C_BOLD}{C_CYAN}{tti:.2f}{C_RESET}")
-                out.append(f"Активно агентов: {C_BOLD}{active_agents}/{config_agents}{C_RESET} (ASF: {asf} -> {C_BOLD}{total_cars}{C_RESET} вирт. авто)")
-                out.append(f"Спавны: {C_BOLD}{total_spawns}{C_RESET} | Рероуты MPR: {C_BOLD}{C_YELLOW}{reroutes}{C_RESET} | Успешно/Застряло: {C_GREEN}{routes_completed}{C_RESET}/{C_RED}{routes_failed}{C_RESET}")
+                out.append("")
+                out.append(f"СТАТИСТИКА ПОЕЗДОК:")
+                out.append(f"  ├─ Всего поездок начато:  {C_GREEN}{routes_completed}{C_RESET}")
+                out.append(f"  └─ Успешных объездов:     {C_YELLOW}{reroutes}{C_RESET} (по алгоритму MPR)")
+                out.append("")
+                out.append(f"РАСПРЕДЕЛЕНИЕ АГЕНТОВ (Всего в симуляции: {C_BOLD}{config_agents}{C_RESET}):")
+                out.append(f"  ├─ {C_BOLD}Активные на дорогах:{C_RESET}   {C_BOLD}{active_on_roads}{C_RESET}")
+                out.append(f"  │   ├─ Едут по маршруту:  {C_GREEN}{agents_driving}{C_RESET} авто")
+                out.append(f"  │   └─ Ищут объезд затора: {C_YELLOW}{agents_rerouting}{C_RESET} авто (в очереди роутера)")
+                out.append(f"  └─ {C_BOLD}Неактивные в буфере:{C_RESET}   {C_BOLD}{inactive_agents}{C_RESET}")
+                out.append(f"      ├─ В очереди на выезд: {C_CYAN}{agents_waiting_spawn}{C_RESET} авто (ждут первый маршрут)")
+                out.append(f"      └─ Ожидают новый цикл: {C_MAGENTA}{agents_idle}{C_RESET} авто (завершили поездку)")
+                
+                status_ok = f"{C_GREEN}[OK: 100%]{C_RESET}" if sum_agents == config_agents else f"{C_RED}[НЕСООТВЕТСТВИЕ!]{C_RESET}"
+                out.append("")
+                out.append(f"Итоговый баланс популяции: {C_BOLD}{sum_agents}/{config_agents}{C_RESET} {status_ok}")
                 out.append("--------------------------------------------------------------------------------")
                 
                 out.append(f"{C_BOLD}АНАЛИЗ ДОРОЖНОЙ СЕТИ (Активных ребер с трафиком: {total_active_edges}){C_RESET}")
                 
                 # Distribution list
-                out.append(f"  {C_BOLD}{C_MAGENTA}ЧЕРНЫЕ ЗОНЫ (Spillback >= 2.0x):{C_RESET}  {len(black_edges):5d} ({p_black:5.1f}%) {make_bar(p_black/100, 20, C_MAGENTA)} -> {C_BOLD}{C_RED}~{stuck_cars_est} авто застряло{C_RESET}")
-                out.append(f"  {C_BOLD}{C_RED}КРАСНЫЕ ЗОНЫ (Congested >= 1.0x):{C_RESET} {len(red_edges):5d} ({p_red:5.1f}%) {make_bar(p_red/100, 20, C_RED)}")
-                out.append(f"  {C_BOLD}{C_YELLOW}ЖЕЛТЫЕ ЗОНЫ (Moderate >= 0.3x):{C_RESET}  {len(yellow_edges):5d} ({p_yellow:5.1f}%) {make_bar(p_yellow/100, 20, C_YELLOW)}")
-                out.append(f"  {C_BOLD}{C_GREEN}ЗЕЛЕНЫЕ ЗОНЫ (Freeflow < 0.3x):{C_RESET}  {len(green_edges):5d} ({p_green:5.1f}%) {make_bar(p_green/100, 20, C_GREEN)}")
+                out.append(f"  {C_BOLD}{C_MAGENTA}ЧЕРНЫЕ ЗОНЫ (Затор >= 2.0x):{C_RESET}      {len(black_edges):5d} ({p_black:5.1f}%) {make_bar(p_black/100, 20, C_MAGENTA)} -> {C_BOLD}{C_RED}~{stuck_cars_est} авто застряло{C_RESET}")
+                out.append(f"  {C_BOLD}{C_RED}КРАСНЫЕ ЗОНЫ (Перегрузка >= 1.0x):{C_RESET}  {len(red_edges):5d} ({p_red:5.1f}%) {make_bar(p_red/100, 20, C_RED)}")
+                out.append(f"  {C_BOLD}{C_YELLOW}ЖЕЛТЫЕ ЗОНЫ (Плотный трафик >= 0.3x):{C_RESET}{len(yellow_edges):5d} ({p_yellow:5.1f}%) {make_bar(p_yellow/100, 20, C_YELLOW)}")
+                out.append(f"  {C_BOLD}{C_GREEN}ЗЕЛЕНЫЕ ЗОНЫ (Свободно < 0.3x):{C_RESET}     {len(green_edges):5d} ({p_green:5.1f}%) {make_bar(p_green/100, 20, C_GREEN)}")
                 
                 out.append("")
                 out.append(f"Средний коэффициент затора (Network-wide): {C_BOLD}{avg_overload:.3f}{C_RESET}")
@@ -167,16 +190,16 @@ async def monitor():
                     eid = edge["id"]
                     
                     if r >= 2.0:
-                        status = f"{C_BOLD}{C_MAGENTA}ПИТЧ-БЛЭК (Spillback){C_RESET}"
+                        status = f"{C_BOLD}{C_MAGENTA}ЧЕРНАЯ ЗОНА (Затор){C_RESET}"
                         speed = f"{C_BOLD}{C_RED}0 км/ч (Стоит){C_RESET}"
                     elif r >= 1.0:
-                        status = f"{C_RED}КРИТИЧЕСКИЙ ЗАДЕРЖКА{C_RESET}"
+                        status = f"{C_RED}КРАСНАЯ ЗОНА{C_RESET}"
                         speed = f"{C_YELLOW}~5 - 12 км/ч{C_RESET}"
                     elif r >= 0.5:
-                        status = f"{C_YELLOW}ЗАТОР (Тягуны){C_RESET}"
+                        status = f"{C_YELLOW}ЖЕЛТАЯ ЗОНА{C_RESET}"
                         speed = f"{C_GREEN}~20 - 40 км/ч{C_RESET}"
                     else:
-                        status = f"{C_GREEN}СВОБОДНО{C_RESET}"
+                        status = f"{C_GREEN}ЗЕЛЕНАЯ ЗОНА{C_RESET}"
                         speed = f"{C_GREEN}> 60 км/ч{C_RESET}"
                         
                     out.append(f"  {idx:2d} | {eid:15d} | {r:10.2f}x | {status:30s} | {speed}")

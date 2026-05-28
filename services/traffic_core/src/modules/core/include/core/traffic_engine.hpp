@@ -55,6 +55,10 @@ public:
 
     // Accessors for metrics
     uint32_t GetActiveAgents() const;
+    uint32_t GetDrivingAgents() const;
+    uint32_t GetReroutingAgents() const;
+    uint32_t GetWaitingSpawnAgents() const;
+    uint32_t GetIdleAgents() const;
     size_t GetRoutesComputed() const { return routes_computed_.load(); }
     size_t GetTotalSuccessfulRoutes() const { return total_successful_routes_; }
     size_t GetTotalFailedRoutes() const { return total_failed_routes_; }

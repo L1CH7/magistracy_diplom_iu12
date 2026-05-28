@@ -481,6 +481,10 @@ int main(int argc, char **argv) {
         json << "{";
         json << "\"sim_time\":" << engine.GetCurrentSimTime() << ",";
         json << "\"active_agents\":" << engine.GetActiveAgents() << ",";
+        json << "\"agents_driving\":" << engine.GetDrivingAgents() << ",";
+        json << "\"agents_rerouting\":" << engine.GetReroutingAgents() << ",";
+        json << "\"agents_waiting_spawn\":" << engine.GetWaitingSpawnAgents() << ",";
+        json << "\"agents_idle\":" << engine.GetIdleAgents() << ",";
         json << "\"total_spawns\":" << engine.GetTotalSpawns() << ",";
         json << "\"reroutes\":" << engine.GetTotalReroutes() << ",";
         json << "\"routes_computed\":" << engine.GetRoutesComputed() << ",";
