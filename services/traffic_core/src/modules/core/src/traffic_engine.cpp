@@ -131,6 +131,8 @@ void TrafficEngine::ResetState()
     total_completed_routes_ = 0;
     total_successful_routes_ = 0;
     total_failed_routes_ = 0;
+    total_discarded_routes_ = 0;
+    total_stale_routes_ = 0;
     reroute_count_.store(0);
     total_spawns_.store(0);
     tti_count_.store(0);
@@ -464,6 +466,8 @@ void TrafficEngine::Stop()
 void TrafficEngine::StartRouterWorker()
 {
     router_worker_ = std::thread( [ this ]( ) {
+        router_start_time_ = std::chrono::steady_clock::now();
+        router_busy_time_us_ = 0;
 #ifdef __linux__
         cpu_set_t cpuset;
         CPU_ZERO( &cpuset );
@@ -478,6 +482,8 @@ void TrafficEngine::StartRouterWorker()
         {
             if( router_ep_->Receive( req_batch ) )
             {
+                auto start_time = std::chrono::steady_clock::now();
+
                 // Preserve the earliest queue position but update the actual start position for duplicates
                 std::vector< RouteRequest > deduped_batch;
                 deduped_batch.reserve( req_batch.size() );
@@ -502,6 +508,16 @@ void TrafficEngine::StartRouterWorker()
                 for( size_t i = 0; i < req_batch.size(); ++i )
                 {
                     router_pool_.Enqueue( [ this, &req = req_batch[ i ], &res = res_batch[ i ] ]( ) {
+                        // Fast lock-free pre-calculation check: abort if the request is already outdated or superseded
+                        if( req.epoch != agent_pool_.route_epoch[ req.agent_id ] ||
+                            agent_pool_.is_waiting_route[ req.agent_id ] == 0 )
+                        {
+                            res.agent_id = req.agent_id;
+                            res.epoch = req.epoch;
+                            res.success = false;
+                            return;
+                        }
+
                         // Convert POD array to vector for the Router interface
                         std::vector<traffic::NodeID> wp_vec;
                         wp_vec.reserve(req.num_waypoints);
@@ -510,8 +526,8 @@ void TrafficEngine::StartRouterWorker()
                         }
 
                         auto result = router_manager_.Route< true, false >( 
-                            wp_vec,
-                            req.current_time_sec
+                             wp_vec,
+                             req.current_time_sec
                         );
 
                         res.agent_id = req.agent_id;
@@ -538,6 +554,11 @@ void TrafficEngine::StartRouterWorker()
                 routes_computed_.fetch_add( static_cast< uint32_t >( added ), std::memory_order_relaxed );
                 
                 router_ep_->Send( res_batch );
+                
+                auto end_time = std::chrono::steady_clock::now();
+                uint64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
+                router_busy_time_us_.fetch_add(elapsed_us, std::memory_order_relaxed);
+
                 empty_polls = 0;
             }
             else
@@ -561,9 +582,10 @@ void TrafficEngine::HandleResponses()
     {
         for( const auto & r : incoming_resps )
         {
-            // Проверка актуальности запроса (route_epoch)
-            if (r.epoch != agent_pool_.route_epoch[r.agent_id])
+            // Проверка актуальности запроса (route_epoch и дубликатов)
+            if (r.epoch != agent_pool_.route_epoch[r.agent_id] || agent_pool_.is_waiting_route[r.agent_id] == 0)
             {
+                total_stale_routes_++;
                 continue; 
             }
 
@@ -592,6 +614,7 @@ void TrafficEngine::HandleResponses()
                     if( found_idx == -1 )
                     {
                         // Current edge is not part of the calculated path. Discard it.
+                        total_discarded_routes_++;
                         continue;
                     }
                 }

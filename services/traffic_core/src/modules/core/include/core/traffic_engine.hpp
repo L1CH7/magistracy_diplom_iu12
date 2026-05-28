@@ -62,10 +62,20 @@ public:
     size_t GetRoutesComputed() const { return routes_computed_.load(); }
     size_t GetTotalSuccessfulRoutes() const { return total_successful_routes_; }
     size_t GetTotalFailedRoutes() const { return total_failed_routes_; }
+    size_t GetTotalDiscardedRoutes() const { return total_discarded_routes_; }
+    size_t GetTotalStaleRoutes() const { return total_stale_routes_; }
     size_t GetTotalCompletedRoutes() const { return total_completed_routes_; }
     size_t GetTotalReroutes() const { return reroute_count_.load(); }
     size_t GetTotalSpawns() const { return total_spawns_.load(); }
-    float  GetTTI() const
+    float GetRouterLoadFactor() const
+    {
+        auto elapsed = std::chrono::steady_clock::now() - router_start_time_;
+        uint64_t elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        if (elapsed_us == 0) return 0.0f;
+        float ratio = static_cast<float>(router_busy_time_us_.load()) / static_cast<float>(elapsed_us);
+        return (ratio > 1.0f) ? 1.0f : ratio;
+    }
+    float GetTTI() const
     {
         uint64_t cnt = tti_count_.load( std::memory_order_relaxed );
         return ( cnt > 0 ) ? static_cast<float>( tti_sum_ / static_cast<double>( cnt ) ) : 0.0f;
@@ -117,6 +127,8 @@ private:
 
     size_t total_successful_routes_{ 0 };
     size_t total_failed_routes_{ 0 };
+    size_t total_discarded_routes_{ 0 };
+    size_t total_stale_routes_{ 0 };
     size_t total_completed_routes_{ 0 };
 
     // TTI accumulators — written only from the engine step thread (no data race),
@@ -129,6 +141,8 @@ private:
     std::vector< float > trip_spawn_sim_time_;
 
     // Telemetry & Throttling
+    std::chrono::steady_clock::time_point router_start_time_;
+    std::atomic< uint64_t > router_busy_time_us_{ 0 };
     class TelemetryWorker * telemetry_worker_{ nullptr };
     std::chrono::steady_clock::time_point last_telemetry_time_;
     std::chrono::steady_clock::time_point sim_start_real_time_;

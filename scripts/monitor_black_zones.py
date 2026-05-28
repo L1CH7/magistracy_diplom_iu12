@@ -3,6 +3,7 @@ import asyncio
 import json
 import sys
 import os
+import time
 import http.client
 from urllib.parse import urlparse
 import websockets
@@ -56,6 +57,10 @@ async def monitor():
     print(f"Подключение к WebSocket: {WS_URL}...")
 
     stats_cache = {}
+    
+    last_rps_time = time.time()
+    last_actual_calculated = None
+    current_rps = 0.0
     
     # Background task to poll stats periodically
     async def poll_stats_loop():
@@ -133,6 +138,34 @@ async def monitor():
                 routes_completed = stats_cache.get("routes_completed", 0)
                 routes_failed = stats_cache.get("routes_failed", 0)
 
+                routes_computed = stats_cache.get("routes_computed", 0)
+                routes_successful = stats_cache.get("routes_successful", 0)
+                routes_discarded = stats_cache.get("routes_discarded", 0)
+                routes_stale = stats_cache.get("routes_stale", 0)
+                router_load = stats_cache.get("router_load", 0.0)
+
+                # Real-time actual pathfinding RPS tracking with Exponential Moving Average (EMA)
+                actual_calculated = routes_successful + routes_discarded + routes_failed
+                curr_real_time = time.time()
+                dt_real = curr_real_time - last_rps_time
+                if dt_real >= 0.5:
+                    if last_actual_calculated is None:
+                        # Bootstrap on first received frame when joining a running simulation
+                        last_actual_calculated = actual_calculated
+                        instant_rps = 0.0
+                    else:
+                        instant_rps = (actual_calculated - last_actual_calculated) / dt_real
+                        last_actual_calculated = actual_calculated
+
+                    # Smooth with EMA: alpha = 0.2 (averages over roughly 5 seconds / 10 samples)
+                    if current_rps == 0.0 and instant_rps > 0.0:
+                        current_rps = instant_rps
+                    elif instant_rps > 0.0 or current_rps > 0.0:
+                        alpha = 0.2
+                        current_rps = alpha * instant_rps + (1.0 - alpha) * current_rps
+                    
+                    last_rps_time = curr_real_time
+
                 agents_driving = stats_cache.get("agents_driving", 0)
                 agents_rerouting = stats_cache.get("agents_rerouting", 0)
                 agents_waiting_spawn = stats_cache.get("agents_waiting_spawn", 0)
@@ -149,11 +182,17 @@ async def monitor():
                 out = []
                 out.append("\033[H\033[J") # Clear screen & home cursor
                 out.append(f"{C_BOLD}{C_BG_BLACK}  TRAFFIC SIMULATION DIAGNOSTICS & BOTTLENECK MONITOR  {C_RESET}")
-                out.append(f"Время симуляции: {C_BOLD}{sim_time:.1f} сек.{C_RESET} | TTI: {C_BOLD}{C_CYAN}{tti:.2f}{C_RESET}")
+                out.append(f"Время симуляции: {C_BOLD}{sim_time:.1f} сек.{C_RESET} | Индекс задержки (TTI): {C_BOLD}{C_CYAN}{tti:.2f}{C_RESET}")
                 out.append("")
-                out.append(f"СТАТИСТИКА ПОЕЗДОК:")
-                out.append(f"  ├─ Всего поездок начато:  {C_GREEN}{routes_completed}{C_RESET}")
-                out.append(f"  └─ Успешных объездов:     {C_YELLOW}{reroutes}{C_RESET} (по алгоритму MPR)")
+                out.append(f"МАРШРУТЫ И РОУТЕР:")
+                out.append(f"  ├─ Производительность:     {C_CYAN}{current_rps:.1f}{C_RESET} RPS | Нагрузка потока: {C_YELLOW}{router_load*100:.1f}%{C_RESET}")
+                out.append(f"  ├─ Обработано запросов:    {C_BOLD}{routes_computed}{C_RESET}")
+                out.append(f"  │   ├─ Успешно построено:  {C_GREEN}{routes_successful}{C_RESET} (выездов: {total_spawns})")
+                out.append(f"  │   ├─ Отклонено (сдвиг):  {C_YELLOW}{routes_discarded}{C_RESET} (агент сместился)")
+                out.append(f"  │   ├─ Сэкономлено (stale): {C_GREEN}{routes_stale}{C_RESET} (сброшено дубликатов)")
+                out.append(f"  │   └─ Ошибок поиска пути: {C_RED}{routes_failed}{C_RESET}")
+                out.append(f"  ├─ Успешно прибыло (доехали): {C_GREEN}{routes_completed}{C_RESET} авто")
+                out.append(f"  └─ Динамических объездов MPR: {C_YELLOW}{reroutes}{C_RESET}")
                 out.append("")
                 out.append(f"РАСПРЕДЕЛЕНИЕ АГЕНТОВ (Всего в симуляции: {C_BOLD}{config_agents}{C_RESET}):")
                 out.append(f"  ├─ {C_BOLD}Активные на дорогах:{C_RESET}   {C_BOLD}{active_on_roads}{C_RESET}")

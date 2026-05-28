@@ -416,14 +416,11 @@ int main(int argc, char **argv) {
 
                       float r = 0.0f;
                       if (agents_count <= vis_cap_agents) {
-                          r = 0.01f;
-                      } else if (agents_count >= jam_cap_agents) {
-                          float over = static_cast<float>(agents_count - jam_cap_agents) / static_cast<float>(jam_cap_agents);
-                          r = 1.0f + over;
+                          r = static_cast<float>(agents_count) / static_cast<float>(vis_cap_agents);
                       } else {
                           float denom = static_cast<float>(jam_cap_agents - vis_cap_agents);
-                          r = static_cast<float>(agents_count - vis_cap_agents) / denom;
-                          if (r < 0.01f) r = 0.01f;
+                          float ratio_over = static_cast<float>(agents_count - vis_cap_agents) / denom;
+                          r = 1.0f + ratio_over;
                       }
 
                       uint16_t true_cap = 1000;
@@ -488,12 +485,16 @@ int main(int argc, char **argv) {
         json << "\"total_spawns\":" << engine.GetTotalSpawns() << ",";
         json << "\"reroutes\":" << engine.GetTotalReroutes() << ",";
         json << "\"routes_computed\":" << engine.GetRoutesComputed() << ",";
+        json << "\"routes_successful\":" << engine.GetTotalSuccessfulRoutes() << ",";
+        json << "\"routes_discarded\":" << engine.GetTotalDiscardedRoutes() << ",";
+        json << "\"routes_stale\":" << engine.GetTotalStaleRoutes() << ",";
         json << "\"routes_completed\":" << engine.GetTotalCompletedRoutes()
              << ",";
         json << "\"routes_failed\":" << engine.GetTotalFailedRoutes() << ",";
         json << "\"tti_global\":" << engine.GetTTI() << ",";
         json << "\"tti_samples\":" << engine.GetTTISampleCount() << ",";
         json << "\"current_accel\":" << engine.GetCurrentAcceleration() << ",";
+        json << "\"router_load\":" << engine.GetRouterLoadFactor() << ",";
         json << "\"asf\":" << engine.GetASF() << ",";
         json << "\"configured_agents\":" << engine.GetNumAgentsConfig();
         json << "}";

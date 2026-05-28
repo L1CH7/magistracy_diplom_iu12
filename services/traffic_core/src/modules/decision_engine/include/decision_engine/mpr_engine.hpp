@@ -46,6 +46,9 @@ public:
     if (last_route_request_time_.size() < agent_count) {
       last_route_request_time_.resize(agent_count, 0.0f);
     }
+    if (last_route_request_edge_.size() < agent_count) {
+      last_route_request_edge_.resize(agent_count, 0xFFFFFFFF);
+    }
 
     const uint8_t *__restrict active = pool.is_active.data();
     const uint8_t *__restrict waiting = pool.is_waiting_route.data();
@@ -59,6 +62,14 @@ public:
       // Only truly active agents
       if (active[i] == 1)
       {
+        // If agent is already waiting in the queue, only proceed if it moved to a new edge
+        if (waiting[i] == 1)
+        {
+          if (pool.current_edge[i] == last_route_request_edge_[i]) {
+            continue; // Edge has not changed, do not duplicate/flood the queue
+          }
+        }
+
         const uint32_t elapsed = current_time_sec - enter_times[i];
 
         const auto etas = arena.GetEtas(static_cast<uint32_t>(i));
@@ -75,8 +86,8 @@ public:
             TRAFFIC_MPR_TOLERANCE_DEN;
             
         if (elapsed > allowed_time) {
-          // Anti-Flood Check (30 sim-seconds cooldown)
-          if (current_time_sec - last_route_request_time_[i] >= 30.0f) {
+          // Anti-Flood Check (30 sim-seconds cooldown for new queue placements)
+          if (waiting[i] == 1 || (current_time_sec - last_route_request_time_[i] >= 30.0f)) {
             if (tokens_left > 0) {
               stuck_indices_.push_back(static_cast<uint32_t>(i));
               last_route_request_time_[i] = static_cast<float>(current_time_sec);
@@ -89,8 +100,14 @@ public:
 
     // === PHASE 2: Prepare reroute requests ===
     for (uint32_t idx : stuck_indices_) {
+      const bool already_waiting = (pool.is_waiting_route[idx] == 1);
+
       pool.is_waiting_route[idx] = 1;
-      pool.route_epoch[idx]++;
+      if (!already_waiting) {
+        pool.route_epoch[idx]++;
+      }
+      
+      last_route_request_edge_[idx] = pool.current_edge[idx];
 
       traffic::common::net::RouteRequest req;
       req.agent_id = idx;
@@ -116,6 +133,7 @@ private:
   // Reusable buffers to maintain Zero-Allocation status in the hot cycle
   std::vector<uint32_t> stuck_indices_;
   std::vector<float> last_route_request_time_;
+  std::vector<uint32_t> last_route_request_edge_;
 };
 
 } // namespace traffic::decision_engine
