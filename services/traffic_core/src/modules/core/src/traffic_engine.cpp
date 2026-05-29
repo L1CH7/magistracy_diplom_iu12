@@ -143,6 +143,9 @@ void TrafficEngine::ResetState()
     num_agents_ = 0;
     last_respawn_idx_ = 0;
     routes_computed_.store(0);
+    total_visited_nodes_.store(0);
+    total_route_cycles_.store(0);
+    profiled_routes_count_.store(0);
     total_completed_routes_ = 0;
     total_successful_routes_ = 0;
     total_failed_routes_ = 0;
@@ -565,10 +568,22 @@ void TrafficEngine::StartRouterWorker()
                                 res.path[ j ] = result->path[ j ];
                                 res.edge_etas_sec[ j ] = result->etas[ j ];
                             }
+                            if constexpr( ROUTER_PROFILE_ENABLED )
+                            {
+                                res.visited_nodes_count = result->visited_nodes_count;
+                                res.route_cycles = result->route_cycles;
+                            }
+                            else
+                            {
+                                res.visited_nodes_count = 0;
+                                res.route_cycles = 0;
+                            }
                         }
                         else
                         {
                             res.success = false;
+                            res.visited_nodes_count = 0;
+                            res.route_cycles = 0;
                         }
                     } );
                 }
@@ -665,6 +680,12 @@ void TrafficEngine::HandleResponses()
                     total_spawns_.fetch_add( 1, std::memory_order_relaxed );
 
                 total_successful_routes_++;
+                if constexpr( ROUTER_PROFILE_ENABLED )
+                {
+                    total_visited_nodes_.fetch_add( r.visited_nodes_count, std::memory_order_relaxed );
+                    total_route_cycles_.fetch_add( r.route_cycles, std::memory_order_relaxed );
+                    profiled_routes_count_.fetch_add( 1, std::memory_order_relaxed );
+                }
                 route_arena_.UpdateRoute( r.agent_id,
                                           { r.path.data(), r.path_len },
                                           { r.edge_etas_sec.data(), r.path_len } );

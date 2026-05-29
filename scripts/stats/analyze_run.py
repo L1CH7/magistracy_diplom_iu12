@@ -30,7 +30,8 @@ def pearson_correlation(x, y):
     return numerator / ((denom_x * denom_y) ** 0.5)
 
 def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
-                    router_rps, router_load, active_agents, waiting_reroute):
+                    router_rps, router_load, active_agents, waiting_reroute,
+                    green_zones, visited_nodes, route_cycles):
     """Generate high-quality multi-panel scientific dashboard using matplotlib."""
     try:
         import matplotlib
@@ -50,7 +51,8 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     plt.rcParams['axes.edgecolor'] = '#cccccc'
     plt.rcParams['axes.linewidth'] = 0.8
     
-    fig, axs = plt.subplots(2, 2, figsize=(15, 10), dpi=150)
+    # 3x2 grid dashboard
+    fig, axs = plt.subplots(3, 2, figsize=(15, 15), dpi=150)
     fig.suptitle(f"Панель Анализа Симуляции: {os.path.basename(target_file)}", fontsize=16, fontweight='bold', y=0.98)
     
     # 1. Travel Time Index (TTI) Over Time
@@ -62,7 +64,7 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     axs[0, 0].grid(True, linestyle=':', alpha=0.6)
     axs[0, 0].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     
-    # 2. Congestion Zones Breakdown
+    # 2. Congestion Zones Breakdown (Yellow/Red/Black)
     axs[0, 1].plot(sim_time, black_zones, color='#800080', linewidth=1.8, label='Черные зоны (Затор >= 2x)')
     axs[0, 1].plot(sim_time, red_zones, color='#d62728', linewidth=1.8, label='Красные зоны (Перегрузка >= 1x)')
     axs[0, 1].plot(sim_time, yellow_zones, color='#bcbd22', linewidth=1.5, label='Желтые зоны (Плотный >= 0.3x)')
@@ -99,6 +101,32 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     axs[1, 1].set_ylabel("Количество агентов", fontsize=10)
     axs[1, 1].grid(True, linestyle=':', alpha=0.6)
     axs[1, 1].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
+
+    # 5. Free-Flow Roads (Green Zones) - separate plot so they don't blot out other zones
+    axs[2, 0].plot(sim_time, green_zones, color='#2ca02c', linewidth=2.0, label='Зеленые зоны (Свободно < 0.3x)')
+    axs[2, 0].set_title("Свободные дороги дорожной сети", fontsize=12, fontweight='bold')
+    axs[2, 0].set_xlabel("Время симуляции (сек)", fontsize=10)
+    axs[2, 0].set_ylabel("Количество ребер", fontsize=10)
+    axs[2, 0].grid(True, linestyle=':', alpha=0.6)
+    axs[2, 0].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
+
+    # 6. A* Search Space & CPU Cycles (Double Y-Axis)
+    ax6_left = axs[2, 1]
+    ax6_right = ax6_left.twinx()
+    
+    line1_prof = ax6_left.plot(sim_time, visited_nodes, color='#1f77b4', linewidth=1.8, label='Посещенные вершины (ед)')
+    cycles_m = [c / 1e6 for c in route_cycles]
+    line2_prof = ax6_right.plot(sim_time, cycles_m, color='#9467bd', linewidth=1.5, linestyle=':', label='Такты CPU (млн)')
+    
+    ax6_left.set_title("Диагностика поиска пути A*", fontsize=12, fontweight='bold')
+    ax6_left.set_xlabel("Время симуляции (сек)", fontsize=10)
+    ax6_left.set_ylabel("Посещенные вершины (ед)", fontsize=10)
+    ax6_right.set_ylabel("Миллионы тактов CPU (RDTSC)", fontsize=10)
+    ax6_left.grid(True, linestyle=':', alpha=0.6)
+    
+    lines_prof = line1_prof + line2_prof
+    labels_prof = [l.get_label() for l in lines_prof]
+    ax6_left.legend(lines_prof, labels_prof, loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     
     # Adjust layout
     plt.tight_layout()
@@ -143,6 +171,9 @@ def analyze_latest():
     router_rps = []
     saved_duplicates = []
     router_load = []
+    green_zones = []
+    visited_nodes = []
+    route_cycles = []
     
     with open(target_file, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -159,6 +190,9 @@ def analyze_latest():
             router_rps.append(float(row["RouterRPS"]))
             saved_duplicates.append(int(row["SavedDuplicates"]))
             router_load.append(float(row["RouterLoad"]))
+            green_zones.append(int(row.get("GreenZones", 0)))
+            visited_nodes.append(float(row.get("VisitedNodes", 0.0)))
+            route_cycles.append(float(row.get("RouteCycles", 0.0)))
             
     n_samples = len(sim_time)
     if n_samples < 2:
@@ -235,7 +269,8 @@ def analyze_latest():
     
     # Generate matplotlib visual plots
     plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
-                    router_rps, router_load, active_agents, waiting_reroute)
+                    router_rps, router_load, active_agents, waiting_reroute,
+                    green_zones, visited_nodes, route_cycles)
     
     print(f"{C_GREEN}Анализ завершен успешно! Данные готовы для использования в научной работе.{C_RESET}")
 

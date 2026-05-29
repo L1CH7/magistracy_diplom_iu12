@@ -86,6 +86,15 @@ public:
     const uint32_t* GetLiveVolumes() const { return live_edge_volumes_.data(); }
     uint16_t GetASF() const { return asf_; }
     uint32_t GetNumAgentsConfig() const { return num_agents_; }
+    uint64_t GetTotalVisitedNodes() const { return total_visited_nodes_.load( std::memory_order_relaxed ); }
+    uint64_t GetTotalRouteCycles() const { return total_route_cycles_.load( std::memory_order_relaxed ); }
+    uint64_t GetProfiledRoutesCount() const { return profiled_routes_count_.load( std::memory_order_relaxed ); }
+    void ResetProfileCounters()
+    {
+        total_visited_nodes_.store( 0, std::memory_order_relaxed );
+        total_route_cycles_.store( 0, std::memory_order_relaxed );
+        profiled_routes_count_.store( 0, std::memory_order_relaxed );
+    }
 
     router::control::RouterManager & GetRouterManager() { return router_manager_; }
     data_provider::AgentPool & GetAgentPool() { return agent_pool_; }
@@ -143,6 +152,9 @@ private:
     // Telemetry & Throttling
     std::chrono::steady_clock::time_point router_start_time_;
     std::atomic< uint64_t > router_busy_time_us_{ 0 };
+    std::atomic< uint64_t > total_visited_nodes_{ 0 };
+    std::atomic< uint64_t > total_route_cycles_{ 0 };
+    std::atomic< uint64_t > profiled_routes_count_{ 0 };
     class TelemetryWorker * telemetry_worker_{ nullptr };
     std::chrono::steady_clock::time_point last_telemetry_time_;
     std::chrono::steady_clock::time_point sim_start_real_time_;

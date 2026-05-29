@@ -93,11 +93,11 @@ async def monitor():
     
     print(f"{C_BOLD}{C_GREEN}[+] Файл телеметрии: {os.path.basename(csv_filename)}{C_RESET}")
     
-    # Write CSV headers
     csv_headers = [
         "SimTime", "TTI", "ActiveAgents", "WaitingReroute", 
         "CompletedTrips", "DynamicReroutes", "BlackZones", 
-        "RedZones", "YellowZones", "RouterRPS", "SavedDuplicates", "RouterLoad"
+        "RedZones", "YellowZones", "RouterRPS", "SavedDuplicates", "RouterLoad",
+        "GreenZones", "VisitedNodes", "RouteCycles"
     ]
     with open(csv_filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -221,6 +221,9 @@ async def monitor():
                 active_on_roads = agents_driving + agents_rerouting
                 inactive_agents = agents_waiting_spawn + agents_idle
 
+                visited_nodes = stats_cache.get("visited_nodes_avg", 0.0)
+                route_cycles = stats_cache.get("route_cycles_avg", 0.0)
+
                 # Log stats to CSV if simulation time progressed by at least 1.0s
                 if sim_time - last_logged_sim_time >= 1.0:
                     with open(csv_filename, "a", newline="", encoding="utf-8") as f:
@@ -237,7 +240,10 @@ async def monitor():
                             len(yellow_edges),
                             round(current_rps, 1),
                             routes_stale,
-                            round(router_load, 4)
+                            round(router_load, 4),
+                            len(green_edges),
+                            round(visited_nodes, 2),
+                            round(route_cycles, 2)
                         ])
                     last_logged_sim_time = sim_time
 
@@ -249,6 +255,8 @@ async def monitor():
                 out.append("")
                 out.append(f"МАРШРУТЫ И РОУТЕР:")
                 out.append(f"  ├─ Производительность:     {C_CYAN}{current_rps:.1f}{C_RESET} RPS | Нагрузка потока: {C_YELLOW}{router_load*100:.1f}%{C_RESET}")
+                if visited_nodes > 0 or route_cycles > 0:
+                    out.append(f"  ├─ Профайлер A*:            {C_CYAN}{visited_nodes:.1f}{C_RESET} вершин | {C_GREEN}{route_cycles/1e6:.2f}M{C_RESET} тактов CPU")
                 out.append(f"  ├─ Обработано запросов:    {C_BOLD}{routes_computed}{C_RESET}")
                 out.append(f"  │   ├─ Успешно построено:  {C_GREEN}{routes_successful}{C_RESET} (выездов: {total_spawns})")
                 out.append(f"  │   ├─ Отклонено (сдвиг):  {C_YELLOW}{routes_discarded}{C_RESET} (агент сместился)")

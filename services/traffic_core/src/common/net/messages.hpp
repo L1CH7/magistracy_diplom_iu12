@@ -35,6 +35,10 @@ struct RouteResponse {
 
   std::array<traffic::EdgeID, MAX_ROUTE_PATH> path;
   std::array<uint32_t, MAX_ROUTE_PATH> edge_etas_sec;
+
+  // Profiling metrics (only active when enabled)
+  uint32_t visited_nodes_count;
+  uint64_t route_cycles;
 };
 
 } // namespace traffic::common::net

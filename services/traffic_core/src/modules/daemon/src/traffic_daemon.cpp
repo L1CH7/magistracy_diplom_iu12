@@ -498,7 +498,17 @@ int main(int argc, char **argv) {
         json << "\"asf\":" << engine.GetASF() << ",";
         json << "\"num_buckets\":" << TRAFFIC_NUM_BUCKETS << ",";
         json << "\"slot_sec\":" << TRAFFIC_SLOT_SEC << ",";
-        json << "\"configured_agents\":" << engine.GetNumAgentsConfig();
+        uint64_t profile_count = engine.GetProfiledRoutesCount();
+        double visited_nodes_avg = 0.0;
+        double route_cycles_avg = 0.0;
+        if (profile_count > 0) {
+            visited_nodes_avg = static_cast<double>(engine.GetTotalVisitedNodes()) / profile_count;
+            route_cycles_avg = static_cast<double>(engine.GetTotalRouteCycles()) / profile_count;
+            engine.ResetProfileCounters();
+        }
+        json << "\"configured_agents\":" << engine.GetNumAgentsConfig() << ",";
+        json << "\"visited_nodes_avg\":" << visited_nodes_avg << ",";
+        json << "\"route_cycles_avg\":" << route_cycles_avg;
         json << "}";
         std::string payload = json.str();
         rep_socket.send(zmq::message_t(payload.data(), payload.size()),
