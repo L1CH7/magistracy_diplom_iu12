@@ -12,6 +12,23 @@ set(TRAFFIC_MPR_TOLERANCE_DEN 2 CACHE STRING "MPR ETA Tolerance Denominator (e.g
 set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteResponse POD")
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
 
+# === Feature / Performance Flags ===
+set(TRAFFIC_DISABLE_ROUTER_BPR OFF CACHE STRING "Disable BPR congestion weights in the router for purely static routing (ON/OFF)")
+set(TRAFFIC_ENABLE_ROUTER_PROFILE OFF CACHE STRING "Enable CPU cycle profiling and search space counting in A* (ON/OFF)")
+
+# Convert ON/OFF strings or booleans to 1/0 for C++ preprocessor
+if(TRAFFIC_DISABLE_ROUTER_BPR STREQUAL "ON" OR TRAFFIC_DISABLE_ROUTER_BPR)
+    set(DISABLE_BPR_VAL 1)
+else()
+    set(DISABLE_BPR_VAL 0)
+endif()
+
+if(TRAFFIC_ENABLE_ROUTER_PROFILE STREQUAL "ON" OR TRAFFIC_ENABLE_ROUTER_PROFILE)
+    set(ROUTER_PROFILE_VAL 1)
+else()
+    set(ROUTER_PROFILE_VAL 0)
+endif()
+
 # === Capacity / BPR Physics Constants ===
 # Физический размер одной машины (корпус + минимальный зазор) в метрах
 set(TRAFFIC_CAR_LENGTH_M 7 CACHE STRING "Physical car slot length in meters (body + min gap)")
@@ -54,4 +71,7 @@ add_compile_definitions(
     TRAFFIC_SPEED_HIGHWAY_KMH=${TRAFFIC_SPEED_HIGHWAY_KMH}
     TRAFFIC_SPEED_DENSE_KMH=${TRAFFIC_SPEED_DENSE_KMH}
     TRAFFIC_DEFAULT_LANES=${TRAFFIC_DEFAULT_LANES}
+    # Feature / Performance Flags
+    TRAFFIC_DISABLE_ROUTER_BPR=${DISABLE_BPR_VAL}
+    TRAFFIC_ENABLE_ROUTER_PROFILE=${ROUTER_PROFILE_VAL}
 )

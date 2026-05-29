@@ -21,6 +21,18 @@
 namespace traffic::core
 {
 
+#if TRAFFIC_DISABLE_ROUTER_BPR
+constexpr bool ROUTER_TRAFFIC_ENABLED = false;
+#else
+constexpr bool ROUTER_TRAFFIC_ENABLED = true;
+#endif
+
+#if TRAFFIC_ENABLE_ROUTER_PROFILE
+constexpr bool ROUTER_PROFILE_ENABLED = true;
+#else
+constexpr bool ROUTER_PROFILE_ENABLED = false;
+#endif
+
 using traffic::common::net::RouteRequest;
 using traffic::common::net::RouteResponse;
 
@@ -119,10 +131,13 @@ void TrafficEngine::ResetState()
     route_arena_.flat_edges.clear();
     route_arena_.flat_etas_sec.clear();
 
-    auto vol_mgr = router_manager_.get_volume_manager();
-    if( vol_mgr )
+    if constexpr( ROUTER_TRAFFIC_ENABLED )
     {
-        vol_mgr->Clear();
+        auto vol_mgr = router_manager_.get_volume_manager();
+        if( vol_mgr )
+        {
+            vol_mgr->Clear();
+        }
     }
 
     num_agents_ = 0;
@@ -351,14 +366,17 @@ void TrafficEngine::Step( float dt )
 
         if( !mpr_requests_buffer_.empty() )
         {
-            auto vol_mgr = router_manager_.get_volume_manager();
-            if( vol_mgr )
+            if constexpr( ROUTER_TRAFFIC_ENABLED )
             {
-                for( const auto & req : mpr_requests_buffer_ )
+                auto vol_mgr = router_manager_.get_volume_manager();
+                if( vol_mgr )
                 {
-                    auto path = route_arena_.GetRoute( req.agent_id );
-                    auto etas = route_arena_.GetEtas( req.agent_id );
-                    if( !path.empty() ) vol_mgr->unbook_route( path, etas, asf_ );
+                    for( const auto & req : mpr_requests_buffer_ )
+                    {
+                        auto path = route_arena_.GetRoute( req.agent_id );
+                        auto etas = route_arena_.GetEtas( req.agent_id );
+                        if( !path.empty() ) vol_mgr->unbook_route( path, etas, asf_ );
+                    }
                 }
             }
             mpr_ep_->Send( mpr_requests_buffer_ );
@@ -366,11 +384,14 @@ void TrafficEngine::Step( float dt )
     }
 
     // Сдвигаем окно времени в корзинках, чтобы зачистить прошедший трафик
-    auto vol_mgr = router_manager_.get_volume_manager();
-    if( vol_mgr )
+    if constexpr( ROUTER_TRAFFIC_ENABLED )
     {
-        vol_mgr->advance_time( static_cast< uint32_t >( old_sim_time ),
-                               static_cast< uint32_t >( current_sim_time_ ) );
+        auto vol_mgr = router_manager_.get_volume_manager();
+        if( vol_mgr )
+        {
+            vol_mgr->advance_time( static_cast< uint32_t >( old_sim_time ),
+                                   static_cast< uint32_t >( current_sim_time_ ) );
+        }
     }
 
     // Phase 2.5: Agent Recirculation (Task 2 & 3: Rate Limiter)
@@ -430,14 +451,17 @@ void TrafficEngine::Step( float dt )
     }
     if( !mpr_requests_buffer_.empty() )
     {
-        auto vol_mgr = router_manager_.get_volume_manager();
-        if( vol_mgr )
+        if constexpr( ROUTER_TRAFFIC_ENABLED )
         {
-            for( const auto & req : mpr_requests_buffer_ )
+            auto vol_mgr = router_manager_.get_volume_manager();
+            if( vol_mgr )
             {
-                auto path = route_arena_.GetRoute( req.agent_id );
-                auto etas = route_arena_.GetEtas( req.agent_id );
-                if( !path.empty() ) vol_mgr->unbook_route( path, etas, asf_ );
+                for( const auto & req : mpr_requests_buffer_ )
+                {
+                    auto path = route_arena_.GetRoute( req.agent_id );
+                    auto etas = route_arena_.GetEtas( req.agent_id );
+                    if( !path.empty() ) vol_mgr->unbook_route( path, etas, asf_ );
+                }
             }
         }
         mpr_ep_->Send( mpr_requests_buffer_ );
@@ -525,7 +549,7 @@ void TrafficEngine::StartRouterWorker()
                             wp_vec.push_back(req.waypoints[w]);
                         }
 
-                        auto result = router_manager_.Route< true, false >( 
+                        auto result = router_manager_.Route< ROUTER_TRAFFIC_ENABLED, ROUTER_PROFILE_ENABLED >( 
                              wp_vec,
                              req.current_time_sec
                         );
@@ -619,15 +643,18 @@ void TrafficEngine::HandleResponses()
                     }
                 }
 
-                auto vol_mgr = router_manager_.get_volume_manager();
-                if( vol_mgr )
+                if constexpr( ROUTER_TRAFFIC_ENABLED )
                 {
-                    // Unbook old route first
-                    auto old_path = route_arena_.GetRoute( r.agent_id );
-                    auto old_etas = route_arena_.GetEtas( r.agent_id );
-                    if( !old_path.empty() )
+                    auto vol_mgr = router_manager_.get_volume_manager();
+                    if( vol_mgr )
                     {
-                        vol_mgr->unbook_route( old_path, old_etas, asf_ );
+                        // Unbook old route first
+                        auto old_path = route_arena_.GetRoute( r.agent_id );
+                        auto old_etas = route_arena_.GetEtas( r.agent_id );
+                        if( !old_path.empty() )
+                        {
+                            vol_mgr->unbook_route( old_path, old_etas, asf_ );
+                        }
                     }
                 }
 
@@ -645,20 +672,32 @@ void TrafficEngine::HandleResponses()
                 // TTI: record TRUE free-flow trip cost only at initial spawn
                 if( !was_active && r.path_len > 0 )
                 {
-                    auto view = router_manager_.get_view();
+                    const auto *edge_attrs = router_manager_.get_edge_attributes_ptr();
                     float free_flow_sec = 0.0f;
                     for (size_t k = 0; k < r.path_len; ++k) {
-                        free_flow_sec += static_cast<float>(view.static_weights[r.path[k]]);
+                        traffic::EdgeID segment = r.path[k];
+                        if (edge_attrs) {
+                            free_flow_sec += edge_attrs[segment].t_free_base;
+                        } else {
+                            float len = router_manager_.get_edge_length(segment);
+                            if (len < 0.1f) len = 0.1f;
+                            free_flow_sec += len / 15.0f;
+                        }
                     }
+                    if (free_flow_sec < 0.1f) free_flow_sec = 0.1f;
                     trip_free_flow_sec_[ r.agent_id ] = free_flow_sec;
                     trip_spawn_sim_time_[ r.agent_id ] = current_sim_time_;
                 }
 
-                if( vol_mgr )
+                if constexpr( ROUTER_TRAFFIC_ENABLED )
                 {
-                    vol_mgr->book_route( route_arena_.GetRoute( r.agent_id ),
-                                         route_arena_.GetEtas( r.agent_id ),
-                                         asf_ /* weight */ );
+                    auto vol_mgr = router_manager_.get_volume_manager();
+                    if( vol_mgr )
+                    {
+                        vol_mgr->book_route( route_arena_.GetRoute( r.agent_id ),
+                                             route_arena_.GetEtas( r.agent_id ),
+                                             asf_ /* weight */ );
+                    }
                 }
 
                 if( !was_active )
@@ -680,10 +719,18 @@ void TrafficEngine::HandleResponses()
                     agent_pool_.is_active[ r.agent_id ] = 1;
 
                     float w = ( first_len / 15.0f );
-                    const auto & view = router_manager_.get_view();
-                    if( view.static_weights )
+                    const auto *edge_attrs = router_manager_.get_edge_attributes_ptr();
+                    if( edge_attrs )
                     {
-                        w = static_cast< float >( view.static_weights[ first_edge ] );
+                        w = edge_attrs[ first_edge ].t_free_base;
+                    }
+                    else
+                    {
+                        const auto & view = router_manager_.get_view();
+                        if( view.static_weights )
+                        {
+                            w = static_cast< float >( view.static_weights[ first_edge ] );
+                        }
                     }
                     if( w < 0.001f ) w = 0.001f;
                     agent_pool_.velocity_mps[ r.agent_id ] = first_len / w;
