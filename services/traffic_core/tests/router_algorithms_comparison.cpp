@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
     std::signal(SIGFPE,  signal_handler);
 
     std::string data_path = "/app/data";
-    std::string out_csv = "/app/benchmark/traffic-core/stats/run_results.csv";
+    std::string out_csv = "/app/benchmarks/traffic-core/stats/run_results.csv";
     
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--data" && i + 1 < argc) {
@@ -247,7 +247,7 @@ int main(int argc, char** argv) {
     // 1. DIJKSTRA (Single source)
     run_suite(DijkstraRouter<InstrumentedQueue<Strict2AryHeap>>(view, num_nodes), InstrumentedQueue<Strict2AryHeap>(), "Dijkstra", "2-ary");
     run_suite(DijkstraRouter<InstrumentedQueue<Strict4AryHeap>>(view, num_nodes), InstrumentedQueue<Strict4AryHeap>(), "Dijkstra", "4-ary");
-    run_suite(DijkstraRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes), InstrumentedQueue<Strict8ArySoAHeap>(), "Dijkstra", "8-ary avx2");
+    run_suite(DijkstraRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes), InstrumentedQueue<Strict8ArySoAHeap>(), "Dijkstra", "8-ary");
     run_suite(DijkstraRouter<InstrumentedQueue<Strict16AryHeap>>(view, num_nodes), InstrumentedQueue<Strict16AryHeap>(), "Dijkstra", "16-ary");
     run_suite(DijkstraRouter<InstrumentedQueue<SBBH>>(view, num_nodes), InstrumentedQueue<SBBH>(), "Dijkstra", "sbbh");
     run_suite(DijkstraRouter<InstrumentedQueue<DeltaBucketQueue<4>>>(view, num_nodes), InstrumentedQueue<DeltaBucketQueue<4>>(), "Dijkstra", "bucket");
@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
     // 2. BI-DIRECTIONAL DIJKSTRA
     run_suite(BiDijkstraRouter<InstrumentedQueue<Strict2AryHeap>>(view, num_nodes), InstrumentedQueue<Strict2AryHeap>(), "Bi-Dijkstra", "2-ary");
     run_suite(BiDijkstraRouter<InstrumentedQueue<Strict4AryHeap>>(view, num_nodes), InstrumentedQueue<Strict4AryHeap>(), "Bi-Dijkstra", "4-ary");
-    run_suite(BiDijkstraRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes), InstrumentedQueue<Strict8ArySoAHeap>(), "Bi-Dijkstra", "8-ary avx2");
+    run_suite(BiDijkstraRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes), InstrumentedQueue<Strict8ArySoAHeap>(), "Bi-Dijkstra", "8-ary");
     run_suite(BiDijkstraRouter<InstrumentedQueue<Strict16AryHeap>>(view, num_nodes), InstrumentedQueue<Strict16AryHeap>(), "Bi-Dijkstra", "16-ary");
     run_suite(BiDijkstraRouter<InstrumentedQueue<SBBH>>(view, num_nodes), InstrumentedQueue<SBBH>(), "Bi-Dijkstra", "sbbh");
     run_suite(BiDijkstraRouter<InstrumentedQueue<DeltaBucketQueue<4>>>(view, num_nodes), InstrumentedQueue<DeltaBucketQueue<4>>(), "Bi-Dijkstra", "bucket");
@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
     // 3. A* (Euclidean Heuristic)
     run_suite(AStarRouter<InstrumentedQueue<Strict2AryHeap>>(view, num_nodes, manager.get_geometry_store()), InstrumentedQueue<Strict2AryHeap>(), "A-Star", "2-ary");
     run_suite(AStarRouter<InstrumentedQueue<Strict4AryHeap>>(view, num_nodes, manager.get_geometry_store()), InstrumentedQueue<Strict4AryHeap>(), "A-Star", "4-ary");
-    run_suite(AStarRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes, manager.get_geometry_store()), InstrumentedQueue<Strict8ArySoAHeap>(), "A-Star", "8-ary avx2");
+    run_suite(AStarRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes, manager.get_geometry_store()), InstrumentedQueue<Strict8ArySoAHeap>(), "A-Star", "8-ary");
     run_suite(AStarRouter<InstrumentedQueue<Strict16AryHeap>>(view, num_nodes, manager.get_geometry_store()), InstrumentedQueue<Strict16AryHeap>(), "A-Star", "16-ary");
     run_suite(AStarRouter<InstrumentedQueue<SBBH>>(view, num_nodes, manager.get_geometry_store()), InstrumentedQueue<SBBH>(), "A-Star", "sbbh");
     run_suite(AStarRouter<InstrumentedQueue<DeltaBucketQueue<4>>>(view, num_nodes, manager.get_geometry_store()), InstrumentedQueue<DeltaBucketQueue<4>>(), "A-Star", "bucket");
@@ -275,7 +275,7 @@ int main(int argc, char** argv) {
     if (manager.get_landmarks_ptr()) {
         run_suite(TdAltRouter<InstrumentedQueue<Strict2AryHeap>>(view, num_nodes), InstrumentedQueue<Strict2AryHeap>(), "ALT", "2-ary");
         run_suite(TdAltRouter<InstrumentedQueue<Strict4AryHeap>>(view, num_nodes), InstrumentedQueue<Strict4AryHeap>(), "ALT", "4-ary");
-        run_suite(TdAltRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes), InstrumentedQueue<Strict8ArySoAHeap>(), "ALT", "8-ary avx2");
+        run_suite(TdAltRouter<InstrumentedQueue<Strict8ArySoAHeap>>(view, num_nodes), InstrumentedQueue<Strict8ArySoAHeap>(), "ALT", "8-ary");
         run_suite(TdAltRouter<InstrumentedQueue<Strict16AryHeap>>(view, num_nodes), InstrumentedQueue<Strict16AryHeap>(), "ALT", "16-ary");
         run_suite(TdAltRouter<InstrumentedQueue<SBBH>>(view, num_nodes), InstrumentedQueue<SBBH>(), "ALT", "sbbh");
         run_suite(TdAltRouter<InstrumentedQueue<DeltaBucketQueue<4>>>(view, num_nodes), InstrumentedQueue<DeltaBucketQueue<4>>(), "ALT", "bucket");
