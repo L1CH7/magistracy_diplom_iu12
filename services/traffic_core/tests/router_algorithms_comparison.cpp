@@ -10,6 +10,8 @@
 #include <csignal>
 #include <csetjmp>
 #include <cmath>
+#include <limits>
+#include <emmintrin.h>
 
 #include "router/control/router_manager.hpp"
 #include "router/compute/td_alt_router.hpp"
@@ -21,20 +23,33 @@
 using namespace traffic;
 using namespace traffic::router::compute;
 
-// Global metrics for queue profiling
+// Global metrics for queue profiling with nanosecond-level CPU-cycle accuracy
 struct QueueMetrics {
     static inline uint64_t total_push_count = 0;
     static inline uint64_t total_pop_count = 0;
     static inline uint64_t total_queue_cycles = 0;
 
+    static inline uint64_t push_cycles_sum = 0;
+    static inline uint64_t pop_cycles_sum = 0;
+    static inline uint64_t min_push_cycles = std::numeric_limits<uint64_t>::max();
+    static inline uint64_t max_push_cycles = 0;
+    static inline uint64_t min_pop_cycles = std::numeric_limits<uint64_t>::max();
+    static inline uint64_t max_pop_cycles = 0;
+
     static void Reset() {
         total_push_count = 0;
         total_pop_count = 0;
         total_queue_cycles = 0;
+        push_cycles_sum = 0;
+        pop_cycles_sum = 0;
+        min_push_cycles = std::numeric_limits<uint64_t>::max();
+        max_push_cycles = 0;
+        min_pop_cycles = std::numeric_limits<uint64_t>::max();
+        max_pop_cycles = 0;
     }
 };
 
-// Template Wrapper to instrument any Queue
+// Template Wrapper to instrument any Queue with hardware-level fences
 template<typename RawQueue>
 class InstrumentedQueue {
 public:
@@ -45,16 +60,43 @@ public:
 
     inline void push(traffic::PQElement el) noexcept {
         QueueMetrics::total_push_count++;
+        
+        _mm_lfence();
         uint64_t start = __rdtsc();
+        _mm_lfence();
+        
         raw_q_.push(el);
-        QueueMetrics::total_queue_cycles += (__rdtsc() - start);
+        
+        _mm_lfence();
+        uint64_t end = __rdtsc();
+        _mm_lfence();
+        
+        uint64_t diff = end - start;
+        QueueMetrics::total_queue_cycles += diff;
+        QueueMetrics::push_cycles_sum += diff;
+        if (diff < QueueMetrics::min_push_cycles) QueueMetrics::min_push_cycles = diff;
+        if (diff > QueueMetrics::max_push_cycles) QueueMetrics::max_push_cycles = diff;
     }
 
     inline traffic::PQElement pop() noexcept {
         QueueMetrics::total_pop_count++;
+        
+        _mm_lfence();
         uint64_t start = __rdtsc();
+        _mm_lfence();
+        
         auto el = raw_q_.pop();
-        QueueMetrics::total_queue_cycles += (__rdtsc() - start);
+        
+        _mm_lfence();
+        uint64_t end = __rdtsc();
+        _mm_lfence();
+        
+        uint64_t diff = end - start;
+        QueueMetrics::total_queue_cycles += diff;
+        QueueMetrics::pop_cycles_sum += diff;
+        if (diff < QueueMetrics::min_pop_cycles) QueueMetrics::min_pop_cycles = diff;
+        if (diff > QueueMetrics::max_pop_cycles) QueueMetrics::max_pop_cycles = diff;
+        
         return el;
     }
 
@@ -106,6 +148,12 @@ struct DetailedResult {
     PathWeight path_weight;
     float path_length_m;
     float euclidean_dist_m;
+    uint64_t min_push_cycles;
+    uint64_t max_push_cycles;
+    double avg_push_cycles;
+    uint64_t min_pop_cycles;
+    uint64_t max_pop_cycles;
+    double avg_pop_cycles;
     bool crashed = false;
 };
 
@@ -170,6 +218,9 @@ std::vector<DetailedResult> RunBenchmarkSuite(
                     euclidean_dist = std::sqrt(dx * dx + dy * dy);
                 }
 
+                double avg_push = QueueMetrics::total_push_count ? static_cast<double>(QueueMetrics::push_cycles_sum) / QueueMetrics::total_push_count : 0.0;
+                double avg_pop = QueueMetrics::total_pop_count ? static_cast<double>(QueueMetrics::pop_cycles_sum) / QueueMetrics::total_pop_count : 0.0;
+
                 results.push_back({
                     algo_name,
                     pq_name,
@@ -182,6 +233,12 @@ std::vector<DetailedResult> RunBenchmarkSuite(
                     route_res.total_weight,
                     path_length,
                     euclidean_dist,
+                    QueueMetrics::min_push_cycles == std::numeric_limits<uint64_t>::max() ? 0 : QueueMetrics::min_push_cycles,
+                    QueueMetrics::max_push_cycles,
+                    avg_push,
+                    QueueMetrics::min_pop_cycles == std::numeric_limits<uint64_t>::max() ? 0 : QueueMetrics::min_pop_cycles,
+                    QueueMetrics::max_pop_cycles,
+                    avg_pop,
                     false
                 });
             }
@@ -191,7 +248,7 @@ std::vector<DetailedResult> RunBenchmarkSuite(
         }
     } else {
         std::cout << " !!! CRASHED !!!\n";
-        results.push_back({algo_name, pq_name, 0, 0, 0, 0, 0, 0, INF_WEIGHT, 0, 0, true});
+        results.push_back({algo_name, pq_name, 0, 0, 0, 0, 0, 0, INF_WEIGHT, 0, 0, 0, 0, 0, 0, 0, 0, true});
     }
 
     return results;
@@ -287,12 +344,15 @@ int main(int argc, char** argv) {
     // Write all detailed results to CSV
     std::filesystem::create_directories(std::filesystem::path(out_csv).parent_path());
     std::ofstream csv(out_csv);
-    csv << "Algorithm,Queue,RouteID,VisitedNodes,TimeMs,PushCount,PopCount,QueueTimeMs,PathWeight,PathLengthM,EuclideanDistanceM,Crashed\n";
+    csv << "Algorithm,Queue,RouteID,VisitedNodes,TimeMs,PushCount,PopCount,QueueTimeMs,PathWeight,PathLengthM,EuclideanDistanceM,MinPushCycles,MaxPushCycles,AvgPushCycles,MinPopCycles,MaxPopCycles,AvgPopCycles,Crashed\n";
     for (const auto& r : all_results) {
-        csv << std::format("{},{},{},{},{:.6f},{},{},{:.6f},{},{:.2f},{:.2f},{}\n",
+        csv << std::format("{},{},{},{},{:.6f},{},{},{:.6f},{},{:.2f},{:.2f},{},{},{:.2f},{},{},{:.2f},{}\n",
             r.algorithm, r.queue, r.route_idx, r.visited_nodes, r.route_ms,
             r.push_count, r.pop_count, r.queue_ms, r.path_weight,
-            r.path_length_m, r.euclidean_dist_m, r.crashed ? 1 : 0);
+            r.path_length_m, r.euclidean_dist_m,
+            r.min_push_cycles, r.max_push_cycles, r.avg_push_cycles,
+            r.min_pop_cycles, r.max_pop_cycles, r.avg_pop_cycles,
+            r.crashed ? 1 : 0);
     }
     csv.close();
 

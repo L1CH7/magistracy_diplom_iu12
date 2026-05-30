@@ -87,10 +87,6 @@ public:
         traffic::NodeID meeting_node = traffic::INVALID_NODE;
 
         while (!pq_f_.empty() && !pq_b_.empty()) {
-            // Check meeting condition: if min element of forward + min element of backward >= best_w, we can stop
-            auto f_min = pq_f_.empty() ? traffic::INF_WEIGHT : pq_f_.pop().weight; // We will pop in step, so just peek weight if possible, or use standard step
-            // Let's do standard step: alternate search
-            
             // Forward step
             if (!pq_f_.empty()) {
                 auto [g_curr, u] = pq_f_.pop();
