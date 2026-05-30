@@ -31,7 +31,8 @@ def pearson_correlation(x, y):
 
 def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
                     router_rps, router_load, active_agents, waiting_reroute,
-                    green_zones, visited_nodes, route_cycles):
+                    green_zones, visited_nodes, route_cycles,
+                    waiting_spawn=None, route_time_max=None, route_time_avg=None, router_wait_time=None):
     """Generate high-quality multi-panel scientific dashboard using matplotlib."""
     try:
         import matplotlib
@@ -95,8 +96,10 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     
     # 4. Population and Queue Size
     axs[1, 1].plot(sim_time, active_agents, color='#17becf', linewidth=1.8, label='Активные на дорогах')
-    axs[1, 1].plot(sim_time, waiting_reroute, color='#7f7f7f', linewidth=1.5, label='В очереди рероутинга')
-    axs[1, 1].set_title("Популяция Агентов и Очередь MPR", fontsize=12, fontweight='bold')
+    axs[1, 1].plot(sim_time, waiting_reroute, color='#ff7f0e', linewidth=1.5, label='Очередь MPR (Живые)')
+    if waiting_spawn is not None and any(waiting_spawn):
+        axs[1, 1].plot(sim_time, waiting_spawn, color='#9467bd', linewidth=1.5, linestyle='--', label='Очередь Spawn (Призраки)')
+    axs[1, 1].set_title("Популяция Агентов и Очереди Роутера", fontsize=12, fontweight='bold')
     axs[1, 1].set_xlabel("Время симуляции (сек)", fontsize=10)
     axs[1, 1].set_ylabel("Количество агентов", fontsize=10)
     axs[1, 1].grid(True, linestyle=':', alpha=0.6)
@@ -110,21 +113,31 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     axs[2, 0].grid(True, linestyle=':', alpha=0.6)
     axs[2, 0].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
 
-    # 6. A* Search Space & CPU Cycles (Double Y-Axis)
+    # 6. A* Search Space & CPU Cycles / Wall-clock times (Double Y-Axis)
     ax6_left = axs[2, 1]
     ax6_right = ax6_left.twinx()
     
     line1_prof = ax6_left.plot(sim_time, visited_nodes, color='#1f77b4', linewidth=1.8, label='Посещенные вершины (ед)')
-    cycles_m = [c / 1e6 for c in route_cycles]
-    line2_prof = ax6_right.plot(sim_time, cycles_m, color='#9467bd', linewidth=1.5, linestyle=':', label='Такты CPU (млн)')
     
+    lines_prof = line1_prof
+    if route_time_max is not None and any(route_time_max) and sum(route_time_max) > 0:
+        max_ms = [t / 1000.0 for t in route_time_max]
+        avg_ms = [t / 1000.0 for t in route_time_avg]
+        line2_prof = ax6_right.plot(sim_time, max_ms, color='#d62728', linewidth=1.5, label='Время A* Max (мс)')
+        line3_prof = ax6_right.plot(sim_time, avg_ms, color='#2ca02c', linewidth=1.2, linestyle='--', label='Время A* Avg (мс)')
+        ax6_right.set_ylabel("Время расчета пути (мс)", fontsize=10)
+        lines_prof += line2_prof + line3_prof
+    else:
+        cycles_m = [c / 1e6 for c in route_cycles]
+        line2_prof = ax6_right.plot(sim_time, cycles_m, color='#9467bd', linewidth=1.5, linestyle=':', label='Такты CPU (млн)')
+        ax6_right.set_ylabel("Миллионы тактов CPU (RDTSC)", fontsize=10)
+        lines_prof += line2_prof
+        
     ax6_left.set_title("Диагностика поиска пути A*", fontsize=12, fontweight='bold')
     ax6_left.set_xlabel("Время симуляции (сек)", fontsize=10)
     ax6_left.set_ylabel("Посещенные вершины (ед)", fontsize=10)
-    ax6_right.set_ylabel("Миллионы тактов CPU (RDTSC)", fontsize=10)
     ax6_left.grid(True, linestyle=':', alpha=0.6)
     
-    lines_prof = line1_prof + line2_prof
     labels_prof = [l.get_label() for l in lines_prof]
     ax6_left.legend(lines_prof, labels_prof, loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     
@@ -154,8 +167,23 @@ def analyze_latest():
             sys.exit(1)
         target_file = max(csv_files, key=os.path.getmtime)
         
+    basename = os.path.basename(target_file)
+    bpr_status = "Неизвестно"
+    prof_status = "Неизвестно"
+    if "bpr_on" in basename or "BUCKETS_ON" in basename:
+        bpr_status = f"{C_GREEN}Включен (ON){C_RESET}"
+    elif "bpr_off" in basename or "BUCKETS_OFF" in basename:
+        bpr_status = f"{C_RED}Отключен (OFF) [Статическая маршрутизация]{C_RESET}"
+        
+    if "prof_on" in basename or "PROFILE_ON" in basename:
+        prof_status = f"{C_GREEN}Включен (ON) [Сбор метрик поиска]{C_RESET}"
+    elif "prof_off" in basename or "PROFILE_OFF" in basename:
+        prof_status = f"{C_RED}Отключен (OFF){C_RESET}"
+        
     print(f"{C_BOLD}{C_CYAN}=== НАУЧНО-АНАЛИТИЧЕСКИЙ ОТЧЕТ ТРАНСПОРТНОЙ СИМУЛЯЦИИ ==={C_RESET}")
-    print(f"Файл данных: {os.path.basename(target_file)}")
+    print(f"Файл данных:  {basename}")
+    print(f"Режим BPR:    {bpr_status}")
+    print(f"Профайлинг:   {prof_status}")
     print("-" * 70)
     
     # Read rows
@@ -174,6 +202,10 @@ def analyze_latest():
     green_zones = []
     visited_nodes = []
     route_cycles = []
+    waiting_spawn = []
+    route_time_max = []
+    route_time_avg = []
+    router_wait_time = []
     
     with open(target_file, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -193,6 +225,10 @@ def analyze_latest():
             green_zones.append(int(row.get("GreenZones", 0)))
             visited_nodes.append(float(row.get("VisitedNodes", 0.0)))
             route_cycles.append(float(row.get("RouteCycles", 0.0)))
+            waiting_spawn.append(int(row.get("WaitingSpawn", 0)))
+            route_time_max.append(float(row.get("RouteTimeMaxUs", 0.0)))
+            route_time_avg.append(float(row.get("RouteTimeAvgUs", 0.0)))
+            router_wait_time.append(float(row.get("RouterWaitTimeUs", 0.0)))
             
     n_samples = len(sim_time)
     if n_samples < 2:
@@ -248,7 +284,13 @@ def analyze_latest():
     print(f"  ├─ Пиковая скорость ALT:  {C_CYAN}{peak_rps:.1f}{C_RESET} RPS")
     print(f"  ├─ Средняя скорость ALT: {C_CYAN}{avg_rps:.1f}{C_RESET} RPS")
     print(f"  ├─ Средняя нагрузка потока:   {C_YELLOW}{avg_load:.1f}%{C_RESET}")
-    print(f"  └─ Сэкономлено ALT-задач: {C_GREEN}{total_saved}{C_RESET} (предотвращено дубликатов за запуск)")
+    print(f"  ├─ Сэкономлено ALT-задач: {C_GREEN}{total_saved}{C_RESET} (предотвращено дубликатов за запуск)")
+    if any(route_time_max):
+        print(f"  ├─ Пиковое время поиска: {C_RED}{max(route_time_max)/1000:.2f} мс{C_RESET}")
+        print(f"  ├─ Среднее время поиска: {C_YELLOW}{sum(route_time_avg)/len(route_time_avg)/1000:.2f} мс{C_RESET}")
+        print(f"  └─ Макс. простой WaitForAll: {C_MAGENTA}{max(router_wait_time)/1e6:.2f} сек.{C_RESET}")
+    else:
+        print(f"  └─ Дополнительная профайлинг-телеметрия не обнаружена (профайлинг отключен)")
     print("")
     
     print(f"{C_BOLD}Корреляционный анализ (Pearson r):{C_RESET}")
@@ -270,7 +312,8 @@ def analyze_latest():
     # Generate matplotlib visual plots
     plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
                     router_rps, router_load, active_agents, waiting_reroute,
-                    green_zones, visited_nodes, route_cycles)
+                    green_zones, visited_nodes, route_cycles,
+                    waiting_spawn, route_time_max, route_time_avg, router_wait_time)
     
     print(f"{C_GREEN}Анализ завершен успешно! Данные готовы для использования в научной работе.{C_RESET}")
 

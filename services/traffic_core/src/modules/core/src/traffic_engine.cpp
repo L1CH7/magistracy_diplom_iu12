@@ -552,10 +552,31 @@ void TrafficEngine::StartRouterWorker()
                             wp_vec.push_back(req.waypoints[w]);
                         }
 
-                        auto result = router_manager_.Route< ROUTER_TRAFFIC_ENABLED, ROUTER_PROFILE_ENABLED >( 
-                             wp_vec,
-                             req.current_time_sec
-                        );
+                        auto result = [&]() {
+                            if constexpr( ROUTER_PROFILE_ENABLED )
+                            {
+                                auto r_start = std::chrono::steady_clock::now();
+                                auto res = router_manager_.Route< ROUTER_TRAFFIC_ENABLED, ROUTER_PROFILE_ENABLED >( 
+                                     wp_vec,
+                                     req.current_time_sec
+                                );
+                                auto r_end = std::chrono::steady_clock::now();
+                                uint32_t r_us = std::chrono::duration_cast<std::chrono::microseconds>(r_end - r_start).count();
+
+                                route_time_sum_us_.fetch_add(r_us, std::memory_order_relaxed);
+                                route_time_count_.fetch_add(1, std::memory_order_relaxed);
+                                uint32_t current_max = route_time_max_us_.load(std::memory_order_relaxed);
+                                while (r_us > current_max && !route_time_max_us_.compare_exchange_weak(current_max, r_us, std::memory_order_relaxed));
+                                return res;
+                            }
+                            else
+                            {
+                                return router_manager_.Route< ROUTER_TRAFFIC_ENABLED, ROUTER_PROFILE_ENABLED >( 
+                                     wp_vec,
+                                     req.current_time_sec
+                                );
+                            }
+                        }();
 
                         res.agent_id = req.agent_id;
                         res.epoch = req.epoch;
@@ -588,7 +609,21 @@ void TrafficEngine::StartRouterWorker()
                     } );
                 }
 
+                std::chrono::steady_clock::time_point w_start;
+                if constexpr( ROUTER_PROFILE_ENABLED )
+                {
+                    w_start = std::chrono::steady_clock::now();
+                }
+
                 router_pool_.WaitForAll();
+
+                if constexpr( ROUTER_PROFILE_ENABLED )
+                {
+                    auto w_end = std::chrono::steady_clock::now();
+                    uint64_t w_us = std::chrono::duration_cast<std::chrono::microseconds>(w_end - w_start).count();
+                    router_wait_time_us_.fetch_add(w_us, std::memory_order_relaxed);
+                }
+
                 size_t added = req_batch.size();
                 routes_computed_.fetch_add( static_cast< uint32_t >( added ), std::memory_order_relaxed );
                 
@@ -869,6 +904,16 @@ void TrafficEngine::ApplySettings( float accel, float fps, float chaos )
     
     // Signal the Run() loop to reset its timing markers
     settings_changed_ = true;
+}
+
+bool TrafficEngine::IsBPREnabled() const noexcept
+{
+    return ROUTER_TRAFFIC_ENABLED;
+}
+
+bool TrafficEngine::IsProfilingEnabled() const noexcept
+{
+    return ROUTER_PROFILE_ENABLED;
 }
 
 } // namespace traffic::core

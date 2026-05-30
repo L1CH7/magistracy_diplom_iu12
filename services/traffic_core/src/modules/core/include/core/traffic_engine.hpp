@@ -89,6 +89,11 @@ public:
     uint64_t GetTotalVisitedNodes() const { return total_visited_nodes_.load( std::memory_order_relaxed ); }
     uint64_t GetTotalRouteCycles() const { return total_route_cycles_.load( std::memory_order_relaxed ); }
     uint64_t GetProfiledRoutesCount() const { return profiled_routes_count_.load( std::memory_order_relaxed ); }
+    uint32_t GetRouteTimeMaxUs() const { return route_time_max_us_.load( std::memory_order_relaxed ); }
+    uint64_t GetRouteTimeSumUs() const { return route_time_sum_us_.load( std::memory_order_relaxed ); }
+    uint64_t GetRouteTimeCount() const { return route_time_count_.load( std::memory_order_relaxed ); }
+    uint64_t GetRouterWaitTimeUs() const { return router_wait_time_us_.load( std::memory_order_relaxed ); }
+
     void ResetProfileCounters()
     {
         total_visited_nodes_.store( 0, std::memory_order_relaxed );
@@ -96,8 +101,24 @@ public:
         profiled_routes_count_.store( 0, std::memory_order_relaxed );
     }
 
+    void ResetTTICounters()
+    {
+        tti_sum_ = 0.0;
+        tti_count_.store( 0, std::memory_order_relaxed );
+    }
+
+    void ResetRouteTimeCounters()
+    {
+        route_time_max_us_.store( 0, std::memory_order_relaxed );
+        route_time_sum_us_.store( 0, std::memory_order_relaxed );
+        route_time_count_.store( 0, std::memory_order_relaxed );
+    }
+
     router::control::RouterManager & GetRouterManager() { return router_manager_; }
     data_provider::AgentPool & GetAgentPool() { return agent_pool_; }
+
+    bool IsBPREnabled() const noexcept;
+    bool IsProfilingEnabled() const noexcept;
 
     void UpdateTelemetry();
     void SetTelemetryWorker( class TelemetryWorker * worker ) { telemetry_worker_ = worker; }
@@ -155,6 +176,10 @@ private:
     std::atomic< uint64_t > total_visited_nodes_{ 0 };
     std::atomic< uint64_t > total_route_cycles_{ 0 };
     std::atomic< uint64_t > profiled_routes_count_{ 0 };
+    std::atomic< uint32_t > route_time_max_us_{ 0 };
+    std::atomic< uint64_t > route_time_sum_us_{ 0 };
+    std::atomic< uint64_t > route_time_count_{ 0 };
+    std::atomic< uint64_t > router_wait_time_us_{ 0 };
     class TelemetryWorker * telemetry_worker_{ nullptr };
     std::chrono::steady_clock::time_point last_telemetry_time_;
     std::chrono::steady_clock::time_point sim_start_real_time_;

@@ -498,6 +498,8 @@ int main(int argc, char **argv) {
         json << "\"asf\":" << engine.GetASF() << ",";
         json << "\"num_buckets\":" << TRAFFIC_NUM_BUCKETS << ",";
         json << "\"slot_sec\":" << TRAFFIC_SLOT_SEC << ",";
+        json << "\"bpr_enabled\":" << (engine.IsBPREnabled() ? "true" : "false") << ",";
+        json << "\"profiling_enabled\":" << (engine.IsProfilingEnabled() ? "true" : "false") << ",";
         uint64_t profile_count = engine.GetProfiledRoutesCount();
         double visited_nodes_avg = 0.0;
         double route_cycles_avg = 0.0;
@@ -506,9 +508,22 @@ int main(int argc, char **argv) {
             route_cycles_avg = static_cast<double>(engine.GetTotalRouteCycles()) / profile_count;
             engine.ResetProfileCounters();
         }
+        uint32_t route_time_max = engine.GetRouteTimeMaxUs();
+        uint64_t route_time_sum = engine.GetRouteTimeSumUs();
+        uint64_t route_time_cnt = engine.GetRouteTimeCount();
+        double route_time_avg = (route_time_cnt > 0) ? (static_cast<double>(route_time_sum) / route_time_cnt) : 0.0;
+        uint64_t router_wait_time = engine.GetRouterWaitTimeUs();
+
+        // Reset counters for interval-based tracking in next poll
+        engine.ResetRouteTimeCounters();
+        engine.ResetTTICounters();
+
         json << "\"configured_agents\":" << engine.GetNumAgentsConfig() << ",";
         json << "\"visited_nodes_avg\":" << visited_nodes_avg << ",";
-        json << "\"route_cycles_avg\":" << route_cycles_avg;
+        json << "\"route_cycles_avg\":" << route_cycles_avg << ",";
+        json << "\"route_time_max_us\":" << route_time_max << ",";
+        json << "\"route_time_avg_us\":" << route_time_avg << ",";
+        json << "\"router_wait_time_us\":" << router_wait_time;
         json << "}";
         std::string payload = json.str();
         rep_socket.send(zmq::message_t(payload.data(), payload.size()),

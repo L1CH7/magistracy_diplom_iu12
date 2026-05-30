@@ -47,7 +47,11 @@ def load_csv_data(filepath):
         "RouterLoad": [],
         "GreenZones": [],
         "VisitedNodes": [],
-        "RouteCycles": []
+        "RouteCycles": [],
+        "WaitingSpawn": [],
+        "RouteTimeMaxUs": [],
+        "RouteTimeAvgUs": [],
+        "RouterWaitTimeUs": []
     }
     
     with open(filepath, "r", encoding="utf-8") as f:
@@ -68,6 +72,10 @@ def load_csv_data(filepath):
             data["GreenZones"].append(int(row.get("GreenZones", 0)))
             data["VisitedNodes"].append(float(row.get("VisitedNodes", 0.0)))
             data["RouteCycles"].append(float(row.get("RouteCycles", 0.0)))
+            data["WaitingSpawn"].append(int(row.get("WaitingSpawn", 0)))
+            data["RouteTimeMaxUs"].append(float(row.get("RouteTimeMaxUs", 0.0)))
+            data["RouteTimeAvgUs"].append(float(row.get("RouteTimeAvgUs", 0.0)))
+            data["RouterWaitTimeUs"].append(float(row.get("RouterWaitTimeUs", 0.0)))
             
     return data
 
@@ -155,37 +163,50 @@ def plot_comparison(output_png, time_old, time_new, data_old, data_new,
     axs[2, 1].plot(time_new, data_new["WaitingReroute"], color=c_bpr_off, linewidth=2.0, label='BPR Отключен (New)')
     style_subplot(axs[2, 1], "Размер очереди динамического перестроения MPR", "Количество агентов в очереди")
 
-    # 7. Green Zones (Free-Flow Roads) - separate plot so they don't flatten congested zones
-    axs[3, 0].plot(time_old, data_old["GreenZones"], color='#2ca02c', linewidth=2.0, label='BPR Включен (Old)')
-    axs[3, 0].plot(time_new, data_new["GreenZones"], color='#9467bd', linewidth=2.0, label='BPR Отключен (New)')
-    style_subplot(axs[3, 0], "Свободные дороги: Зеленые зоны (Задержка < 0.3x)", "Количество ребер сети")
+    # 7. Pathfinding Search Latency comparison (Max & Avg in milliseconds)
+    # Convert Us to Ms
+    avg_ms_old = [t / 1000.0 for t in data_old.get("RouteTimeAvgUs", [0.0]*len(time_old))]
+    avg_ms_new = [t / 1000.0 for t in data_new.get("RouteTimeAvgUs", [0.0]*len(time_new))]
+    max_ms_old = [t / 1000.0 for t in data_old.get("RouteTimeMaxUs", [0.0]*len(time_old))]
+    max_ms_new = [t / 1000.0 for t in data_new.get("RouteTimeMaxUs", [0.0]*len(time_new))]
+    
+    axs[3, 0].plot(time_old, avg_ms_old, color='#1f77b4', linewidth=1.5, label='Среднее (BPR ON)')
+    axs[3, 0].plot(time_new, avg_ms_new, color='#d62728', linestyle='--', linewidth=1.5, label='Среднее (BPR OFF)')
+    
+    axs[3, 0].plot(time_old, max_ms_old, color='#ff7f0e', linewidth=1.5, label='Пиковое (BPR ON)')
+    axs[3, 0].plot(time_new, max_ms_new, color='#9467bd', linestyle='--', linewidth=1.5, label='Пиковое (BPR OFF)')
+    
+    style_subplot(axs[3, 0], "Задержка вычисления маршрута A* (Max/Avg)", "Время расчета (мс)")
 
-    # 8. Router Search Space & CPU Cycles Profiling (Double Y-Axis)
+    # 8. Router Search Space & Barrier Synchronization Idle Time (Double Y-Axis)
     ax_left = axs[3, 1]
     ax_right = ax_left.twinx()
     
-    l1 = ax_left.plot(time_old, data_old["VisitedNodes"], color='#1f77b4', linewidth=2.0, label='Посещенные вершины (BPR ON)')
-    l2 = ax_left.plot(time_new, data_new["VisitedNodes"], color='#d62728', linewidth=2.0, label='Посещенные вершины (BPR OFF)')
+    l1 = ax_left.plot(time_old, data_old["VisitedNodes"], color='#1f77b4', linewidth=1.8, label='Вершины (BPR ON)')
+    l2 = ax_left.plot(time_new, data_new["VisitedNodes"], color='#d62728', linestyle='--', linewidth=1.8, label='Вершины (BPR OFF)')
     
-    cycles_old_m = [c / 1e6 for c in data_old["RouteCycles"]]
-    cycles_new_m = [c / 1e6 for c in data_new["RouteCycles"]]
-    l3 = ax_right.plot(time_old, cycles_old_m, color='#ff7f0e', linestyle=':', linewidth=1.5, label='Такты CPU (BPR ON)')
-    l4 = ax_right.plot(time_new, cycles_new_m, color='#2ca02c', linestyle=':', linewidth=1.5, label='Такты CPU (BPR OFF)')
+    # Convert Us to Seconds
+    wait_sec_old = [w / 1e6 for w in data_old.get("RouterWaitTimeUs", [0.0]*len(time_old))]
+    wait_sec_new = [w / 1e6 for w in data_new.get("RouterWaitTimeUs", [0.0]*len(time_new))]
     
-    ax_left.set_title("Профайлер A*: Число вершин и такты CPU на поиск пути", fontsize=12, fontweight='bold', pad=10)
+    l3 = ax_right.plot(time_old, wait_sec_old, color='#ff7f0e', linewidth=1.5, label='Простой WaitForAll (BPR ON)')
+    l4 = ax_right.plot(time_new, wait_sec_new, color='#2ca02c', linestyle='--', linewidth=1.5, label='Простой WaitForAll (BPR OFF)')
+    
+    ax_left.set_title("Пространство поиска & Барьерная синхронизация", fontsize=12, fontweight='bold', pad=10)
     ax_left.set_xlabel("Время симуляции (сек)", fontsize=10)
-    ax_left.set_ylabel("Посещенные вершины (ед)", fontsize=10)
-    ax_right.set_ylabel("Миллионы тактов CPU (RDTSC)", fontsize=10)
+    ax_left.set_ylabel("Посещенные вершины A* (ед)", fontsize=10)
+    ax_right.set_ylabel("Накопленный простой на барьере (сек)", fontsize=10)
     ax_left.grid(True, linestyle=':', alpha=0.6)
     
     # Overlap visualization on ax_left
-    ax_left.axvspan(t_start, t_end, color='#2ca02c', alpha=0.08)
+    ax_left.axvspan(t_start, t_end, color='#2ca02c', alpha=0.08, label='Окно сравнения')
     ax_left.axvline(t_start, color='#2ca02c', linestyle='--', linewidth=0.8, alpha=0.5)
     ax_left.axvline(t_end, color='#2ca02c', linestyle='--', linewidth=0.8, alpha=0.5)
     
     lns = l1 + l2 + l3 + l4
     labs = [l.get_label() for l in lns]
     ax_left.legend(lns, labs, loc='upper left', frameon=True, facecolor='white', edgecolor='none', framealpha=0.9)
+
 
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
@@ -196,18 +217,57 @@ def plot_comparison(output_png, time_old, time_new, data_old, data_new,
 def compare_runs():
     stats_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Files are explicitly given as per user instruction
-    old_file_name = "run_e9833294_24b_300s_200000a_3asf_BUCKETS_ON_PROFILE_ON.csv"
-    new_file_name = "run_24607e11_24b_300s_200000a_3asf_BUCKETS_OFF_PROFILE_ON.csv"
+    old_file = None
+    new_file = None
     
-    old_file = os.path.join(stats_dir, old_file_name)
-    new_file = os.path.join(stats_dir, new_file_name)
-    
+    # If files are explicitly provided as CLI arguments
+    if len(sys.argv) > 2:
+        old_file = sys.argv[1]
+        new_file = sys.argv[2]
+        if not os.path.isabs(old_file):
+            old_file = os.path.join(stats_dir, old_file)
+        if not os.path.isabs(new_file):
+            new_file = os.path.join(stats_dir, new_file)
+    else:
+        # Auto-discover two latest run files in stats/
+        csv_files = glob.glob(os.path.join(stats_dir, "run_*.csv"))
+        # Sort by modification time, descending (latest first)
+        csv_files.sort(key=os.path.getmtime, reverse=True)
+        if len(csv_files) < 2:
+            print(f"{C_RED}Ошибка: Найдено менее двух файлов для сравнения в {stats_dir}!{C_RESET}")
+            sys.exit(1)
+            
+        file1 = csv_files[0]
+        file2 = csv_files[1]
+        
+        # Determine BPR ON / OFF roles based on naming or fallback
+        # BPR ON is "old" (baseline), BPR OFF is "new" (candidate)
+        f1_is_bpr_off = "bpr_off" in os.path.basename(file1) or "BUCKETS_OFF" in os.path.basename(file1)
+        f2_is_bpr_off = "bpr_off" in os.path.basename(file2) or "BUCKETS_OFF" in os.path.basename(file2)
+        
+        if f1_is_bpr_off and not f2_is_bpr_off:
+            old_file = file2
+            new_file = file1
+        elif f2_is_bpr_off and not f1_is_bpr_off:
+            old_file = file1
+            new_file = file2
+        else:
+            # Fallback to modification order (older file is old, newer is new)
+            if os.path.getmtime(file1) < os.path.getmtime(file2):
+                old_file = file1
+                new_file = file2
+            else:
+                old_file = file2
+                new_file = file1
+                
     if not os.path.exists(old_file) or not os.path.exists(new_file):
         print(f"{C_RED}Ошибка: Один или оба файла телеметрии не найдены!{C_RESET}")
         print(f"Ожидаемые файлы:\n  - {old_file}\n  - {new_file}")
         sys.exit(1)
         
+    old_file_name = os.path.basename(old_file)
+    new_file_name = os.path.basename(new_file)
+    
     print(f"{C_BOLD}{C_CYAN}=== СРАВНИТЕЛЬНЫЙ АНАЛИЗ РАБОТЫ ТРАНСПОРТНОГО РОУТЕРА ==={C_RESET}")
     print(f"Старый запуск (BPR Включен):  {old_file_name}")
     print(f"Новый запуск  (BPR Отключен): {new_file_name}")
@@ -387,12 +447,28 @@ def compare_runs():
         
     print("-" * 75)
     
-    # Save the dashboard
-    output_png = os.path.join(stats_dir, "runs_comparison_dashboard.png")
+    # Save the dashboard with unique half-hash name
+    import re
+    def extract_hash(filepath):
+        basename = os.path.basename(filepath)
+        match = re.match(r"run_([0-9a-fA-F]+)_", basename)
+        if match:
+            return match.group(1)
+        return "unknown"
+
+    hash_old = extract_hash(old_file)
+    hash_new = extract_hash(new_file)
+    
+    half_old = hash_old[:4] if len(hash_old) >= 4 else hash_old
+    half_new = hash_new[:4] if len(hash_new) >= 4 else hash_new
+    
+    comparison_name = f"comparison_{half_old}_{half_new}_dashboard.png"
+    output_png = os.path.join(stats_dir, comparison_name)
+    
     plot_comparison(output_png, time_old, time_new, data_old, data_new, 
                     overlap_times, old_overlap, new_overlap, t_start, t_end)
     
-    print(f"{C_BOLD}{C_GREEN}Анализ сравнения выполнен успешно! Данные сохранены для отчета.{C_RESET}")
+    print(f"{C_BOLD}{C_GREEN}Анализ сравнения выполнен успешно! График сохранен: {os.path.basename(output_png)}{C_RESET}")
 
 if __name__ == "__main__":
     compare_runs()

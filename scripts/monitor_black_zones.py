@@ -51,13 +51,11 @@ def make_bar(percent: float, width: int = 20, color_code: str = C_GREEN) -> str:
     return f"{color_code}[{bar_str}]{C_RESET}"
 
 async def monitor():
-    # Hide cursor
-    sys.stdout.write("\033[?25l")
-    sys.stdout.flush()
-
     print(f"{C_BOLD}{C_CYAN}Инициализация системы мониторинга черных зон...{C_RESET}")
     print(f"Подключение к WebSocket: {WS_URL}...")
 
+    has_started = False
+    last_seen_sim_time = 0.0
     stats_cache = {}
     
     last_rps_time = time.time()
@@ -81,13 +79,18 @@ async def monitor():
     slot_sec = initial_stats.get("slot_sec", 300)
     configured_agents = initial_stats.get("configured_agents", 200000)
     asf = initial_stats.get("asf", 1)
+    bpr_enabled = initial_stats.get("bpr_enabled", False)
+    profiling_enabled = initial_stats.get("profiling_enabled", False)
+    
+    bpr_status = "on" if bpr_enabled else "off"
+    prof_status = "on" if profiling_enabled else "off"
     
     stats_cache = initial_stats if initial_stats else {}
     
     run_hash = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
     csv_filename = os.path.join(
         stats_dir, 
-        f"run_{run_hash}_{num_buckets}b_{slot_sec}s_{configured_agents}a_{asf}asf.csv"
+        f"run_{run_hash}_bpr_{bpr_status}_prof_{prof_status}_{num_buckets}b_{slot_sec}s_{configured_agents}a_{asf}asf.csv"
     )
     last_logged_sim_time = -100.0
     
@@ -97,7 +100,8 @@ async def monitor():
         "SimTime", "TTI", "ActiveAgents", "WaitingReroute", 
         "CompletedTrips", "DynamicReroutes", "BlackZones", 
         "RedZones", "YellowZones", "RouterRPS", "SavedDuplicates", "RouterLoad",
-        "GreenZones", "VisitedNodes", "RouteCycles"
+        "GreenZones", "VisitedNodes", "RouteCycles",
+        "WaitingSpawn", "RouteTimeMaxUs", "RouteTimeAvgUs", "RouterWaitTimeUs"
     ]
     with open(csv_filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -112,7 +116,7 @@ async def monitor():
                 stats_cache = fetched
             await asyncio.sleep(1.0)
 
-    asyncio.create_task(poll_stats_loop())
+    poll_task = asyncio.create_task(poll_stats_loop())
 
     try:
         # Increase max_size to None to allow huge frames containing 65k+ active edges (3.5MB+ JSON payloads)
@@ -171,6 +175,26 @@ async def monitor():
                 # Read cached global stats
                 sim_time = stats_cache.get("sim_time", 0.0)
                 active_agents = stats_cache.get("active_agents", 0)
+
+                # State change detection (start / stop / restart)
+                if not has_started:
+                    if sim_time > 0.5 or active_agents > 0:
+                        has_started = True
+                else:
+                    if sim_time < last_seen_sim_time - 1.0 or (sim_time == 0.0 and active_agents == 0):
+                        # Reset or stop was detected!
+                        await asyncio.sleep(1.0)
+                        new_stats = fetch_stats()
+                        new_sim_time = new_stats.get("sim_time", 0.0)
+                        new_active = new_stats.get("active_agents", 0)
+                        if new_sim_time > 0.0 or new_active > 0:
+                            print(f"\n{C_BOLD}{C_YELLOW}[!] Обнаружен перезапуск симуляции. Завершаем текущую сессию.{C_RESET}")
+                            return "restart"
+                        else:
+                            print(f"\n{C_BOLD}{C_RED}[!] Симуляция остановлена. Завершаем мониторинг.{C_RESET}")
+                            return "stop"
+                
+                last_seen_sim_time = sim_time
                 config_agents = stats_cache.get("configured_agents", 0)
                 asf = stats_cache.get("asf", 1)
                 total_spawns = stats_cache.get("total_spawns", 0)
@@ -223,6 +247,9 @@ async def monitor():
 
                 visited_nodes = stats_cache.get("visited_nodes_avg", 0.0)
                 route_cycles = stats_cache.get("route_cycles_avg", 0.0)
+                route_time_max = stats_cache.get("route_time_max_us", 0)
+                route_time_avg = stats_cache.get("route_time_avg_us", 0.0)
+                router_wait_time = stats_cache.get("router_wait_time_us", 0)
 
                 # Log stats to CSV if simulation time progressed by at least 1.0s
                 if sim_time - last_logged_sim_time >= 1.0:
@@ -243,7 +270,11 @@ async def monitor():
                             round(router_load, 4),
                             len(green_edges),
                             round(visited_nodes, 2),
-                            round(route_cycles, 2)
+                            round(route_cycles, 2),
+                            agents_waiting_spawn,
+                            route_time_max,
+                            round(route_time_avg, 2),
+                            router_wait_time
                         ])
                     last_logged_sim_time = sim_time
 
@@ -257,6 +288,8 @@ async def monitor():
                 out.append(f"  ├─ Производительность:     {C_CYAN}{current_rps:.1f}{C_RESET} RPS | Нагрузка потока: {C_YELLOW}{router_load*100:.1f}%{C_RESET}")
                 if visited_nodes > 0 or route_cycles > 0:
                     out.append(f"  ├─ Профайлер A*:            {C_CYAN}{visited_nodes:.1f}{C_RESET} вершин | {C_GREEN}{route_cycles/1e6:.2f}M{C_RESET} тактов CPU")
+                out.append(f"  ├─ Время поиска (Max/Avg): {C_RED}{route_time_max/1000:.2f}ms{C_RESET} / {C_YELLOW}{route_time_avg/1000:.2f}ms{C_RESET}")
+                out.append(f"  ├─ Ожидание WaitForAll:    {C_MAGENTA}{router_wait_time/1e6:.2f}s{C_RESET}")
                 out.append(f"  ├─ Обработано запросов:    {C_BOLD}{routes_computed}{C_RESET}")
                 out.append(f"  │   ├─ Успешно построено:  {C_GREEN}{routes_successful}{C_RESET} (выездов: {total_spawns})")
                 out.append(f"  │   ├─ Отклонено (сдвиг):  {C_YELLOW}{routes_discarded}{C_RESET} (агент сместился)")
@@ -323,6 +356,28 @@ async def monitor():
     except KeyboardInterrupt:
         pass
     finally:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+
+async def main_runner():
+    # Hide cursor
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
+        while True:
+            res = await monitor()
+            if res == "restart":
+                print(f"\n{C_BOLD}{C_CYAN}[+] Начинаем новый цикл мониторинга...{C_RESET}\n")
+                await asyncio.sleep(1.0)
+                continue
+            else:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
         # Show cursor back
         sys.stdout.write("\033[?25h\n")
         sys.stdout.flush()
@@ -330,6 +385,6 @@ async def monitor():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(monitor())
+        asyncio.run(main_runner())
     except KeyboardInterrupt:
         print("\nВыход...")
