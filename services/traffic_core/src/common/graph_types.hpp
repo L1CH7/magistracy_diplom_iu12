@@ -49,6 +49,24 @@ struct RouteResponse {
     std::vector<AbsoluteTime> etas; // Время прибытия на каждое ребро
 };
 
+#pragma pack(push, 1)
+struct ExtendedAttributes {
+    float speed_kmh;          // 4 bytes
+    uint8_t lanes;            // 1 byte
+    uint8_t highway_class;    // 1 byte
+    uint8_t oneway;           // 1 byte
+    uint8_t pad;              // 1 byte
+    float length_m;           // 4 bytes
+    float t_free_base;        // 4 bytes
+    int32_t k_magic;          // 4 bytes
+    float min_x;              // 4 bytes
+    float min_y;              // 4 bytes
+    uint16_t visual_capacity; // 2 bytes
+    uint16_t jam_capacity;    // 2 bytes
+};
+#pragma pack(pop)
+static_assert(sizeof(ExtendedAttributes) == 32, "ExtendedAttributes must be exactly 32 bytes!");
+
 // Структура для R-Tree (32 байта, половина кэш-линии)
 #pragma pack(push, 1)
 struct FlatBVHNode {

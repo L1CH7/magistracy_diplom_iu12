@@ -1,16 +1,67 @@
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import FastAPI, Request, WebSocket, HTTPException
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from services.common.config import Settings, config_loader
 from src.proxy import reverse_proxy
 from src.ws_proxy import websocket_proxy
 from loguru import logger
+import json
 
 # Load Global Settings
 settings = Settings()
 
+import zmq
+import zmq.asyncio
+import struct
 import httpx
+import asyncio
+from fastapi import WebSocketDisconnect
+
+async def zmq_heatmap_subscriber(app: FastAPI):
+    ctx = app.state.zmq_ctx
+    sub_socket = ctx.socket(zmq.SUB)
+    sub_socket.connect("tcp://traffic-core:5556")
+    sub_socket.setsockopt(zmq.SUBSCRIBE, b'')
+    
+    while True:
+        try:
+            frames = await sub_socket.recv_multipart()
+            if not frames or len(frames) < 2:
+                continue
+                
+            header_data = frames[0]
+            if len(header_data) >= 13 and header_data[0] == 2:
+                msg_type, tick_id, sim_time, num_entries = struct.unpack('<BIfI', header_data[:13])
+                
+                if num_entries > 0:
+                    payload = frames[1]
+                    entries = []
+                    for chunk in struct.iter_unpack('<QHH', payload):
+                        entries.append({
+                            "id": chunk[0],
+                            "v": chunk[1],
+                            "c": chunk[2]
+                        })
+                    
+                    msg_text = json.dumps(entries)
+                    disconnected = []
+                    
+                    for ws in app.state.sim_telemetry_clients:
+                        try:
+                            await ws.send_text(msg_text)
+                        except Exception:
+                            disconnected.append(ws)
+                    
+                    for ws in disconnected:
+                        app.state.sim_telemetry_clients.discard(ws)
+                        
+                    # logger.info(f"Broadcasted heatmap with {len(entries)} edges to {len(app.state.sim_telemetry_clients)} clients")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"ZMQ Heatmap Subscriber Error: {e}")
+            await asyncio.sleep(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,16 +69,217 @@ async def lifespan(app: FastAPI):
     # Initialize shared AsyncClient with connection pooling
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     app.state.client = httpx.AsyncClient(limits=limits, timeout=60.0)
+    
+    # Initialize Async ZMQ Context for Traffic Core control
+    app.state.zmq_ctx = zmq.asyncio.Context()
+    app.state.zmq_lock = asyncio.Lock() # Lock for thread-safe socket usage
+    app.state.zmq_socket = app.state.zmq_ctx.socket(zmq.REQ)
+    app.state.zmq_socket.connect("tcp://traffic-core:5555")
+    
+    app.state.sim_telemetry_clients = set()
+    app.state.heatmap_task = asyncio.create_task(zmq_heatmap_subscriber(app))
+    
     yield
     # Cleanup
     await app.state.client.aclose()
+    app.state.zmq_socket.close()
+    app.state.zmq_ctx.term()
+    app.state.heatmap_task.cancel()
     logger.info("Stopping Gateway Service")
+
+async def send_core_command(app, payload: bytes, timeout: float = 5.0):
+    """
+    Send binary command to Traffic Core via ZMQ REQ/REP.
+    Uses asyncio.Lock to ensure serialized usage of the REQ socket.
+    """
+    async with app.state.zmq_lock:
+        socket = app.state.zmq_socket
+        try:
+            await socket.send(payload)
+            # Use asyncio.wait_for for robust timeout handling
+            return await asyncio.wait_for(socket.recv(), timeout=timeout)
+        except (asyncio.TimeoutError, zmq.ZMQError) as e:
+            logger.error(f"Core communication error: {e}. Recreating ZMQ socket...")
+            socket.close(linger=0)
+            # Recreate socket
+            app.state.zmq_socket = app.state.zmq_ctx.socket(zmq.REQ)
+            app.state.zmq_socket.connect("tcp://traffic-core:5555")
+            raise HTTPException(status_code=504, detail=f"Core Timeout or Error: {str(e)}")
 
 app = FastAPI(
     title="Navigation MAS Gateway",
     version="2.0.0",
     lifespan=lifespan
 )
+
+@app.post("/api/v1/sim/control")
+async def sim_control(request: Request):
+    """
+    Proxy simulation commands (START, STOP, SET_SPEED, STEP) to Traffic Core via ZeroMQ binary protocol.
+    Expected JSON: { "opcode": int, "num_agents": int, "acceleration": float, "fps": float, "chaos": float, "duration_sec": int, "respawn_enabled": bool }
+    """
+    try:
+        data = await request.json()
+        opcode = int(data.get("opcode", 1))
+        num_agents = int(data.get("num_agents", 50000))
+        duration = int(data.get("duration_sec", 0))
+        asf = int(data.get("asf", 50))
+        accel = float(data.get("acceleration", 1.0))
+        telemetry_fps = float(data.get("fps", 25.0))
+        chaos_factor = float(data.get("chaos", 0.0))
+        respawn = 1 if data.get("respawn_enabled", True) else 0
+
+        # Pack binary structure: < B I I I H f f f 3B (30 bytes, packed)
+        # B=opcode, I=duration(session_id), I=request, I=num_agents, H=asf, f=accel, f=fps, f=chaos, 3B=respawn+reserved
+        payload = struct.pack("<BIIIHfff3B", opcode, duration, 0, num_agents, asf, accel, telemetry_fps, chaos_factor, respawn, 0, 0)
+        
+        # Call encapsulated ZMQ logic. Use 30s for START (opcode 1).
+        timeout = 30.0 if opcode == 1 else 5.0
+        ack_raw = await send_core_command(request.app, payload, timeout=timeout)
+        
+        if len(ack_raw) < 2:
+            return JSONResponse({"status": "error", "message": "Invalid ACK from Traffic Core"}, status_code=500)
+        
+        success, state = struct.unpack("<BB", ack_raw)
+        state_map = {0: "IDLE", 1: "RUNNING", 2: "PAUSED"}
+        return {
+            "status": "success" if success else "failed",
+            "engine_state": state_map.get(state, "IDLE")
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Sim control error: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.get("/api/v1/sim/stats")
+async def sim_stats(request: Request):
+    """
+    Get simulation diagnostics (TTI, spawns, reroutes, active agents).
+    Sends opcode 9 (STATS) to Traffic Core.
+    """
+    try:
+        # Pack binary structure for STATS opcode: < B I I I H f f f 3B (30 bytes, packed)
+        payload = struct.pack("<BIIIHfff3B", 9, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0)
+        
+        # Call encapsulated ZMQ logic. Use 5.0s timeout.
+        response_raw = await send_core_command(request.app, payload, timeout=5.0)
+        
+        if not response_raw:
+            return JSONResponse({"status": "error", "message": "Empty response from Traffic Core"}, status_code=500)
+            
+        # Parse the JSON string returned by Traffic Core
+        try:
+            json_str = response_raw.decode('utf-8')
+            stats_data = json.loads(json_str)
+            return JSONResponse({"status": "success", "data": stats_data})
+        except json.JSONDecodeError as e:
+            return JSONResponse({"status": "error", "message": f"Invalid JSON from core: {str(e)}", "raw": response_raw.decode('utf-8', errors='ignore')}, status_code=500)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Sim stats error: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.post("/routing/calculate")
+async def calculate_route(request: Request):
+    """
+    Proxy legacy routing requests to Traffic Core via binary ZMQ.
+    Handles multi-point paths and returns full geometry.
+    """
+    try:
+        body = await request.json()
+        waypoints = body.get("waypoints", [])
+        if len(waypoints) < 2:
+            return JSONResponse({"status": "error", "detail": "At least 2 waypoints required"}, status_code=400)
+        
+        logger.debug(f"Calculating route for {len(waypoints)} points")
+        # CommandRequest (30b) + OneOffRouteHeader (5b)
+        # opcode=5 (ROUTE_ONE_OFF), followed by reserved/default fields for agents/sim params
+        cmd_head = struct.pack("<BIIIHfff3B", 5, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0, 0, 0)
+        # OneOffRouteHeader: num_waypoints (B), start_time (I)
+        route_head = struct.pack("<BI", len(waypoints), 0) 
+        
+        points_data = b""
+        for pt in waypoints:
+            points_data += struct.pack("<ff", pt["lon"], pt["lat"])
+        
+        full_request = cmd_head + route_head + points_data
+        
+        socket = request.app.state.zmq_socket
+        await socket.send(full_request)
+        
+        # 2. Receive Multi-part Response
+        # We MUST use recv_multipart() for REQ sockets to consume all frames at once
+        frames = await socket.recv_multipart()
+        
+        if len(frames) < 5:
+            logger.error(f"Invalid multi-part response: expected 5+ frames, got {len(frames)}")
+            return JSONResponse({"status": "error", "message": "Corrupted response from Traffic Core"}, status_code=500)
+
+        # Frame 1: Header (19 bytes: B, H, I, f, f, f)
+        res_header_raw = frames[0]
+        # B = success, H = num_edges (2), I = total_pts (4), f = dist, f = time, f = calc_ms
+        success, num_edges, total_pts, dist, total_time, calc_ms = struct.unpack("<BHIfff", res_header_raw)
+        
+        if not success:
+            return JSONResponse({"status": "error", "detail": "Routing failed"}, status_code=404)
+        
+        # Frame 2: EdgeIDs (uint32)
+        edge_ids = struct.unpack(f"<{num_edges}I", frames[1])
+        
+        # Frame 3: ETAs (float)
+        etas = struct.unpack(f"<{num_edges}f", frames[2])
+        
+        # Frame 4: PointCounts (uint16)
+        point_counts = struct.unpack(f"<{num_edges}H", frames[3])
+        
+        # Frame 5: GeometryData (float x, float y)
+        all_points = struct.unpack(f"<{total_pts * 2}f", frames[4])
+        
+        # 3. Reconstruct JSON Response
+        segments = []
+        pt_idx = 0
+        for i in range(num_edges):
+            count = point_counts[i]
+            edge_coords = []
+            for _ in range(count):
+                lon = all_points[pt_idx * 2]
+                lat = all_points[pt_idx * 2 + 1]
+                edge_coords.append([lon, lat])
+                pt_idx += 1
+            
+            segments.append({
+                "edge_id": edge_ids[i],
+                "from_node": 0, # Omitted or dummy
+                "to_node": 0,
+                "distance_m": 0.0, # Could be calculated but usually provided at segment level
+                "speed_limit": 0.0,
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": edge_coords
+                }
+            })
+            
+        return {
+            "status": "success",
+            "calculation_time_ms": calc_ms,
+            "routes": [{
+                "route_id": 0,
+                "segments": segments,
+                "total_distance_m": dist,
+                "estimated_time_sec": total_time,
+                "diversity_score": 1.0,
+                "edge_ids": list(edge_ids)
+            }]
+        }
+        
+    except zmq.Again:
+        return JSONResponse({"status": "error", "message": "Traffic Core timeout"}, status_code=504)
+    except Exception as e:
+        logger.error(f"Routing calculate error: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
@@ -51,6 +303,16 @@ async def ws_data_updates(websocket: WebSocket):
     target = data_processor_url.replace("http://", "ws://").replace("https://", "wss://")
     await websocket_proxy(websocket, f"{target}/ws/data_updates")
 
+@app.websocket("/ws/sim_telemetry")
+async def ws_sim_telemetry(websocket: WebSocket):
+    await websocket.accept()
+    websocket.app.state.sim_telemetry_clients.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        websocket.app.state.sim_telemetry_clients.discard(websocket)
+
 # --- Dynamic Route Registration ---
 
 def register_routes():
@@ -61,6 +323,10 @@ def register_routes():
         
         for route in registry.get("routes", []):
             path_prefix = route["path"]
+            # Router: Graph Management (Moved to ZMQ/Daemon if needed, removing legacy HTTP proxy)
+            # - path: "/routing"
+            #   service: "router"
+            #   internal_prefix: "/api/v1/routing"
             service_name = route["service"]
             internal_prefix = route["internal_prefix"]
             
@@ -129,4 +395,3 @@ register_routes()
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host="0.0.0.0", port=8000, reload=True)
-

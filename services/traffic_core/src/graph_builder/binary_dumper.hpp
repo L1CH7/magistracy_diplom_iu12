@@ -22,6 +22,7 @@ struct RamEdge {
 
 struct RamNode {
     int64_t orig_db_id;
+    int64_t osm_way_id;
     float length_m;
     float speed_kmh;
     float t_free_base;
@@ -36,6 +37,9 @@ struct RamNode {
 
     // Геометрия (WKB)
     std::vector<uint8_t> wkb_geom;
+
+    uint16_t visual_capacity = 0;
+    uint16_t jam_capacity = 0;
 };
 
 class BinaryDumper {

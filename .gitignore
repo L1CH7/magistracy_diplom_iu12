@@ -45,6 +45,7 @@ data/tiles/
 benchmarks/router/
 *.png
 *.svg
+*.csv
 
 # docs
 # !docs/router

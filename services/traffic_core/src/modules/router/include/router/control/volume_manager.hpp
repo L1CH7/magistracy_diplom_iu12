@@ -1,6 +1,7 @@
 #pragma once
 #include "router/compute/volume_bucket.hpp"
 #include <vector>
+#include <span>
 
 namespace traffic::router::control {
 
@@ -11,15 +12,15 @@ public:
     // Доступ для Read-Only горячего цикла Роутера
     [[nodiscard]] const traffic::router::compute::VolumeBucket* data() const noexcept { return buckets_.data(); }
 
-    void book_route(const std::vector<traffic::NodeID>& path, const std::vector<traffic::AbsoluteTime>& etas) noexcept {
+    void book_route(std::span<const traffic::EdgeID> path, std::span<const traffic::AbsoluteTime> etas, traffic::VolumeCount count = 1) noexcept {
         for (size_t i = 0; i < path.size(); ++i) {
-            buckets_[path[i]].add_volume(etas[i], 1);
+            buckets_[path[i]].add_volume(etas[i], count);
         }
     }
 
-    void unbook_route(const std::vector<traffic::NodeID>& path, const std::vector<traffic::AbsoluteTime>& etas) noexcept {
+    void unbook_route(std::span<const traffic::EdgeID> path, std::span<const traffic::AbsoluteTime> etas, traffic::VolumeCount count = 1) noexcept {
         for (size_t i = 0; i < path.size(); ++i) {
-            buckets_[path[i]].sub_volume(etas[i], 1);
+            buckets_[path[i]].sub_volume(etas[i], count);
         }
     }
 
@@ -34,6 +35,14 @@ public:
                 b.volumes[cur].store(0, std::memory_order_relaxed);
             }
             cur = (cur + 1) % traffic::router::compute::NUM_BUCKETS;
+        }
+    }
+
+    void Clear() noexcept {
+        for (auto& b : buckets_) {
+            for (uint32_t i = 0; i < traffic::router::compute::NUM_BUCKETS; ++i) {
+                b.volumes[i].store(0, std::memory_order_relaxed);
+            }
         }
     }
 

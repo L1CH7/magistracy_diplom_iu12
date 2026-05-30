@@ -19,14 +19,15 @@ class SidebarWidget(QFrame):
         sidebar_layout.setContentsMargins(12, 12, 12, 12)
         sidebar_layout.setSpacing(8)
 
+        # Simulation panel for parameters, control and status
+        self.simulation_panel = SimulationPanel()
+        sidebar_layout.addWidget(self.simulation_panel)
+
         # Route panel for K routes display
         self.route_panel = RoutePanel()
         sidebar_layout.addWidget(self.route_panel)
         
-        # Simulation panel for agent control
-        self.simulation_panel = SimulationPanel()
-        sidebar_layout.addWidget(self.simulation_panel)
-
+        # Selected points section
         self.points_section = CollapsibleSection(self.tr("Selected Points"))
         self.selected_points_widget = SelectedPointsWidget()
         self.points_section.add_widget(self.selected_points_widget)

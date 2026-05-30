@@ -10,6 +10,7 @@
 #include <expected>
 #include <memory>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #include <format>
 #include "../compute/advanced_pqs.hpp"
@@ -168,7 +169,55 @@ public:
             static_cast<const uint16_t*>(mapped_graph_.landmarks_region->data()) : nullptr;
     }
 
+    const traffic::PenaltyScale* get_kmagic_ptr() const {
+        return (mapped_graph_.kmagic_region) ? 
+            static_cast<const traffic::PenaltyScale*>(mapped_graph_.kmagic_region->data()) : nullptr;
+    }
     const traffic::GraphView& get_view() const { return mapped_graph_.view; }
+
+    const common::GeometryStore* get_geometry_store() const { return mapped_graph_.geometry_store.get(); }
+
+    int64_t get_osm_id(traffic::NodeID edge_id) const {
+        if (!mapped_graph_.osm_ids_region || edge_id >= num_nodes()) return -1;
+        return static_cast<const int64_t*>(mapped_graph_.osm_ids_region->data())[edge_id];
+    }
+
+    [[nodiscard]] const ExtendedAttributes* get_edge_attributes(traffic::NodeID edge_id) const noexcept {
+        constexpr size_t HEADER_SIZE  = 8;
+        if (!mapped_graph_.attributes_region || edge_id >= num_nodes()) return nullptr;
+        const uint8_t* ptr = static_cast<const uint8_t*>(mapped_graph_.attributes_region->data())
+                             + HEADER_SIZE + edge_id * sizeof(ExtendedAttributes);
+        return reinterpret_cast<const ExtendedAttributes*>(ptr);
+    }
+
+    [[nodiscard]] const ExtendedAttributes* get_edge_attributes_ptr() const noexcept {
+        constexpr size_t HEADER_SIZE  = 8;
+        if (!mapped_graph_.attributes_region) return nullptr;
+        return reinterpret_cast<const ExtendedAttributes*>(
+            static_cast<const uint8_t*>(mapped_graph_.attributes_region->data()) + HEADER_SIZE
+        );
+    }
+
+    uint8_t get_edge_lanes(traffic::NodeID edge_id) const noexcept {
+#ifndef TRAFFIC_DEFAULT_LANES
+#  define TRAFFIC_DEFAULT_LANES 1
+#endif
+        const auto* attrs = get_edge_attributes(edge_id);
+        if (!attrs) return TRAFFIC_DEFAULT_LANES;
+        return attrs->lanes == 0 ? static_cast<uint8_t>(TRAFFIC_DEFAULT_LANES) : attrs->lanes;
+    }
+
+    [[nodiscard]] uint32_t get_edge_physical_capacity(traffic::NodeID edge_id) const noexcept {
+        const auto* attrs = get_edge_attributes(edge_id);
+        return attrs ? attrs->jam_capacity : 1u;
+    }
+    /**
+     * @brief Вернуть вместимость ребра (кол-во машин) по запечённым lanes, length_m и speed_kmh.
+     */
+    [[nodiscard]] uint32_t get_edge_capacity(traffic::NodeID edge_id) const noexcept {
+        const auto* attrs = get_edge_attributes(edge_id);
+        return attrs ? attrs->visual_capacity : 1u;
+    }
 
     // Helpers for benchmarking
     // Helpers for benchmarking
@@ -193,6 +242,17 @@ public:
     
     // Прямой доступ к менеджеру корзинок для Симулятора
     traffic::router::control::VolumeManager* get_volume_manager() noexcept { return volume_manager_.get(); }
+
+    /**
+     * @brief Построить кэш центроидов рёбер из SpatialGrid (однократно при старте).
+     * @return unordered_map<EdgeID, pair<lon, lat>>
+     */
+    [[nodiscard]] std::unordered_map<traffic::EdgeID, std::pair<float, float>>
+    BuildEdgeCentroidCache() const noexcept
+    {
+        if ( spatial_grid_ ) return spatial_grid_->BuildEdgeCentroidCache();
+        return {};
+    }
 
 private:
     // Вычисляет длину ребра в метрах на основе его реальной геометрии

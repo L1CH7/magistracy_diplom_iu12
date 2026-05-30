@@ -34,53 +34,29 @@ services:
       - ../data:/data
     user: "${UID:-1000}:${GID:-1000}"
 
-  # UNCOMMENT when router will be ready
-  # router: # rename to traffic core?
-  #   build:
-  #     context: .
-  #     dockerfile: services/traffic_core/Dockerfile
-  #   ports:
-  #     - "8006:8000"
-  #   cap_add:
-  #     - SYS_NICE
-  #   # cpuset: "0-3" # Uncomment to restrict container to specific cores for Thread Affinity
-  #   depends_on:
-  #     postgis:
-  #       condition: service_healthy
-  #   environment:
-  #     - APP__DB__HOST=postgis
-  #     - APP__DB__PORT=5432
-  #     - APP__DB__NAME=nav_mas
-  #     - APP__DB__USER=postgres
-  #     - APP__DB__PASSWORD=postgres
-  #     - APP__SERVICES__ROUTER__URL=http://router:8000
-  #     - APP__SERVICES__DATA_PROCESSOR__URL=http://data-processor:8000
-  #     # Legacy for backward compatibility if needed, though router uses Settings now
-  #     - DB_HOST=postgis
-  #     - DB_PORT=5432
-  #     - DB_NAME=nav_mas
-  #     - DB_USER=postgres
-  #     - DB_PASSWORD=postgres
-  #     # PostGISManager specific
-  #     - POSTGRES_HOST=postgis
-  #     - POSTGRES_PORT=5432
-  #     - POSTGRES_DB=nav_mas
-  #     - POSTGRES_USER=postgres
-  #     - POSTGRES_PASSWORD=postgres
-  #   volumes:
-  #     - ./configs:/app/configs
-  #     - ./logs:/app/logs
-  #     - ./benchmarks:/app/benchmarks
-  #     - ./services/traffic_core/src:/app/src
-  #     - ./services/traffic_core/tests:/app/tests
-  #     - ./services/traffic_core/cmake:/app/cmake
-  #   user: "${UID:-1000}:${GID:-1000}"
-
-# router-test service removed, using 'docker compose run --rm router pytest' instead
-
-
-
-
+  traffic-core:
+    build:
+      context: .
+      dockerfile: services/traffic_core/Dockerfile
+    ports:
+      - "5555:5555" # Command REP
+      - "5556:5556" # Telemetry PUB
+    cap_add:
+      - SYS_NICE
+    depends_on:
+      postgis:
+        condition: service_healthy
+    environment:
+      - APP__DB__HOST=postgis
+      - APP__DB__PORT=5432
+      - APP__DB__NAME=nav_mas
+      - APP__DB__USER=postgres
+      - APP__DB__PASSWORD=postgres
+    volumes:
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - traffic_data:/app/data
+    user: "${UID:-1000}:${GID:-1000}"
 
   # Agent Validation Service (Qt Client via VNC)
   # User runs native client via `make gui`
@@ -167,5 +143,7 @@ services:
 
 volumes:
   postgis_data:
+  traffic_data:
+    name: traffic_data
   grafana_data:
   prometheus_data:

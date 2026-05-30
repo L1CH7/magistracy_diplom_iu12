@@ -11,9 +11,10 @@ Provides controls for agent simulation:
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QSpinBox, QDoubleSpinBox, QGroupBox
+    QSpinBox, QDoubleSpinBox, QGroupBox, QCheckBox
 )
 from PyQt5.QtCore import pyqtSignal, Qt
+from models.navigation_state import SimState
 
 from loguru import logger as log
 from services.common.config import config_loader
@@ -35,14 +36,13 @@ class SimulationPanel(QWidget):
     """
 
     # Signals
-    start_agent_clicked = pyqtSignal()
-    stop_agent_clicked = pyqtSignal()
-    restart_agent_clicked = pyqtSignal()
-    delete_agent_clicked = pyqtSignal()
+    start_clicked = pyqtSignal()
+    pause_clicked = pyqtSignal()
+    stop_clicked = pyqtSignal()
+    step_clicked = pyqtSignal()
+    apply_clicked = pyqtSignal(dict) # params: accel, fps, chaos
     clear_routes_clicked = pyqtSignal()
     clear_points_clicked = pyqtSignal()
-    sim_speed_changed = pyqtSignal(float)
-    fps_changed = pyqtSignal(int)
 
     def __init__(self, parent: QWidget = None):
         """Initialize simulation panel."""
@@ -56,153 +56,162 @@ class SimulationPanel(QWidget):
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
-        # Simulation controls group
-        sim_group = QGroupBox(self.tr("Simulation Controls"))
+        # 1. Simulation Parameters Group (Config for START)
+        param_group = QGroupBox(self.tr("Simulation Parameters"))
+        param_layout = QVBoxLayout(param_group)
+        
+        # Agents Count
+        agents_layout = QHBoxLayout()
+        agents_layout.addWidget(QLabel(self.tr("Agents:")))
+        self.agents_spin = QSpinBox()
+        self.agents_spin.setRange(1, 1000000)
+        self.agents_spin.setValue(50000)
+        agents_layout.addWidget(self.agents_spin)
+        param_layout.addLayout(agents_layout)
+
+        # ASF (Availability Search Factor)
+        asf_layout = QHBoxLayout()
+        asf_layout.addWidget(QLabel(self.tr("ASF:")))
+        self.asf_spin = QSpinBox()
+        self.asf_spin.setRange(1, 1000)
+        self.asf_spin.setValue(50)
+        asf_layout.addWidget(self.asf_spin)
+        param_layout.addLayout(asf_layout)
+
+        # Duration (0 = inf)
+        dur_layout = QHBoxLayout()
+        dur_layout.addWidget(QLabel(self.tr("Duration (s):")))
+        self.dur_spin = QSpinBox()
+        self.dur_spin.setRange(0, 86400)
+        self.dur_spin.setValue(0)
+        dur_layout.addWidget(self.dur_spin)
+        param_layout.addLayout(dur_layout)
+
+        # Chaos Factor (%)
+        chaos_layout = QHBoxLayout()
+        chaos_layout.addWidget(QLabel(self.tr("Chaos (%):")))
+        self.chaos_spin = QDoubleSpinBox()
+        self.chaos_spin.setRange(0.0, 100.0)
+        self.chaos_spin.setValue(0.0)
+        self.chaos_spin.setSingleStep(1.0)
+        chaos_layout.addWidget(self.chaos_spin)
+        param_layout.addLayout(chaos_layout)
+        
+        # Respawn Enabled
+        self.respawn_check = QCheckBox(self.tr("Respawn on finish"))
+        self.respawn_check.setChecked(True)
+        param_layout.addWidget(self.respawn_check)
+
+        layout.addWidget(param_group)
+
+        # 2. Simulation Control Group (Live Actions)
+        sim_group = QGroupBox(self.tr("Simulation Control"))
         sim_layout = QVBoxLayout(sim_group)
 
-        # Simulation speed control
-        speed_layout = QHBoxLayout()
-        speed_layout.addWidget(QLabel(self.tr("Sim Speed (x):")))
+        # Speed and FPS row
+        speed_fps_layout = QHBoxLayout()
         
-        self.sim_speed_spinbox = QDoubleSpinBox()
-        self.sim_speed_spinbox.setRange(
-            config['speed']['min'],
-            config['speed']['max']
-        )
-        self.sim_speed_spinbox.setSingleStep(
-            config['speed']['step']
-        )
-        self.sim_speed_spinbox.setValue(
-            config['speed']['default']
-        )
-        self.sim_speed_spinbox.setDecimals(1)
-        self.sim_speed_spinbox.valueChanged.connect(
-            self._on_sim_speed_changed
-        )
-        speed_layout.addWidget(self.sim_speed_spinbox)
-        speed_layout.addStretch()
-        sim_layout.addLayout(speed_layout)
+        # Speed
+        speed_fps_layout.addWidget(QLabel(self.tr("Speed (x):")))
+        self.sim_speed_spin = QDoubleSpinBox()
+        self.sim_speed_spin.setRange(0.1, 3000.0)
+        self.sim_speed_spin.setValue(100.0)
+        self.sim_speed_spin.setDecimals(1)
+        speed_fps_layout.addWidget(self.sim_speed_spin)
 
-        # FPS control
-        fps_layout = QHBoxLayout()
-        fps_layout.addWidget(QLabel(self.tr("FPS:")))
+        # FPS (float support)
+        speed_fps_layout.addWidget(QLabel(self.tr("FPS:")))
+        self.fps_spin = QDoubleSpinBox()
+        self.fps_spin.setRange(0.1, 60.0)
+        self.fps_spin.setValue(25.0)
+        self.fps_spin.setDecimals(1)
+        speed_fps_layout.addWidget(self.fps_spin)
         
-        self.fps_spinbox = QSpinBox()
-        self.fps_spinbox.setRange(
-            config['fps']['min'],
-            config['fps']['max']
-        )
-        self.fps_spinbox.setValue(config['fps']['default'])
-        self.fps_spinbox.valueChanged.connect(self._on_fps_changed)
-        fps_layout.addWidget(self.fps_spinbox)
-        fps_layout.addStretch()
-        sim_layout.addLayout(fps_layout)
+        sim_layout.addLayout(speed_fps_layout)
 
+        # Apply Button
+        self.apply_btn = QPushButton(self.tr("Apply Settings"))
+        self.apply_btn.clicked.connect(self._on_apply_clicked)
+        sim_layout.addWidget(self.apply_btn)
+
+        # Lifecycle Buttons
+        lifecycle_layout = QHBoxLayout()
+        
+        self.start_pause_btn = QPushButton(self.tr("Start"))
+        self.start_pause_btn.setCheckable(True)
+        self.start_pause_btn.clicked.connect(self._on_start_pause_clicked)
+        lifecycle_layout.addWidget(self.start_pause_btn)
+
+        self.stop_btn = QPushButton(self.tr("Reset"))
+        self.stop_btn.clicked.connect(self._on_stop_clicked)
+        lifecycle_layout.addWidget(self.stop_btn)
+
+        self.step_btn = QPushButton(self.tr("Step"))
+        self.step_btn.clicked.connect(self._on_step_clicked)
+        lifecycle_layout.addWidget(self.step_btn)
+
+        sim_layout.addLayout(lifecycle_layout)
         layout.addWidget(sim_group)
 
-        # Agent control group
-        agent_group = QGroupBox(self.tr("Agent Control"))
-        agent_layout = QVBoxLayout(agent_group)
-
-        # Agent buttons row 1
-        btn_row1 = QHBoxLayout()
-        
-        self.start_btn = QPushButton(self.tr("Start Agent"))
-        self.start_btn.clicked.connect(self._on_start_clicked)
-        btn_row1.addWidget(self.start_btn)
-        
-        self.stop_btn = QPushButton(self.tr("Stop"))
-        self.stop_btn.clicked.connect(self._on_stop_clicked)
-        self.stop_btn.setEnabled(False)
-        btn_row1.addWidget(self.stop_btn)
-        
-        agent_layout.addLayout(btn_row1)
-
-        # Agent buttons row 2
-        btn_row2 = QHBoxLayout()
-        
-        self.restart_btn = QPushButton(self.tr("Restart"))
-        self.restart_btn.clicked.connect(self._on_restart_clicked)
-        self.restart_btn.setEnabled(False)
-        btn_row2.addWidget(self.restart_btn)
-        
-        self.delete_btn = QPushButton(self.tr("Delete Agent"))
-        self.delete_btn.clicked.connect(self._on_delete_clicked)
-        self.delete_btn.setEnabled(False)
-        btn_row2.addWidget(self.delete_btn)
-        
-        agent_layout.addLayout(btn_row2)
-
-        layout.addWidget(agent_group)
-
-        # Route management group
+        # 3. Route Management
         route_group = QGroupBox(self.tr("Route Management"))
         route_layout = QVBoxLayout(route_group)
 
         self.clear_routes_btn = QPushButton(self.tr("Clear Routes"))
-        self.clear_routes_btn.clicked.connect(self._on_clear_routes_clicked)
+        self.clear_routes_btn.clicked.connect(self.clear_routes_clicked.emit)
         route_layout.addWidget(self.clear_routes_btn)
 
         self.clear_points_btn = QPushButton(self.tr("Clear All Points"))
-        self.clear_points_btn.clicked.connect(self._on_clear_points_clicked)
+        self.clear_points_btn.clicked.connect(self.clear_points_clicked.emit)
         route_layout.addWidget(self.clear_points_btn)
 
         layout.addWidget(route_group)
 
-        # Agent status group
-        status_group = QGroupBox(self.tr("Agent Status"))
+        # 4. Status
+        status_group = QGroupBox(self.tr("Simulation Status"))
         status_layout = QVBoxLayout(status_group)
-
-        self.status_label = QLabel(self.tr("No active agent"))
-        self.status_label.setWordWrap(True)
-        self.status_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.status_label = QLabel(self.tr("Ready"))
         status_layout.addWidget(self.status_label)
-
         layout.addWidget(status_group)
 
         layout.addStretch()
 
-    def _on_start_clicked(self):
-        """Handle Start Agent button click."""
-        log.info("start_agent_clicked")
-        self.start_agent_clicked.emit()
+    def _on_start_pause_clicked(self):
+        """Handle Start/Pause toggle."""
+        # Note: The actual state transition is handled by MainWindowHandlers
+        # this button just sends the signal based on its current text/state
+        if self.start_pause_btn.text() == self.tr("Pause"):
+            self.pause_clicked.emit()
+        else:
+            self.start_clicked.emit()
 
     def _on_stop_clicked(self):
-        """Handle Stop button click."""
-        log.info("stop_agent_clicked")
-        self.stop_agent_clicked.emit()
+        """Handle Stop."""
+        self.stop_clicked.emit()
 
-    def _on_restart_clicked(self):
-        """Handle Restart button click."""
-        log.info("restart_agent_clicked")
-        self.restart_agent_clicked.emit()
+    def _on_step_clicked(self):
+        """Handle Step."""
+        self.step_clicked.emit()
 
-    def _on_delete_clicked(self):
-        """Handle Delete Agent button click."""
-        log.info("delete_agent_clicked")
-        self.delete_agent_clicked.emit()
+    def _on_apply_clicked(self):
+        """Handle Apply button click."""
+        params = self.get_sim_params()
+        log.info(f"Apply sim settings: {params}")
+        self.apply_clicked.emit(params)
 
-    def _on_clear_routes_clicked(self):
-        """Handle Clear Routes button click."""
-        log.info("clear_routes_clicked")
-        self.clear_routes_clicked.emit()
-
-    def _on_clear_points_clicked(self):
-        """Handle Clear All Points button click."""
-        log.info("clear_points_clicked")
-        self.clear_points_clicked.emit()
-
-    def _on_sim_speed_changed(self, value: float):
-        """Handle simulation speed change."""
-        log.info("sim_speed_changed", value=value)
-        self.sim_speed_changed.emit(value)
-
-    def _on_fps_changed(self, value: int):
-        """Handle FPS change."""
-        log.info("fps_changed", value=value)
-        self.fps_changed.emit(value)
+    def get_sim_params(self) -> dict:
+        """Get current parameters from UI for START command."""
+        return {
+            "num_agents": self.agents_spin.value(),
+            "asf": self.asf_spin.value(),
+            "duration_sec": self.dur_spin.value(),
+            "chaos": self.chaos_spin.value(),
+            "acceleration": self.sim_speed_spin.value(),
+            "fps": self.fps_spin.value(),
+            "respawn_enabled": self.respawn_check.isChecked()
+        }
 
     def update_agent_status(
         self,
@@ -235,14 +244,45 @@ class SimulationPanel(QWidget):
         """Clear agent status display."""
         self.status_label.setText(self.tr("No active agent"))
 
-    def set_agent_active(self, active: bool):
-        """
-        Update button states based on agent active status.
+    def update_ui_for_state(self, state: SimState):
+        """Update button enabled states and labels based on FSM state."""
+        log.debug(f"[UI] Updating SimulationPanel for state: {state}")
+        
+        if state == SimState.IDLE:
+            self.start_pause_btn.setEnabled(True)
+            self.start_pause_btn.setText(self.tr("Start"))
+            self.start_pause_btn.setChecked(False)
+            self.stop_btn.setEnabled(True)
+            self.step_btn.setEnabled(False)
+            self.apply_btn.setEnabled(True)
+            self.status_label.setText(self.tr("Ready (Idle)"))
+            
+        elif state == SimState.WARMUP:
+            self.start_pause_btn.setEnabled(False)
+            self.start_pause_btn.setText(self.tr("Starting..."))
+            self.stop_btn.setEnabled(True)
+            self.step_btn.setEnabled(False)
+            self.apply_btn.setEnabled(False)
+            self.status_label.setText(self.tr("Wait: Core Warmup..."))
+            
+        elif state == SimState.RUNNING:
+            self.start_pause_btn.setEnabled(True)
+            self.start_pause_btn.setText(self.tr("Pause"))
+            self.start_pause_btn.setChecked(True)
+            self.stop_btn.setEnabled(True)
+            self.step_btn.setEnabled(False)
+            self.apply_btn.setEnabled(True)
+            self.status_label.setText(self.tr("Simulation Running"))
+            
+        elif state == SimState.PAUSED:
+            self.start_pause_btn.setEnabled(True)
+            self.start_pause_btn.setText(self.tr("Resume"))
+            self.start_pause_btn.setChecked(False)
+            self.stop_btn.setEnabled(True)
+            self.step_btn.setEnabled(True)
+            self.apply_btn.setEnabled(True)
+            self.status_label.setText(self.tr("Simulation Paused"))
 
-        Args:
-            active: True if agent is active, False otherwise
-        """
-        self.start_btn.setEnabled(not active)
-        self.stop_btn.setEnabled(active)
-        self.restart_btn.setEnabled(active)
-        self.delete_btn.setEnabled(active)
+    def set_agent_active(self, active: bool):
+        """Legacy method (kept for compatibility)"""
+        pass

@@ -146,10 +146,10 @@ class OSMQueries:
     # ==================== MVT Generation ====================
     
     GENERATE_MVT_TILE = """
-        SELECT ST_AsMVT(tile, 'ways', 4096, 'geom')
+        SELECT ST_AsMVT(tile, 'ways', 4096, 'geom', 'id')
         FROM (
             SELECT
-                osm_id,
+                id,
                 highway,
                 name,
                 tags->>'oneway' AS oneway,

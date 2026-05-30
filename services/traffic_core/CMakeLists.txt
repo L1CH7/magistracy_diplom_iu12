@@ -10,7 +10,7 @@ include(cmake/options.cmake)
 
 # Глобальные оптимизации для HFT Hot Path (согласно стандарту кодирования)
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
-    add_compile_options(-O3 -march=native -mavx2 -flto)
+    add_compile_options(-O2 -march=native -mavx2 -flto)
     add_link_options(-flto)
     add_compile_definitions(QUILL_ACTIVE_LOG_LEVEL=${QUILL_COMPILE_ACTIVE_LOG_LEVEL})
 else()
@@ -21,12 +21,22 @@ endif()
 add_subdirectory(3rd_party/quill)
 add_subdirectory(3rd_party/concurrentqueue)
 
+# ZeroMQ (Microservice Communication)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ZMQ REQUIRED IMPORTED_TARGET libzmq)
+# Create a common alias for easy linkage
+if(TARGET PkgConfig::ZMQ AND NOT TARGET ZMQ::ZMQ)
+    add_library(ZMQ::ZMQ ALIAS PkgConfig::ZMQ)
+endif()
+
 # ============================
 # MODULES (Архитектура системы)
 # ============================
 add_subdirectory(src/modules/router)
 add_subdirectory(src/modules/data_provider)
 add_subdirectory(src/modules/decision_engine)
+add_subdirectory(src/modules/core)
+add_subdirectory(src/modules/daemon)
 
 # ============================
 # EXECUTABLE: TRAFFIC CORE
@@ -44,6 +54,8 @@ target_link_libraries(traffic_core PRIVATE
     traffic_router
     traffic_data_provider
     traffic_decision_engine
+    traffic_core_core
+    ZMQ::ZMQ
 )
 
 # ============================
@@ -61,14 +73,19 @@ if(TRAFFIC_BUILD_TESTS)
     add_executable(test_functional tests/test_functional.cpp)
     target_include_directories(test_functional PRIVATE 
         src/modules/router/include 
+        src/modules/data_provider/include
+        src/modules/decision_engine/include
         src/common
         src
         3rd_party/doctest
     )
     target_link_libraries(test_functional PRIVATE 
         traffic_router
+        traffic_data_provider
+        traffic_decision_engine
         quill::quill
         concurrentqueue
+        ZMQ::ZMQ
     )
 
     add_executable(throughput_benchmark tests/throughput_benchmark.cpp)
@@ -82,6 +99,27 @@ if(TRAFFIC_BUILD_TESTS)
         traffic_router
         quill::quill
         concurrentqueue
+        ZMQ::ZMQ
+    )
+
+    add_executable(simulation_benchmark tests/simulation_benchmark.cpp)
+    target_include_directories(simulation_benchmark PRIVATE 
+        src/modules/router/include 
+        src/modules/data_provider/include
+        src/modules/decision_engine/include
+        src/modules/core/include
+        src/common
+        src
+        3rd_party/doctest
+    )
+    target_link_libraries(simulation_benchmark PRIVATE 
+        traffic_router
+        traffic_data_provider
+        traffic_decision_engine
+        traffic_core_core
+        quill::quill
+        concurrentqueue
+        ZMQ::ZMQ
     )
 
     add_executable(pq_benchmark tests/pq_benchmark.cpp)

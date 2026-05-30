@@ -103,84 +103,82 @@ def _clip_bbox_to_default(
     }
 
 
-@router.post("/download")
-@router.post("/download/")
-async def download_tile(
-    lon: float = None, 
-    lat: float = None, 
-    bbox_size: float = 0.2,
-    bbox: str = None # Format: "west,south,east,north"
-):
-    """
-    Start tile/area download in background.
-    
-    If no arguments provided, downloads default_bbox.
-    If arguments provided, clips to default_bbox.
-    
-    Args:
-        lon: Tile longitude (SW corner) - Optional
-        lat: Tile latitude (SW corner) - Optional
-        bbox_size: Size in degrees - Optional
-        bbox: "west,south,east,north" string - Optional
-    """
-    # Determine requested bbox
-    if bbox:
-        try:
-            west, south, east, north = map(float, bbox.split(','))
-        except ValueError:
-             raise HTTPException(status_code=400, detail="Invalid bbox format. Use 'west,south,east,north'")
-    elif lon is not None and lat is not None:
-        west, south = lon, lat
-        east, north = lon + bbox_size, lat + bbox_size
-    else:
-        # No args = use full default_bbox
-        # We can pass very large bbox that covers everything, clip will handle it.
-        west, south, east, north = -180, -90, 180, 90 
-    
-    # Clip to default_bbox
-    clip_result = _clip_bbox_to_default(west, south, east, north)
-    clipped_bbox = clip_result["clipped_bbox"]
-    was_clipped = clip_result["was_clipped"]
-    
-    # Start download in background
-    # Note: We don't await the whole download here, just the start
-    # But download_area is async and runs potentially long.
-    # We should wrap it in create_task.
-    asyncio.create_task(
-        router.tile_handler.download_area(clipped_bbox, overwrite=True)
-    )
-    
-    result = {
-        "status": "started",
-        "bbox": {
-            "west": clipped_bbox[0],
-            "south": clipped_bbox[1],
-            "east": clipped_bbox[2],
-            "north": clipped_bbox[3]
-        },
-        "message": "Download started in background"
-    }
-    
-    if was_clipped:
-        result["original_bbox"] = {
-            "west": west,
-            "south": south,
-            "east": east,
-            "north": north
-        }
-        result["clip_info"] = (
-            f"Bbox clipped to {clip_result['default_bbox_name']} "
-            f"{clip_result['default_coords']}"
-        )
-    
-    return result
-
-
-@router.post("/download/stop")
-async def stop_downloads():
-    """Stop all active downloads."""
-    await router.tile_handler.cancel_all_downloads()
-    return {"status": "stopped", "message": "All download tasks cancelled"}
+# @router.post("/download")
+# @router.post("/download/")
+# async def download_tile(
+#     lon: float = None, 
+#     lat: float = None, 
+#     bbox_size: float = 0.2,
+#     bbox: str = None # Format: "west,south,east,north"
+# ):
+#     """
+#     Start tile/area download in background.
+#     
+#     If no arguments provided, downloads default_bbox.
+#     If arguments provided, clips to default_bbox.
+#     
+#     Args:
+#         lon: Tile longitude (SW corner) - Optional
+#         lat: Tile latitude (SW corner) - Optional
+#         bbox_size: Size in degrees - Optional
+#         bbox: "west,south,east,north" string - Optional
+#     """
+#     # Determine requested bbox
+#     if bbox:
+#         try:
+#             west, south, east, north = map(float, bbox.split(','))
+#         except ValueError:
+#              raise HTTPException(status_code=400, detail="Invalid bbox format. Use 'west,south,east,north'")
+#     elif lon is not None and lat is not None:
+#         west, south = lon, lat
+#         east, north = lon + bbox_size, lat + bbox_size
+#     else:
+#         # No args = use full default_bbox
+#         # We can pass very large bbox that covers everything, clip will handle it.
+#         west, south, east, north = -180, -90, 180, 90 
+#     
+#     # Clip to default_bbox
+#     clip_result = _clip_bbox_to_default(west, south, east, north)
+#     clipped_bbox = clip_result["clipped_bbox"]
+#     was_clipped = clip_result["was_clipped"]
+#     
+#     # Start download in background
+#     # DISABLED: preventing data corruption as per user request
+#     # asyncio.create_task(
+#     #     router.tile_handler.download_area(clipped_bbox, overwrite=True)
+#     # )
+#     
+#     result = {
+#         "status": "disabled",
+#         "bbox": {
+#             "west": clipped_bbox[0],
+#             "south": clipped_bbox[1],
+#             "east": clipped_bbox[2],
+#             "north": clipped_bbox[3]
+#         },
+#         "message": "Download started in background"
+#     }
+#     
+#     if was_clipped:
+#         result["original_bbox"] = {
+#             "west": west,
+#             "south": south,
+#             "east": east,
+#             "north": north
+#         }
+#         result["clip_info"] = (
+#             f"Bbox clipped to {clip_result['default_bbox_name']} "
+#             f"{clip_result['default_coords']}"
+#         )
+#     
+#     return result
+# 
+# 
+# @router.post("/download/stop")
+# async def stop_downloads():
+#     """Stop all active downloads."""
+#     await router.tile_handler.cancel_all_downloads()
+#     return {"status": "stopped", "message": "All download tasks cancelled"}
 
 
 @router.get("/{z}/{x}/{y}.mvt")
@@ -248,11 +246,11 @@ async def get_mvt_tile(z: int, x: int, y: int):
             if is_outside_bbox:
                  logger.debug(f"Tile [{z}/{x}/{y}] missing and outside bbox. Skipping download.")
             else:
-                logger.info(f"Tile [{z}/{x}/{y}] missing/empty (size={len(mvt_data) if mvt_data else 0}). Triggering download.")
+                logger.info(f"Tile [{z}/{x}/{y}] missing/empty (size={len(mvt_data) if mvt_data else 0}). Download is DISABLED.")
 
-                asyncio.create_task(
-                    router.tile_handler.download_area(target_bbox, overwrite=False)
-                )
+                # asyncio.create_task(
+                #     router.tile_handler.download_area(target_bbox, overwrite=False)
+                # )
             
             # Using 204 No Content for "loading" causes issues in QT
             # Switching to 200 OK with empty body + No-Cache

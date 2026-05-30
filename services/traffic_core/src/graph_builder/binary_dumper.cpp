@@ -74,10 +74,11 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
 
         // ST_AsBinary(geom) для получения WKB
         auto node_res = work.exec(
-            "SELECT id, length_m, speed_kmh, t_free, lanes, highway, oneway, "
-            "ST_XMin(geom), ST_YMin(geom), ST_XMax(geom), ST_YMax(geom), "
-            "ST_AsBinary(geom) "
-            "FROM graphs.eb_nodes"
+            "SELECT en.id, en.length_m, en.speed_kmh, en.t_free, en.lanes, en.highway, en.oneway, "
+            "ST_XMin(en.geom), ST_YMin(en.geom), ST_XMax(en.geom), ST_YMax(en.geom), "
+            "ST_AsBinary(en.geom), COALESCE(e.osm_way_id, 0) "
+            "FROM graphs.eb_nodes en "
+            "LEFT JOIN graphs.edges e ON en.orig_edge_id = e.id"
         );
 
         ram_nodes_.reserve(node_res.size());
@@ -95,31 +96,95 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             std::string hw = row[5].is_null() ? "" : row[5].template as<std::string>();
             const auto& config = GetRoadConfig(hw);
             
-            n.highway_class = 3; 
-            if (hw == "motorway" || hw == "trunk" || hw == "motorway_link") n.highway_class = 0;
-            else if (hw == "primary" || hw == "secondary" || hw == "primary_link") n.highway_class = 1;
-            else if (hw == "tertiary" || hw == "tertiary_link") n.highway_class = 2;
+            n.highway_class = 5; // По умолчанию unclassified (5)
+            if (hw == "motorway" || hw == "motorway_link") n.highway_class = 0;
+            else if (hw == "trunk" || hw == "trunk_link") n.highway_class = 1;
+            else if (hw == "primary" || hw == "primary_link") n.highway_class = 2;
+            else if (hw == "secondary" || hw == "secondary_link") n.highway_class = 3;
+            else if (hw == "tertiary" || hw == "tertiary_link") n.highway_class = 4;
+            else if (hw == "residential" || hw == "living_street") n.highway_class = 6;
+            else if (hw == "service" || hw == "pedestrian") n.highway_class = 7;
 
             n.oneway = row[6].is_null() ? 0 : static_cast<uint8_t>(row[6].template as<int>());
             
             n.min_x = row[7].template as<float>(); n.min_y = row[8].template as<float>();
             n.max_x = row[9].template as<float>(); n.max_y = row[10].template as<float>();
+            
+            n.osm_way_id = row[12].template as<int64_t>();
 
             if (n.min_x < global_min_x) global_min_x = n.min_x;
             if (n.min_y < global_min_y) global_min_y = n.min_y;
             if (n.max_x > global_max_x) global_max_x = n.max_x;
             if (n.max_y > global_max_y) global_max_y = n.max_y;
 
-            // Расчет K_magic (Fixed-Point Math)
+            // Расчет K_magic (Fixed-Point Math) и пространственных / временных вместимостей
             float v_free = EffectiveSpeedKmh(n.speed_kmh, config.default_speed_kmh);
-            float c_300 = static_cast<float>(config.default_lanes) * 150.0f;
-            if (c_300 <= 0.0f) c_300 = 150.0f;
+            if (v_free < 5.0f) v_free = 5.0f; // Защита от деления на 0
+
+            float speed_mps = v_free / 3.6f;
+            uint8_t lanes = n.lanes;
             
+            // Умный дефолт полос, если в OSM они не указаны
+            if (lanes == 0) {
+                switch (n.highway_class) {
+                    case 0: lanes = 4; break; // motorway
+                    case 1: lanes = 3; break; // trunk
+                    case 2: lanes = 2; break; // primary
+                    case 3: lanes = 2; break; // secondary
+                    default: lanes = 1; break; // tertiary, unclassified, residential, service
+                }
+            }
+
+            // Время реакции на основе констант из CMake
+            float t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_URBAN_SEC);
+            if (v_free >= static_cast<float>(TRAFFIC_SPEED_HIGHWAY_KMH)) {
+                t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_HIGHWAY_SEC);
+            } else if (v_free <= static_cast<float>(TRAFFIC_SPEED_DENSE_KMH)) {
+                t_safe = static_cast<float>(TRAFFIC_SAFE_TIME_DENSE_SEC) / 10.0f;
+            }
+
+            // Физический динамический слот одной машины (в метрах).
+            // Включает физическую длину автомобиля TRAFFIC_CAR_LENGTH_M (7м) + безопасную дистанцию до впереди идущего автомобиля.
+            // Безопасная дистанция рассчитывается на основе времени реакции водителя t_safe, зависящего от скорости v_free.
+            float dynamic_slot_m = static_cast<float>(TRAFFIC_CAR_LENGTH_M) + (speed_mps * t_safe);
+
+            // === РАСЧЕТ ТРЕХ ТИПОВ ВМЕСТИМОСТИ (ФИЗИЧЕСКОЕ ОБОСНОВАНИЕ) ===
+            
+            // А. Временная вместимость (c_temporal):
+            // Рассчитывает предельный входящий поток (пропускную способность сечения) за временной интервал TRAFFIC_SLOT_SEC (300 сек).
+            // Формула: (speed_mps / dynamic_slot_m) дает поток машин в секунду на полосу. Умножение на TRAFFIC_SLOT_SEC и lanes
+            // дает суммарное число машин, способных пересечь сечение за 5 минут.
+            // Используется исключительно роутером для вычисления BPR-штрафов и нормирования k_magic.
+            float c_temporal = (speed_mps / dynamic_slot_m) * static_cast<float>(TRAFFIC_SLOT_SEC) * lanes;
+            if (c_temporal <= 0.0f) c_temporal = 150.0f; // Предотвращение деления на ноль
+
+            // Б. Пространственная динамическая вместимость (c_spatial / visual_capacity):
+            // Определяет количество машин, способных одновременно находиться на всей длине ребра на свободной скорости v_free
+            // при соблюдении безопасных динамических дистанций (t_safe).
+            // Формула: (length_m / dynamic_slot_m) * lanes.
+            // Используется тепловой картой для визуализации реального уровня загрузки дороги (LOD/Heatmap).
+            float c_spatial = (n.length_m / dynamic_slot_m) * lanes;
+
+            // В. Пространственная статическая вместимость (c_jam / jam_capacity):
+            // Физический предел вместимости дороги при нулевой скорости (мертвый затор / бампер к бамперу).
+            // Расстояние между машинами сокращается до физического размера кузова TRAFFIC_CAR_LENGTH_M (7м).
+            // Формула: (length_m / TRAFFIC_CAR_LENGTH_M) * lanes.
+            // Используется физическим движком симуляции для расчета Spillback (обратного распространения очередей).
+            float c_jam = (n.length_m / static_cast<float>(TRAFFIC_CAR_LENGTH_M)) * lanes;
+
+            // === ЗАПЕКАНИЕ КОЭФФИЦИЕНТА BPR-ЗАДЕРЖКИ (k_magic) ===
+            // k_magic регулирует крутизну BPR-функции задержки: t_actual = t_free * (1 + alpha * (flow / capacity)^beta).
+            // Здесь в качестве alpha выступает динамический коэффициент ((v_free / 5.0f) - 1.0f), зависящий от свободной скорости ребра.
+            // В качестве capacity используется временная вместимость c_temporal, соответствующая 5-минутному слоту накопления потока.
+            // Множитель (1 << 20) переводит дробный коэффициент в целочисленный fixed-point формат для SIMD-оптимизации в роутере.
             float t_f = std::max(n.t_free_base, 1.0f);
-            double k_magic_base_f = (t_f * ((v_free / 5.0f) - 1.0f)) / (c_300 * c_300) * K_MAGIC_SHIFT;
+            double k_magic_base_f = (t_f * ((v_free / 5.0f) - 1.0f)) / (c_temporal * c_temporal) * static_cast<double>(1 << 20); // 2^20
             if (k_magic_base_f <= 0.0) k_magic_base_f = 10.0;
-            
             n.k_magic = static_cast<int32_t>(std::floor(k_magic_base_f));
+
+            // Записываем пространственные лимиты в структуру (с защитой от нуля)
+            n.visual_capacity = static_cast<uint16_t>(std::max<float>(1.0f, c_spatial));
+            n.jam_capacity = static_cast<uint16_t>(std::max<float>(1.0f, c_jam));
 
             if (!row[11].is_null()) {
                 auto wkb_field = row[11].template as<pqxx::binarystring>();
@@ -173,7 +238,7 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             if (v1_ms < 1.0f) v1_ms = 1.0f;
             if (v2_ms < 1.0f) v2_ms = 1.0f;
 
-            float R = (ram_nodes_[e.from_node].highway_class == 0) ? 50.0f : 15.0f;
+            float R = (ram_nodes_[e.from_node].highway_class <= 1) ? 50.0f : 15.0f;
             float v_turn_ms = std::min({v1_ms, v2_ms, std::sqrt(MU_FRICTION * G_ACCEL * R)});
             v_turn_ms = std::max(v_turn_ms, 1.3f); 
 
@@ -190,6 +255,13 @@ std::expected<void, std::string> BinaryDumper::LoadAndSortNodes() {
             // Для простоты используем кинематику, но накидываем за разворот
             float penalty = kinematic_penalty;
             if (std::abs(e.angle_deg) > 150.0f) penalty += 15.0f; // Разворот дороже
+
+            // Добавляем топологический штраф за класс целевой дороги (дворы, жилые улицы)
+            switch (ram_nodes_[e.to_node].highway_class) {
+                case 6: penalty += 10.0f; break; // residential / living_street (+10 сек)
+                case 7: penalty += 30.0f; break; // service / yard / pedestrian (+30 сек)
+                default: break;
+            }
 
             e.turn_penalty_sec = static_cast<uint16_t>(std::round(penalty));
             uint32_t total_weight = static_cast<uint32_t>(std::round(ram_nodes_[e.to_node].t_free_base + penalty));
@@ -317,17 +389,21 @@ std::expected<void, std::string> BinaryDumper::DumpExtendedAttributes() {
 
         // Дамп узлов
         for (const auto& n : ram_nodes_) {
-            uint8_t pad = 0;
-            out_attr.write(reinterpret_cast<const char*>(&n.speed_kmh), sizeof(n.speed_kmh));
-            out_attr.write(reinterpret_cast<const char*>(&n.lanes), sizeof(n.lanes));
-            out_attr.write(reinterpret_cast<const char*>(&n.highway_class), sizeof(n.highway_class));
-            out_attr.write(reinterpret_cast<const char*>(&n.oneway), sizeof(n.oneway));
-            out_attr.write(reinterpret_cast<const char*>(&pad), sizeof(pad));
-            out_attr.write(reinterpret_cast<const char*>(&n.length_m), sizeof(n.length_m));
-            out_attr.write(reinterpret_cast<const char*>(&n.t_free_base), sizeof(n.t_free_base));
-            out_attr.write(reinterpret_cast<const char*>(&n.k_magic), sizeof(n.k_magic));
-            out_attr.write(reinterpret_cast<const char*>(&n.min_x), sizeof(n.min_x));
-            out_attr.write(reinterpret_cast<const char*>(&n.min_y), sizeof(n.min_y));
+            traffic::ExtendedAttributes attr;
+            attr.speed_kmh = n.speed_kmh;
+            attr.lanes = n.lanes;
+            attr.highway_class = n.highway_class;
+            attr.oneway = n.oneway;
+            attr.pad = 0;
+            attr.length_m = n.length_m;
+            attr.t_free_base = n.t_free_base;
+            attr.k_magic = n.k_magic;
+            attr.min_x = n.min_x;
+            attr.min_y = n.min_y;
+            attr.visual_capacity = n.visual_capacity;
+            attr.jam_capacity = n.jam_capacity;
+
+            out_attr.write(reinterpret_cast<const char*>(&attr), sizeof(attr));
         }
 
         // Дамп маневров
@@ -338,6 +414,15 @@ std::expected<void, std::string> BinaryDumper::DumpExtendedAttributes() {
             out_attr.write(reinterpret_cast<const char*>(&e.static_weight), sizeof(e.static_weight));
         }
         out_attr.close();
+
+        // Дамп OSM ID
+        DrawProgressBar(25, "Writing osm_ids.bin...");
+        std::ofstream out_osm("/app/data/osm_ids.bin", std::ios::binary);
+        if (!out_osm) return std::unexpected("Cannot write /app/data/osm_ids.bin");
+        for (const auto& n : ram_nodes_) {
+            out_osm.write(reinterpret_cast<const char*>(&n.osm_way_id), sizeof(n.osm_way_id));
+        }
+        out_osm.close();
 
         DrawProgressBar(50, "Writing flat geometry (geometry_flat.bin)...");
         std::ofstream out_geom("/app/data/geometry_flat.bin", std::ios::binary);

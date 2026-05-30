@@ -1,43 +1,75 @@
-.PHONY: build build-builder run-builder
+.PHONY: build build-builder run-builder test-integration test-functional
+
+# Параметры хранения данных
+DATA_VOLUME ?= traffic_data
+# Раскомментируйте строку ниже, чтобы переключиться на локальную папку
+# DATA_VOLUME := $(shell pwd)/data
+
+# Базовый образ для сборки и тестов
+BUILDER_IMAGE = traffic_core_builder
 
 build-builder:
-	docker build --target builder -t traffic_core_builder -f Dockerfile ../..
+	@echo ">>> Building builder image (using docker cache)..."
+	@DOCKER_BUILDKIT=1 docker build --target builder -t $(BUILDER_IMAGE) -f Dockerfile ../..
 
 run-builder: build-builder
 	docker run --rm --init --network host \
-		-v $(shell pwd)/data:/app/data \
+		-v $(DATA_VOLUME):/app/data \
 		-e APP__DB__HOST=localhost \
 		-e APP__DB__PORT=5432 \
 		-e APP__DB__USER=postgres \
 		-e APP__DB__PASSWORD=postgres \
 		-e APP__DB__NAME=nav_mas \
-		traffic_core_builder /app/services/traffic_core/build/src/graph_builder/traffic_graph_builder $(ARGS)
+		$(BUILDER_IMAGE) /app/services/traffic_core/build/src/graph_builder/traffic_graph_builder $(ARGS)
 
 build-release:
-	docker build -t traffic_core -f Dockerfile ../..
+	@echo ">>> Building release image..."
+	DOCKER_BUILDKIT=1 docker build -t traffic_core -f Dockerfile ../..
 
 run-router: build-release
 	docker run --rm --init --network host \
-		-v $(shell pwd)/data:/app/data \
+		-v $(DATA_VOLUME):/app/data \
 		traffic_core /app/data
 
-test-router: run-router
+# --- Тестирование ---
 
-throughput-bench: build-builder
+test-functional:
+	@echo ">>> Running native C++ functional tests..."
 	docker run --rm --init --network host \
-		-v $(shell pwd)/data:/app/data \
-		traffic_core_builder /app/services/traffic_core/build/throughput_benchmark --data /app/data
+		-v $(DATA_VOLUME):/app/data \
+		$(BUILDER_IMAGE) /app/services/traffic_core/build/test_functional
 
-test-dynamic: build-builder
+test-integration:
+	@echo ">>> Running Python Integration Tests (API & Protocol)..."
+	pytest tests/test_integration.py -s $(ARGS)
+
+# --- Бенчмарки ---
+
+THREADS ?= 12
+AFFINITY ?= 1
+AVOID_OS ?= 1
+
+throughput-bench:
+	@mkdir -p $(HOME)/.ccache_docker
 	docker run --rm --init --network host \
-		-v $(shell pwd)/data:/app/data \
-		traffic_core_builder /app/services/traffic_core/build/test_functional
+		-v $(DATA_VOLUME):/app/data \
+		-v $(HOME)/.ccache_docker:/root/.cache/cache \
+		$(BUILDER_IMAGE) /app/services/traffic_core/build/throughput_benchmark \
+			--data /app/data \
+			--threads $(THREADS) \
+			--affinity $(AFFINITY) \
+			--avoid-os $(AVOID_OS)
 
 pq-bench: build-builder
 	docker run --rm --init --network host \
-		traffic_core_builder taskset -c 0 /app/services/traffic_core/build/pq_benchmark
+		$(BUILDER_IMAGE) taskset -c 0 /app/services/traffic_core/build/pq_benchmark
 
 pq-comparison: build-builder
 	docker run --rm --init --network host \
-		-v $(shell pwd)/data:/app/data \
-		traffic_core_builder taskset -c 0 /app/services/traffic_core/build/router_pq_comparison --data /app/data
+		-v $(DATA_VOLUME):/app/data \
+		$(BUILDER_IMAGE) taskset -c 0 /app/services/traffic_core/build/router_pq_comparison --data /app/data
+
+simulation-benchmark: build-builder
+	docker run --rm --init --network host \
+		-v $(DATA_VOLUME):/app/data \
+		$(BUILDER_IMAGE) /app/services/traffic_core/build/simulation_benchmark $(ARGS)

@@ -11,7 +11,10 @@ RUN apt-get update && apt-get install -y \
     libnuma-dev \
     libpqxx-dev \
     libboost-dev \
+    libzmq3-dev \
+    cppzmq-dev \
     postgresql-server-dev-all \
+    ccache \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,7 +23,8 @@ COPY services/traffic_core /app/services/traffic_core
 WORKDIR /app/services/traffic_core/build
 
 # Компилируем оба бинарника: traffic_core и traffic_graph_builder
-RUN cmake -G Ninja -DCMAKE_BUILD_TYPE=Release .. && \
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER_LAUNCHER=ccache .. && \
     cmake --build .
 
 # --- СТЕЙДЖ ЗАПУСКА (RUNTIME) ---
@@ -38,16 +42,14 @@ RUN apt-get update && apt-get install -y \
     libnuma1 \
     libpq5 \
     libpqxx-dev \
+    libzmq5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Копируем скомпилированные бинарники из стейджа сборки (builder)
-COPY --from=builder /app/services/traffic_core/build/traffic_core .
+COPY --from=builder /app/services/traffic_core/build/src/modules/daemon/traffic_daemon .
 COPY --from=builder /app/services/traffic_core/build/src/graph_builder/traffic_graph_builder .
 
-# Важно: При использовании distroless все пути к конфигам и дампам 
-# должны быть либо запечены в код, либо передаваться через ENV/Volume
-# так как зайти внутрь "посмотреть" будет невозможно.
-
-ENTRYPOINT ["./traffic_core"]
+ENTRYPOINT ["./traffic_daemon"]
+CMD ["/app/data"]

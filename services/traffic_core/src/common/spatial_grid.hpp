@@ -9,9 +9,11 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <immintrin.h>
 #include <xmmintrin.h>
 #include <pmmintrin.h>
+
 
 namespace traffic::common {
 
@@ -34,8 +36,7 @@ public:
             cell_size_ = *reinterpret_cast<const float*>(data + 16);
             cols_ = *reinterpret_cast<const uint32_t*>(data + 20);
             rows_ = *reinterpret_cast<const uint32_t*>(data + 24);
-            
-            // uint32_t total_segments = *reinterpret_cast<const uint32_t*>(data + 28);
+            total_segments_ = *reinterpret_cast<const uint32_t*>(data + 28);
 
             // 2. Офсеты
             size_t header_size = 32;
@@ -50,6 +51,45 @@ public:
 
             return true;
         } catch (...) { return false; }
+    }
+
+    /**
+     * @brief Построить кэш центроидов рёбер из SoA-данных (однократно при старте).
+     *
+     * Итерирует все SoA-блоки; для каждого уникального edge_id сохраняет
+     * центроид (lon, lat) = среднее между началом и концом первого сегмента.
+     * Сложность O(total_segments). Потокобезопасно для чтения.
+     */
+    [[nodiscard]] std::unordered_map<traffic::EdgeID, std::pair<float, float>>
+    BuildEdgeCentroidCache() const noexcept
+    {
+        std::unordered_map<traffic::EdgeID, std::pair<float, float>> result;
+        if ( !soa_data_ || total_segments_ == 0 ) return result;
+
+        result.reserve( total_segments_ / 2 );
+
+        uint32_t num_blocks = ( total_segments_ + 7u ) / 8u;
+        for ( uint32_t blk = 0; blk < num_blocks; ++blk )
+        {
+            const float*    block = soa_data_ + blk * 56;
+            const float*    ax    = block;
+            const float*    ay    = block + 8;
+            const float*    bx    = block + 16;
+            const float*    by    = block + 24;
+            const uint32_t* ids   = reinterpret_cast<const uint32_t*>( block + 32 );
+
+            uint32_t n = std::min<uint32_t>( 8u, total_segments_ - blk * 8u );
+            for ( uint32_t j = 0; j < n; ++j )
+            {
+                traffic::EdgeID eid = ids[ j ];
+                if ( eid == 0xFFFFFFFFu ) continue;
+                // try_emplace пропустит если уже есть (первое вхождение — достаточно)
+                result.try_emplace( eid,
+                    ( ax[ j ] + bx[ j ] ) * 0.5f,
+                    ( ay[ j ] + by[ j ] ) * 0.5f );
+            }
+        }
+        return result;
     }
 
     [[nodiscard]] traffic::RoutePoint MapToEdge(float px, float py) const noexcept {
@@ -192,9 +232,10 @@ private:
 
     std::unique_ptr<MmapRegion> region_;
     float min_x_ = 0, min_y_ = 0, max_x_ = 0, max_y_ = 0, cell_size_ = 0;
-    uint32_t cols_ = 0, rows_ = 0;
+    uint32_t cols_ = 0, rows_ = 0, total_segments_ = 0;
     const uint32_t* cell_offsets_ = nullptr;
     const float* soa_data_ = nullptr;
+
 };
 
 } // namespace traffic::common

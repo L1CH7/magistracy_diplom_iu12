@@ -105,6 +105,8 @@ function transformConfig(yaml) {
     animation: yaml.animation,
     tiles: yaml.tiles,
     lod: yaml.lod.layers,
+    visualizationModes: yaml.lod.visualization_modes || ['highway_type'],
+    trafficHeatmap: yaml.traffic_heatmap || {},
     apiBaseUrl: yaml.apiBaseUrl || 'http://localhost:8000' // Fallback
   };
 

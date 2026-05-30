@@ -567,6 +567,18 @@ export class MapAPI {
     console.log(`[MVT] Tiles refreshed with cache-buster: v=${cacheBuster}`);
   }
 
+  clearHeatmap() {
+    console.log('[Heatmap] clearHeatmap called');
+    if (this.map && this.map.isStyleLoaded()) {
+      try {
+        this.map.removeFeatureState({ source: 'graph-vector', sourceLayer: 'ways' });
+        console.log('[Heatmap] Cleared feature states.');
+      } catch (e) {
+        console.error('[Heatmap] Error clearing feature states:', e);
+      }
+    }
+  }
+
   // Deprecated/stub methods for compatibility
   setPickMode(mode) {
     console.log('setPickMode called with:', mode, '(deprecated; use context menu)');

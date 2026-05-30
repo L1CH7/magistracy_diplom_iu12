@@ -3,11 +3,12 @@
  */
 
 import { loadMapConfig, getMapConfig } from './map-config-loader.js';
-import { createMapStyle } from './map-style.js';  
+import { getBaseStyle, addOsmRaster, addRoadLabels } from './map-style.js';  
 import { PointsManager } from './points-manager.js';
 import { AgentAnimator } from './agent-animator.js';
 import { MapAPI } from './map-api.js';
 import { connectDataProcessorWS } from './data-ws-client.js';
+import { TrafficHeatmap } from './traffic-heatmap.js';
 
 let mapInitialized = false;
 let map = null;
@@ -19,6 +20,32 @@ let mapLoaded = false;
 // Track last mouse position for Ctrl shortcuts
 let lastMousePosition = null;
 let lastContextMenuPos = null;
+
+// Helper function to check URL availability (e.g. OSM server)
+async function checkUrlAvailability(url, timeout = 3000) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const timer = setTimeout(() => {
+      img.src = "";
+      resolve(false);
+    }, timeout);
+
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+
+    // Use a small 1x1 transparent pixel or just the URL if it's an image service
+    // For OSM tiles, we can try to load a sample tile or just the base URL
+    const testUrl = url.replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
+    img.src = testUrl;
+  });
+}
 
 // Helper function to log to Python via QWebChannel
 function logToPython(message) {
@@ -37,31 +64,27 @@ export async function initializeMap() {
   // Load config from YAML first
   await loadMapConfig();
   const MAP_CONFIG = getMapConfig();
-
   const tileUrl = window.TILE_URL || MAP_CONFIG.tiles.defaultUrl;
 
-  // Create map with both raster and vector tiles
   map = new maplibregl.Map({
     container: 'map',
-    style: createMapStyle(tileUrl),
+    style: getBaseStyle(),
     center: MAP_CONFIG.initial.center,
     zoom: MAP_CONFIG.initial.zoom,
     hash: false,
     attributionControl: true,
-    antialias: true,
-    showTileBoundaries: true,  // DEBUG: Show tile boundaries to debug LOD issues
+    antialias: true
   });
 
   // Initialize managers
   pointsManager = new PointsManager(map);
   agentAnimator = new AgentAnimator(map);
+  const trafficHeatmap = new TrafficHeatmap(map);
   mapAPI = new MapAPI(map, pointsManager, agentAnimator);
 
   // Expose globally
   window.map = map;
   window.app = mapAPI;
-
-  // Mark as loaded immediately
   mapLoaded = true;
   pointsManager.setMapLoaded(true);
   logToPython('[MAP] Initialized, marking as loaded');
@@ -90,38 +113,28 @@ export async function initializeMap() {
   }
   requestAnimationFrame(animate);
 
-  // Map load event for additional initialization
-  map.on('load', () => {
-    logToPython('[MAP] Tiles loaded successfully');
+  // Map load event for final initialization
+  map.on('load', async () => {
+    logToPython('[MAP] Base vector layers loaded');
     
+    // Check OSM availability and inject if available
+    if (tileUrl) {
+      const isAvailable = await checkUrlAvailability(tileUrl);
+      if (isAvailable) {
+        logToPython('[MAP] OSM server is up. Adding raster and labels...');
+        addOsmRaster(map, tileUrl, MAP_CONFIG.tiles.tileSize);
+        if (MAP_CONFIG.style && MAP_CONFIG.style.glyphs) {
+          addRoadLabels(map, MAP_CONFIG.style.glyphs);
+        }
+      } else {
+        logToPython('[MAP] OSM server unreachable. Proceeding in sterile mode.');
+      }
+    }
+
     // Connect to Data Processor WebSocket AFTER map is fully ready
     logToPython('[map-main.js] Connecting to Data Processor WebSocket...');
     connectDataProcessorWS();
   });
-
-  // Zoom events (using global channel)
-  // CHANGED: Using 'zoomend' instead of 'zoom' to reduce QWebChannel calls
-  // (zoomend fires ONCE after zoom completes, not every frame)
-  map.on('zoomend', () => {
-    const zoom = Math.floor(map.getZoom());
-    const fromUI = !mapAPI.shouldSkipZoomUpdate();
-
-    if (fromUI && window.globalChannel && 
-        window.globalChannel.objects.zoom_bridge) {
-      try {
-        window.globalChannel.objects.zoom_bridge.notify_zoom(zoom);
-      } catch (e) {
-        logToPython(`[MAP] zoom_bridge error: ${e.message}, zoom=${zoom}`);
-      }
-    }
-
-    if (window.onZoomChanged) {
-      window.onZoomChanged(zoom, fromUI);
-    }
-  });
-
-  // NOTE: Right-click context menu listener moved to setupEventListeners()
-  // to avoid duplicate event registration
 }
 
 function setupEventListeners() {
@@ -271,31 +284,40 @@ function setupEventListeners() {
   });
 }
 
-// Initialize QWebChannel FIRST, then load config and create map
-window.globalChannel = null;
-
-if (window.qt && window.qt.webChannelTransport) {
-  new QWebChannel(window.qt.webChannelTransport, async function(channel) {
-    window.globalChannel = channel;
-    logToPython('[map-main.js] QWebChannel initialized globally');
+// Entry point: Initialize MapLibre when DOM is ready AND QWebChannel is established
+document.addEventListener("DOMContentLoaded", () => {
+    console.log("[map-main.js] DOM ready, connecting to QWebChannel...");
     
-    // Setup zoom bridge
-    if (channel.objects.zoom_bridge) {
-      logToPython('[map-main.js] Zoom bridge registered');
-    }
-    
-    // Initialize debug overlay if enabled in config
-    if (channel.objects.config_bridge && typeof window.initDebugOverlay === 'function') {
-      const enabled = await channel.objects.config_bridge.isDebugEnabled();
-      logToPython(`[map-main.js] Debug mode: ${enabled}`);
-      await window.initDebugOverlay(enabled);
-    }
+    if (typeof qt !== 'undefined' && qt.webChannelTransport) {
+        new QWebChannel(qt.webChannelTransport, async function (channel) {
+            window.globalChannel = channel;
+            
+            // Bridge registration
+            window.points_bridge = channel.objects.points_bridge;
+            
+            // Setup Points Callback (Architect's Requirement)
+            window.pointsChangedCallback = function() {
+                if (window.points_bridge) {
+                    console.log("[JS] Notifying Python about point changes");
+                    window.points_bridge.notify_points_changed();
+                }
+            };
 
-    // Initialize map after QWebChannel is ready (config bridge available)
-    if (!mapInitialized) {
-      await initializeMap();
+            // Initialize debug overlay if bridge exists
+            if (channel.objects.config_bridge && typeof window.initDebugOverlay === 'function') {
+                const enabled = await channel.objects.config_bridge.isDebugEnabled();
+                await window.initDebugOverlay(enabled);
+            }
+            
+            // Start the main app logic ONLY after channel is ready
+            if (!mapInitialized) {
+                await initializeMap();
+            }
+        });
+    } else {
+        console.warn("[map-main.js] QWebChannel not found, fallback to standalone");
+        if (!mapInitialized) {
+            initializeMap();
+        }
     }
-  });
-} else {
-  console.error('[map-main.js] Qt WebChannel transport not available!');
-}
+});

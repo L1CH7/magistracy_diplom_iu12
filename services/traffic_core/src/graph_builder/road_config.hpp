@@ -9,8 +9,17 @@ namespace traffic::graph_builder
 {
 
 // Физические константы для кинематических расчетов
+// Значения задаются через cmake/options.cmake и передаются как -D определения.
+#ifndef TRAFFIC_CAR_LENGTH_M
+#  define TRAFFIC_CAR_LENGTH_M 7
+#endif
+#ifndef TRAFFIC_DEFAULT_LANES
+#  define TRAFFIC_DEFAULT_LANES 1
+#endif
+
+constexpr float CAR_LENGTH_M        = static_cast<float>(TRAFFIC_CAR_LENGTH_M); // бампер-до-бампера
+constexpr int   DEFAULT_LANES       = TRAFFIC_DEFAULT_LANES;
 constexpr float SPEED_TOLERANCE_KMH = 19.0f; // Нештрафуемый порог
-constexpr float CAR_LENGTH_M = 7.0f;         // 5m машина + 2m дистанция
 constexpr int32_t K_MAGIC_SHIFT = 1 << 20;   // 2^20 для Fixed-Point math
 
 // Кинематика манёвров

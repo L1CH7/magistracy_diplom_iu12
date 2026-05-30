@@ -18,12 +18,7 @@ routes:
     service: "data_processor"
     internal_prefix: "/api/v1/debug"
 
-  # Router: Route Calculation
-  - path: "/routing"
-    service: "router" # Maps to settings.services.router
-    internal_prefix: "/api/v1/routing"
-
-  # Router: Graph Management
-  - path: "/graph"
-    service: "router"
-    internal_prefix: "/api/v1/graph"
+  # Data Processor: Debug/Raw Info
+  - path: "/debug"
+    service: "data_processor"
+    internal_prefix: "/api/v1/debug"

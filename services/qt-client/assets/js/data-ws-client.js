@@ -116,6 +116,10 @@ function handleMessage(message) {
       // Server keepalive ping
       break;
 
+    case 'pong':
+      // Server response to our ping
+      break;
+
     default:
       console.warn(`[DataWS] Unknown message type: ${type}`);
   }
