@@ -1,4 +1,4 @@
-.PHONY: build build-builder run-builder test-integration test-functional algorithms-comparison
+.PHONY: build build-builder run-builder test-integration test-functional algorithms-comparison multithreading-comparison
 
 # Параметры хранения данных
 DATA_VOLUME ?= traffic_data
@@ -78,6 +78,16 @@ algorithms-comparison: build-builder
 		$(BUILDER_IMAGE) taskset -c 0 /app/services/traffic_core/build/router_algorithms_comparison \
 			--data /app/data \
 			--out /app/benchmarks/traffic-core/stats/run_results.csv
+
+multithreading-comparison: build-builder
+	@mkdir -p $(shell realpath ../..)/benchmarks/traffic-core/stats
+	docker run --rm --init --network host \
+		--user $(shell id -u):$(shell id -g) \
+		-v $(DATA_VOLUME):/app/data \
+		-v $(shell realpath ../..)/benchmarks:/app/benchmarks \
+		$(BUILDER_IMAGE) /app/services/traffic_core/build/router_multithreading_comparison \
+			--data /app/data \
+			--out /app/benchmarks/traffic-core/stats/multithreading_results.csv
 
 
 simulation-benchmark: build-builder
