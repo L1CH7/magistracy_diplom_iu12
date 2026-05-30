@@ -44,7 +44,7 @@ MARKERS = {
     '4-ary': 's',
     '8-ary': '^',
     '16-ary': 'D',
-    'sbbh': 'x',
+    'sbbh': 'X',
     'bucket': '*',
     'radix': 'p'
 }
@@ -230,10 +230,6 @@ def plot_queue_overhead_trend(df, x_values, save_path):
         y='QueueOverheadPct',
         hue='Queue',
         palette=COLORS,
-        style='Queue',
-        markers=MARKERS,
-        dashes=LINE_STYLES,
-        markersize=8,
         err_style="band",   # Renders the variance band
         errorbar=("ci", 95), # 95% confidence interval shows the variance nicely
         linewidth=2.0
@@ -283,6 +279,119 @@ def plot_hardware_cycles_comparison(df, save_path):
     plt.savefig(save_path, bbox_inches='tight', dpi=200)
     plt.close()
     print(f"  [Saved] Hardware CPU cycles bar plot saved to: {save_path}")
+
+def plot_multithreading_scalability(csv_path, save_path):
+    """
+    Plots absolute RPS throughput and relative Speedup vs Thread Count.
+    Includes SMT vs No-SMT strict cores comparison and the Ideal Linear reference limit.
+    """
+    if not os.path.exists(csv_path):
+        print(f"  [Skip] Multithreading CSV not found at: {csv_path}")
+        return
+        
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        return
+        
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
+    
+    # 1. Absolute RPS Plot
+    ax1 = axes[0]
+    
+    # Extract baseline RPS for 1 thread (use SMT-Affinity 1 thread)
+    baseline_rps_row = df[(df['Mode'] == 'SMT-Affinity') & (df['ThreadCount'] == 1)]
+    if baseline_rps_row.empty:
+        baseline_rps_row = df[df['ThreadCount'] == 1]
+    
+    baseline_rps = baseline_rps_row['RPS'].iloc[0] if not baseline_rps_row.empty else 600.0
+    
+    # Plot Ideal Linear throughput limit (kx + b where k = baseline_rps, b = 0)
+    thread_counts = sorted(df['ThreadCount'].unique())
+    ideal_rps_vals = [t * baseline_rps for t in thread_counts]
+    ax1.plot(
+        thread_counts,
+        ideal_rps_vals,
+        linestyle='--',
+        color='#9B9B9B',
+        linewidth=2,
+        label="Теоретический предел"
+    )
+    
+    colors_map = {
+        'No-Affinity': '#4A90E2',      # Soft Blue
+        'SMT-Affinity': '#D0021B',     # Vibrant Red (SMT / Hyper-Threading)
+        'No-SMT-Affinity': '#7ED321'   # Green (Strict Physical Cores Only)
+    }
+    
+    markers_map = {
+        'No-Affinity': 'o',
+        'SMT-Affinity': '^',
+        'No-SMT-Affinity': 's'
+    }
+    
+    mode_labels = {
+        'No-Affinity': 'Без привязки',
+        'SMT-Affinity': 'SMT привязка',
+        'No-SMT-Affinity': 'Физические ядра'
+    }
+    
+    for mode in df['Mode'].unique():
+        mode_data = df[df['Mode'] == mode].sort_values('ThreadCount')
+        ax1.plot(
+            mode_data['ThreadCount'],
+            mode_data['RPS'],
+            marker=markers_map.get(mode, 'o'),
+            markersize=8,
+            linewidth=2.5 if mode != 'No-Affinity' else 1.8,
+            label=mode_labels.get(mode, mode),
+            color=colors_map.get(mode, '#000000')
+        )
+        
+    ax1.set_title("Абсолютная производительность (ALT + 8-ary)", fontweight='bold', pad=10)
+    ax1.set_xlabel("Число рабочих потоков", fontsize=11)
+    ax1.set_ylabel("Запросы в секунду (RPS)", fontsize=11)
+    ax1.set_xticks(thread_counts)
+    ax1.grid(True, linestyle='--', alpha=0.5)
+    ax1.legend(frameon=True, facecolor='white', edgecolor='#e0e0e0', loc='upper left')
+    
+    # 2. Relative Speedup Plot
+    ax2 = axes[1]
+    
+    # Plot Ideal linear speedup (y = x)
+    ax2.plot(
+        thread_counts,
+        thread_counts,
+        linestyle='--',
+        color='#9B9B9B',
+        linewidth=2,
+        label="Идеальное ускорение"
+    )
+    
+    for mode in df['Mode'].unique():
+        mode_data = df[df['Mode'] == mode].sort_values('ThreadCount')
+        ax2.plot(
+            mode_data['ThreadCount'],
+            mode_data['Speedup'],
+            marker=markers_map.get(mode, 'o'),
+            markersize=8,
+            linewidth=2.5 if mode != 'No-Affinity' else 1.8,
+            label=mode_labels.get(mode, mode),
+            color=colors_map.get(mode, '#000000')
+        )
+        
+    ax2.set_title("Кратность ускорения (Speedup)", fontweight='bold', pad=10)
+    ax2.set_xlabel("Число рабочих потоков", fontsize=11)
+    ax2.set_ylabel("Коэффициент ускорения (x)", fontsize=11)
+    ax2.set_xticks(thread_counts)
+    ax2.set_ylim(0, max(thread_counts) + 1)
+    ax2.grid(True, linestyle='--', alpha=0.5)
+    ax2.legend(frameon=True, facecolor='white', edgecolor='#e0e0e0', loc='upper left')
+    
+    plt.suptitle("Анализ многопоточной масштабируемости и CPU Affinity", fontweight='bold', y=0.98, fontsize=15)
+    plt.tight_layout()
+    plt.savefig(save_path, bbox_inches='tight', dpi=200)
+    plt.close()
+    print(f"  [Saved] Multithreading scalability plot saved to: {save_path}")
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -352,6 +461,10 @@ def main():
     
     # 8. Direct Hardware CPU Cycles comparison (Push vs Pop)
     plot_hardware_cycles_comparison(df, os.path.join(results_dir, 'push_pop_cycles_comparison.png'))
+    
+    # 9. Multithreading scalability plot (Affinity vs No-Affinity)
+    mt_csv = os.path.abspath(os.path.join(script_dir, "..", "stats", "multithreading_results.csv"))
+    plot_multithreading_scalability(mt_csv, os.path.join(results_dir, 'multithreading_scalability.png'))
     
     print("\n🎉 Analysis completed! All premium scientific charts have been saved to benchmarks/traffic-core/results/\n")
 
