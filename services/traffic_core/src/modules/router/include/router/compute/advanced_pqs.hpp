@@ -105,6 +105,62 @@ private:
 };
 
 /**
+ * @brief STRICT 2-ARY HEAP (Binary Heap)
+ */
+class alignas(64) Strict2AryHeap {
+public:
+    Strict2AryHeap() : s_(0), c_(0), d_(nullptr) {}
+    ~Strict2AryHeap() { if (d_) std::free(d_); }
+    void reserve(size_t c) { if (c > c_) { c_ = c; d_ = (traffic::PQElement*)std::aligned_alloc(64, c * sizeof(traffic::PQElement)); } clear(); }
+    void clear() { s_ = 0; }
+    void push(traffic::PQElement el) {
+        uint32_t i = s_++;
+        while (i > 0) { uint32_t p = (i - 1) / 2; if (d_[p].weight <= el.weight) break; d_[i] = d_[p]; i = p; }
+        d_[i] = el;
+    }
+    traffic::PQElement pop() {
+        traffic::PQElement t = d_[0], l = d_[--s_]; uint32_t idx = 0;
+        while (1) {
+            uint32_t f = idx * 2 + 1; if (f >= s_) break;
+            uint32_t m = f; if (f + 1 < s_ && d_[f + 1].weight < d_[m].weight) m = f + 1;
+            if (l.weight <= d_[m].weight) break; d_[idx] = d_[m]; idx = m;
+        }
+        d_[idx] = l; return t;
+    }
+    bool empty() const { return s_ == 0; }
+private:
+    uint32_t s_, c_; traffic::PQElement* d_;
+};
+
+/**
+ * @brief STRICT 16-ARY HEAP
+ */
+class alignas(64) Strict16AryHeap {
+public:
+    Strict16AryHeap() : s_(0), c_(0), d_(nullptr) {}
+    ~Strict16AryHeap() { if (d_) std::free(d_); }
+    void reserve(size_t c) { if (c > c_) { c_ = c; d_ = (traffic::PQElement*)std::aligned_alloc(64, c * sizeof(traffic::PQElement)); } clear(); }
+    void clear() { s_ = 0; }
+    void push(traffic::PQElement el) {
+        uint32_t i = s_++;
+        while (i > 0) { uint32_t p = (i - 1) / 16; if (d_[p].weight <= el.weight) break; d_[i] = d_[p]; i = p; }
+        d_[i] = el;
+    }
+    traffic::PQElement pop() {
+        traffic::PQElement t = d_[0], l = d_[--s_]; uint32_t idx = 0;
+        while (1) {
+            uint32_t f = idx * 16 + 1; if (f >= s_) break;
+            uint32_t m = f; for (int j = 1; j < 16; ++j) if (f + j < s_ && d_[f + j].weight < d_[m].weight) m = f + j;
+            if (l.weight <= d_[m].weight) break; d_[idx] = d_[m]; idx = m;
+        }
+        d_[idx] = l; return t;
+    }
+    bool empty() const { return s_ == 0; }
+private:
+    uint32_t s_, c_; traffic::PQElement* d_;
+};
+
+/**
  * @brief RADIX HEAP (Legacy)
  */
 class alignas(64) SafeRadixHeap {

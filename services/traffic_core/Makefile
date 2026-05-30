@@ -1,4 +1,4 @@
-.PHONY: build build-builder run-builder test-integration test-functional
+.PHONY: build build-builder run-builder test-integration test-functional algorithms-comparison
 
 # Параметры хранения данных
 DATA_VOLUME ?= traffic_data
@@ -68,6 +68,14 @@ pq-comparison: build-builder
 	docker run --rm --init --network host \
 		-v $(DATA_VOLUME):/app/data \
 		$(BUILDER_IMAGE) taskset -c 0 /app/services/traffic_core/build/router_pq_comparison --data /app/data
+
+algorithms-comparison: build-builder
+	docker run --rm --init --network host \
+		-v $(DATA_VOLUME):/app/data \
+		$(BUILDER_IMAGE) taskset -c 0 /app/services/traffic_core/build/router_algorithms_comparison \
+			--data /app/data \
+			--out /app/benchmark/traffic-core/stats/run_results.csv
+
 
 simulation-benchmark: build-builder
 	docker run --rm --init --network host \
