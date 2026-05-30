@@ -367,8 +367,6 @@ def plot_multithreading_scalability(csv_path, save_path):
         plt.plot(
             mode_data['ThreadCount'],
             mode_data['RPS'],
-            marker=markers_map.get(mode, 'o'),
-            markersize=8,
             linewidth=2.5 if mode != 'No-Affinity' else 1.8,
             label=mode_labels.get(mode, mode),
             color=colors_map.get(mode, '#000000')
@@ -431,7 +429,7 @@ def main():
         y_label='Время шага поиска (наносекунды)',
         title='Вычислительная сложность обработки одного узла в зависимости от длины маршрута',
         save_path=os.path.join(results_dir, 'iteration_time_comparison.png'),
-        log_scale=True,
+        log_scale=False,
         formula_lambda=lambda x: (x['TimeMs'] * 1e6) / x['VisitedNodes'].replace(0, 1)
     )
     

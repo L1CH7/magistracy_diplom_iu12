@@ -85,15 +85,19 @@ public:
 
         traffic::PathWeight best_w = traffic::INF_WEIGHT;
         traffic::NodeID meeting_node = traffic::INVALID_NODE;
+        traffic::PathWeight min_f = 0;
+        traffic::PathWeight min_b = 0;
 
         while (!pq_f_.empty() && !pq_b_.empty()) {
+            if (min_f + min_b >= best_w) break;
+
             // Forward step
             if (!pq_f_.empty()) {
                 auto [g_curr, u] = pq_f_.pop();
+                min_f = g_curr;
                 if constexpr (ProfileEnabled) pop_count++;
 
                 if (g_curr > hot_states_f_[u].g_score) continue;
-                if (g_curr >= best_w) break;
 
                 for (auto edge : view_.get_edges(u)) {
                     traffic::NodeID v = edge.to;
@@ -121,10 +125,10 @@ public:
             // Backward step
             if (!pq_b_.empty()) {
                 auto [g_curr, u] = pq_b_.pop();
+                min_b = g_curr;
                 if constexpr (ProfileEnabled) pop_count++;
 
                 if (g_curr > hot_states_b_[u].g_score) continue;
-                if (g_curr >= best_w) break;
 
                 for (const auto& edge : reverse_adj_[u]) {
                     traffic::NodeID v = edge.from;

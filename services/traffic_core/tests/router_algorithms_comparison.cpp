@@ -176,8 +176,14 @@ std::vector<DetailedResult> RunBenchmarkSuite(
     if (sig == 0) {
         TestGuard guard;
         try {
-            // Instantiate Router
-            RouterType router_instance(view, num_nodes);
+            // Instantiate Router with geom_store if supported (e.g. AStarRouter)
+            std::unique_ptr<RouterType> router_ptr;
+            if constexpr (requires(GraphView v, NodeID n, const void* g) { RouterType(v, n, g); }) {
+                router_ptr = std::make_unique<RouterType>(view, num_nodes, manager.get_geometry_store());
+            } else {
+                router_ptr = std::make_unique<RouterType>(view, num_nodes);
+            }
+            auto& router_instance = *router_ptr;
             
             // Try to set landmarks only if RouterType supports it
             if constexpr (requires(RouterType r, const uint16_t* l) { r.get_heuristic().set_landmarks((const EdgeWeight*)l); }) {

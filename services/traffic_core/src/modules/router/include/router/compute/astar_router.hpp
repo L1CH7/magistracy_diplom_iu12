@@ -131,8 +131,8 @@ private:
         float dx = (lon1 - lon2) * 62560.0f;
         float dist_m = std::sqrt(dx * dx + dy * dy);
         
-        // Admissible: div by 36 m/s (130 km/h)
-        return static_cast<traffic::PathWeight>(dist_m / 36.0f);
+        // Stronger heuristic: div by 15.0 m/s (54 km/h) to approximate real urban speeds
+        return static_cast<traffic::PathWeight>(dist_m / 15.0f);
     }
 
     struct HotNodeState {
