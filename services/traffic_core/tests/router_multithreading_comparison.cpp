@@ -40,7 +40,7 @@ void RoutingWorker(
     WorkerResult& result
 ) {
     // Thread-local Router instance to guarantee zero data sharing/contention in memory
-    using RouterT = TdAltRouter<Strict8ArySoAHeap>;
+    using RouterT = TdAltRouter<Strict4AryHeap>;
     RouterT router_instance(view, num_nodes);
 
     if (g_landmarks) {
@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     double base_rps_smt = 1.0;
     double base_rps_nosmt = 1.0;
 
-    std::cout << "🚀 STARTING MULTI-THREAD SCALABILITY SCENARIO (ALT + 8-ary)\n";
+    std::cout << "🚀 STARTING MULTI-THREAD SCALABILITY SCENARIO (ALT + 4-ary)\n";
     std::cout << "===============================================================\n";
 
     // 0 = No-Affinity, 1 = SMT-Affinity, 2 = No-SMT-Affinity (Strict Core)

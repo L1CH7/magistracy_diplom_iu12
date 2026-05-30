@@ -154,6 +154,7 @@ struct DetailedResult {
     uint64_t min_pop_cycles;
     uint64_t max_pop_cycles;
     double avg_pop_cycles;
+    uint32_t path_edges;
     bool crashed = false;
 };
 
@@ -239,6 +240,7 @@ std::vector<DetailedResult> RunBenchmarkSuite(
                     QueueMetrics::min_pop_cycles == std::numeric_limits<uint64_t>::max() ? 0 : QueueMetrics::min_pop_cycles,
                     QueueMetrics::max_pop_cycles,
                     avg_pop,
+                    route_res.path.empty() ? 0u : static_cast<uint32_t>(route_res.path.size() - 1),
                     false
                 });
             }
@@ -248,7 +250,7 @@ std::vector<DetailedResult> RunBenchmarkSuite(
         }
     } else {
         std::cout << " !!! CRASHED !!!\n";
-        results.push_back({algo_name, pq_name, 0, 0, 0, 0, 0, 0, INF_WEIGHT, 0, 0, 0, 0, 0, 0, 0, 0, true});
+        results.push_back({algo_name, pq_name, 0, 0, 0, 0, 0, 0, INF_WEIGHT, 0, 0, 0, 0, 0, 0, 0, 0, 0, true});
     }
 
     return results;
@@ -284,7 +286,7 @@ int main(int argc, char** argv) {
     std::mt19937 gen(42);
     std::uniform_int_distribution<NodeID> dist(0, num_nodes - 1);
     
-    constexpr int NUM_ROUTES = 500;
+    constexpr int NUM_ROUTES = 150;
     std::vector<RouteTask> tasks;
     for (int i = 0; i < NUM_ROUTES; ++i) {
         tasks.push_back({dist(gen), dist(gen)});
@@ -344,15 +346,15 @@ int main(int argc, char** argv) {
     // Write all detailed results to CSV
     std::filesystem::create_directories(std::filesystem::path(out_csv).parent_path());
     std::ofstream csv(out_csv);
-    csv << "Algorithm,Queue,RouteID,VisitedNodes,TimeMs,PushCount,PopCount,QueueTimeMs,PathWeight,PathLengthM,EuclideanDistanceM,MinPushCycles,MaxPushCycles,AvgPushCycles,MinPopCycles,MaxPopCycles,AvgPopCycles,Crashed\n";
+    csv << "Algorithm,Queue,RouteID,VisitedNodes,TimeMs,PushCount,PopCount,QueueTimeMs,PathWeight,PathLengthM,EuclideanDistanceM,MinPushCycles,MaxPushCycles,AvgPushCycles,MinPopCycles,MaxPopCycles,AvgPopCycles,PathEdges,Crashed\n";
     for (const auto& r : all_results) {
-        csv << std::format("{},{},{},{},{:.6f},{},{},{:.6f},{},{:.2f},{:.2f},{},{},{:.2f},{},{},{:.2f},{}\n",
+        csv << std::format("{},{},{},{},{:.6f},{},{},{:.6f},{},{:.2f},{:.2f},{},{},{:.2f},{},{},{:.2f},{},{}\n",
             r.algorithm, r.queue, r.route_idx, r.visited_nodes, r.route_ms,
             r.push_count, r.pop_count, r.queue_ms, r.path_weight,
             r.path_length_m, r.euclidean_dist_m,
             r.min_push_cycles, r.max_push_cycles, r.avg_push_cycles,
             r.min_pop_cycles, r.max_pop_cycles, r.avg_pop_cycles,
-            r.crashed ? 1 : 0);
+            r.path_edges, r.crashed ? 1 : 0);
     }
     csv.close();
 

@@ -91,13 +91,37 @@ public:
         d_[i] = el;
     }
     traffic::PQElement pop() {
-        traffic::PQElement t = d_[0], l = d_[--s_]; uint32_t idx = 0;
-        while (1) {
-            uint32_t f = idx * 4 + 1; if (f >= s_) break;
-            uint32_t m = f; for (int j = 1; j < 4; ++j) if (f + j < s_ && d_[f + j].weight < d_[m].weight) m = f + j;
-            if (l.weight <= d_[m].weight) break; d_[idx] = d_[m]; idx = m;
+        traffic::PQElement t = d_[0], l = d_[--s_]; 
+        uint32_t idx = 0;
+        
+        // Сверхбыстрый branchless цикл для внутренних узлов дерева (компилируется в cmov)
+        while (idx * 4 + 4 < s_) {
+            uint32_t f = idx * 4 + 1;
+            uint32_t m = f;
+            if (d_[f + 1].weight < d_[m].weight) m = f + 1;
+            if (d_[f + 2].weight < d_[m].weight) m = f + 2;
+            if (d_[f + 3].weight < d_[m].weight) m = f + 3;
+            
+            if (l.weight <= d_[m].weight) break;
+            d_[idx] = d_[m];
+            idx = m;
         }
-        d_[idx] = l; return t;
+        
+        // Финальный краевой шаг для листьев дерева (с проверками границ)
+        uint32_t f = idx * 4 + 1;
+        if (f < s_) {
+            uint32_t m = f;
+            if (f + 1 < s_ && d_[f + 1].weight < d_[m].weight) m = f + 1;
+            if (f + 2 < s_ && d_[f + 2].weight < d_[m].weight) m = f + 2;
+            if (f + 3 < s_ && d_[f + 3].weight < d_[m].weight) m = f + 3;
+            if (d_[m].weight < l.weight) {
+                d_[idx] = d_[m];
+                idx = m;
+            }
+        }
+        
+        d_[idx] = l; 
+        return t;
     }
     bool empty() const { return s_ == 0; }
 private:
@@ -119,13 +143,33 @@ public:
         d_[i] = el;
     }
     traffic::PQElement pop() {
-        traffic::PQElement t = d_[0], l = d_[--s_]; uint32_t idx = 0;
-        while (1) {
-            uint32_t f = idx * 2 + 1; if (f >= s_) break;
-            uint32_t m = f; if (f + 1 < s_ && d_[f + 1].weight < d_[m].weight) m = f + 1;
-            if (l.weight <= d_[m].weight) break; d_[idx] = d_[m]; idx = m;
+        traffic::PQElement t = d_[0], l = d_[--s_]; 
+        uint32_t idx = 0;
+        
+        // Сверхбыстрый branchless цикл для внутренних узлов дерева
+        while (idx * 2 + 2 < s_) {
+            uint32_t f = idx * 2 + 1;
+            uint32_t m = f;
+            if (d_[f + 1].weight < d_[m].weight) m = f + 1;
+            
+            if (l.weight <= d_[m].weight) break;
+            d_[idx] = d_[m];
+            idx = m;
         }
-        d_[idx] = l; return t;
+        
+        // Финальный краевой шаг
+        uint32_t f = idx * 2 + 1;
+        if (f < s_) {
+            uint32_t m = f;
+            if (f + 1 < s_ && d_[f + 1].weight < d_[m].weight) m = f + 1;
+            if (d_[m].weight < l.weight) {
+                d_[idx] = d_[m];
+                idx = m;
+            }
+        }
+        
+        d_[idx] = l; 
+        return t;
     }
     bool empty() const { return s_ == 0; }
 private:

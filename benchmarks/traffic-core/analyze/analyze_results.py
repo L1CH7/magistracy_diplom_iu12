@@ -54,21 +54,27 @@ def load_data(filepath):
         raise FileNotFoundError(f"CSV data file not found at: {filepath}")
     df = pd.read_csv(filepath)
     df = df[df['Crashed'] == 0].copy()
+    if 'PathEdges' not in df.columns:
+        df['PathEdges'] = 0
     return df
 
 def apply_request_based_binning(df):
     """
-    Groups by RouteID and bins complexity based on the physical path length of the route.
-    Calculates the exact average kilometer distance for each bucket to use as numerical x-axis ticks.
+    Groups by RouteID and bins complexity based on the path edges count (PathEdges).
+    Calculates the exact average edge count for each bucket to use as numerical x-axis ticks.
     """
-    route_lengths = df.groupby('RouteID')['PathLengthM'].mean().reset_index()
-    route_lengths['Bucket'] = pd.qcut(route_lengths['PathLengthM'], q=20, labels=list(range(20)))
+    route_edges = df.groupby('RouteID')['PathEdges'].mean().reset_index()
+    # Safe qcut for case when there are not enough unique values (e.g. filled with zeros)
+    try:
+        route_edges['Bucket'] = pd.qcut(route_edges['PathEdges'], q=10, labels=False, duplicates='drop')
+    except ValueError:
+        route_edges['Bucket'] = 0
+        
+    bucket_means = route_edges.groupby('Bucket', observed=False)['PathEdges'].mean().round().astype(int)
     
-    bucket_means = route_lengths.groupby('Bucket', observed=False)['PathLengthM'].mean() / 1000.0
-    
-    route_to_bucket = dict(zip(route_lengths['RouteID'], route_lengths['Bucket']))
+    route_to_bucket = dict(zip(route_edges['RouteID'], route_edges['Bucket']))
     df['Bucket'] = df['RouteID'].map(route_to_bucket)
-    df['PathLengthKm'] = df['Bucket'].map(bucket_means)
+    df['PathEdgesAvg'] = df['Bucket'].map(bucket_means)
     
     return df, sorted(list(bucket_means.values))
 
@@ -77,10 +83,13 @@ def plot_metric_vs_complexity(df, x_values, metric_col, y_label, title, save_pat
     Plots a multi-axis premium line chart for a specific metric vs route physical complexity.
     """
     df_copy = df.copy()
-    if formula_lambda:
-        df_copy[metric_col] = formula_lambda(df_copy)
-        
-    agg = df_copy.groupby(['Algorithm', 'Queue', 'PathLengthKm'], observed=False)[metric_col].mean().reset_index()
+    if metric_col == 'QPS':
+        agg = df_copy.groupby(['Algorithm', 'Queue', 'PathEdgesAvg'], observed=False)['TimeMs'].mean().reset_index()
+        agg['QPS'] = 1000.0 / agg['TimeMs']
+    else:
+        if formula_lambda:
+            df_copy[metric_col] = formula_lambda(df_copy)
+        agg = df_copy.groupby(['Algorithm', 'Queue', 'PathEdgesAvg'], observed=False)[metric_col].mean().reset_index()
     
     algorithms = agg['Algorithm'].unique()
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
@@ -95,34 +104,30 @@ def plot_metric_vs_complexity(df, x_values, metric_col, y_label, title, save_pat
             if queue_data.empty:
                 continue
                 
-            queue_data = queue_data.set_index('PathLengthKm').reindex(x_values).reset_index()
-            x_labels = [f"{v:.2f}" for v in queue_data['PathLengthKm']]
+            queue_data = queue_data.set_index('PathEdgesAvg').reindex(x_values).reset_index()
             
             ax.plot(
-                x_labels,
+                queue_data['PathEdgesAvg'],
                 queue_data[metric_col],
                 label=queue_name,
                 color=COLORS[queue_name],
                 linestyle=LINE_STYLES[queue_name],
-                marker=MARKERS[queue_name],
-                markersize=8,
                 linewidth=2.5 if queue_name == '8-ary' else 1.5,
                 alpha=0.95
             )
             
-        ax.set_title(f"Algorithm: {algo}", fontweight='bold', pad=10)
-        ax.tick_params(axis='x', rotation=45)
+        ax.set_title(f"Алгоритм: {algo}", fontweight='bold', pad=10)
         if log_scale:
             ax.set_yscale('log')
-            ax.set_ylabel(f"{y_label} (Log Scale)" if idx % 2 == 0 else "")
+            ax.set_ylabel(f"{y_label} (Лог. масштаб)" if idx % 2 == 0 else "")
         else:
             ax.set_ylabel(y_label if idx % 2 == 0 else "")
             
-        ax.set_xlabel("Mean Path Length (Kilometers)" if idx >= 2 else "")
+        ax.set_xlabel("Сложность маршрута (число ребер пути)" if idx >= 2 else "")
         ax.grid(True, which="both", linestyle='--', alpha=0.5)
         
         if idx == 0:
-            ax.legend(title="Queue Types", frameon=True, shadow=False, facecolor='white', edgecolor='#e0e0e0')
+            ax.legend(title="Типы очередей", frameon=True, shadow=False, facecolor='white', edgecolor='#e0e0e0')
             
     plt.suptitle(title, fontweight='bold', y=0.98, fontsize=16)
     plt.tight_layout()
@@ -132,78 +137,87 @@ def plot_metric_vs_complexity(df, x_values, metric_col, y_label, title, save_pat
 
 def plot_best_combinations(df, x_values, save_path):
     """
-    Plots the ultimate showdown between the best combinations on a single premium line chart.
+    Plots the ultimate showdown between the dynamically selected best combinations on a single premium line chart.
     """
     df_copy = df.copy()
-    df_copy['QPS'] = 1000.0 / df_copy['TimeMs']
     
-    best_combos = [
-        ('Dijkstra', '8-ary'),
-        ('Dijkstra', 'radix'),
-        ('Bi-Dijkstra', '8-ary'),
-        ('Bi-Dijkstra', 'radix'),
-        ('A-Star', '8-ary'),
-        ('A-Star', 'radix'),
-        ('ALT', '8-ary'),
-        ('ALT', 'radix')
-    ]
+    # Dynamically select TOP-2 queues (TOP-3 for ALT) for each algorithm based on mean execution time
+    best_combos = []
+    for algo in df_copy['Algorithm'].unique():
+        algo_df = df_copy[df_copy['Algorithm'] == algo]
+        mean_time = algo_df.groupby('Queue')['TimeMs'].mean().sort_values(ascending=True) # Less time is better
+        n_top = 3 if algo == 'ALT' else 2
+        top_queues = mean_time.index[:n_top].tolist()
+        for q in top_queues:
+            best_combos.append((algo, q))
+            
+    print("  [Динамический отбор лучших комбинаций по QPS]:", best_combos)
     
-    df_copy['Combo'] = df_copy['Algorithm'] + " + " + df_copy['Queue']
     combo_names = [f"{algo} + {queue}" for algo, queue in best_combos]
-    df_copy = df_copy[df_copy['Combo'].isin(combo_names)]
+    df_copy = df_copy[(df_copy['Algorithm'].astype(str) + " + " + df_copy['Queue'].astype(str)).isin(combo_names)].copy()
     
-    agg = df_copy.groupby(['Combo', 'PathLengthKm'], observed=False)['QPS'].mean().reset_index()
+    # Aggregate by mean TimeMs to compute true mathematical QPS for each bucket
+    agg = df_copy.groupby(['Algorithm', 'Queue', 'PathEdgesAvg'], observed=False)['TimeMs'].mean().reset_index()
+    agg['QPS'] = 1000.0 / agg['TimeMs']
+    agg['Combo'] = agg['Algorithm'].astype(str) + " + " + agg['Queue'].astype(str)
     
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(13.5, 8)) # Slightly wider figure to accommodate legend on the right
     
-    combo_colors = {
-        'Dijkstra + 8-ary': '#4A90E2',      # Soft Blue
-        'Dijkstra + radix': '#9013FE',      # Purple
-        'Bi-Dijkstra + 8-ary': '#D0021B',   # Vibrant Red (Best of Bi-Dijkstra)
-        'Bi-Dijkstra + radix': '#BD10E0',   # Pink/Magenta
-        'A-Star + 8-ary': '#F5A623',        # Orange
-        'A-Star + radix': '#FFD300',        # Yellow
-        'ALT + 8-ary': '#7ED321',           # Green (Best of ALT)
-        'ALT + radix': '#50E3C2'            # Mint/Teal
-    }
+    # Dynamic palette to render multiple lines elegantly
+    distinct_colors = ['#4A90E2', '#50E3C2', '#D0021B', '#F5A623', '#BD10E0', '#7ED321', '#9013FE', '#FF5A5F', '#54B435', '#222831']
+    distinct_markers = ['o', 's', '^', 'D', 'p', '*', 'v', 'h', 'P', 'X']
     
-    combo_markers = {
-        'Dijkstra + 8-ary': 'o',
-        'Dijkstra + radix': 's',
-        'Bi-Dijkstra + 8-ary': '^',
-        'Bi-Dijkstra + radix': 'D',
-        'A-Star + 8-ary': 'p',
-        'A-Star + radix': '*',
-        'ALT + 8-ary': 'v',
-        'ALT + radix': 'h'
-    }
-    
+    combo_colors = {}
+    combo_markers = {}
+    for idx, combo in enumerate(combo_names):
+        combo_colors[combo] = distinct_colors[idx % len(distinct_colors)]
+        combo_markers[combo] = distinct_markers[idx % len(distinct_markers)]
+        
+    lines = []
     for combo in combo_names:
         combo_data = agg[agg['Combo'] == combo]
         if combo_data.empty:
             continue
             
-        combo_data = combo_data.set_index('PathLengthKm').reindex(x_values).reset_index()
-        x_labels = [f"{v:.2f}" for v in combo_data['PathLengthKm']]
+        combo_data = combo_data.set_index('PathEdgesAvg').reindex(x_values).reset_index()
         
-        plt.plot(
-            x_labels,
+        # Determine last valid QPS point for legend sorting
+        valid_qps = combo_data['QPS'].dropna()
+        last_qps = valid_qps.iloc[-1] if not valid_qps.empty else 0.0
+        
+        line, = plt.plot(
+            combo_data['PathEdgesAvg'],
             combo_data['QPS'],
-            label=combo,
             color=combo_colors.get(combo, '#000000'),
-            marker=combo_markers.get(combo, 'o'),
-            markersize=9,
             linewidth=2.5 if '8-ary' in combo else 1.8,
             alpha=0.95
         )
+        lines.append((last_qps, line, combo))
         
-    plt.title("Ultimate Routing Algorithms & Queues Showdown (QPS vs Distance)", fontweight='bold', pad=15, fontsize=14)
+    # Sort legend items by QPS descending (highest line first)
+    lines.sort(key=lambda x: x[0], reverse=True)
+    handles = [item[1] for item in lines]
+    labels = [item[2] for item in lines]
+        
+    plt.title("Сравнение лучших комбинаций алгоритмов и очередей (QPS)", fontweight='bold', pad=15, fontsize=14)
     plt.yscale('log')
-    plt.ylabel("Average QPS (Queries/sec, Log Scale)", fontsize=12)
-    plt.xlabel("Mean Path Length (Kilometers)", fontsize=12)
-    plt.xticks(rotation=45)
+    plt.ylabel("Средняя производительность QPS (запросов/сек, лог. масштаб)", fontsize=12)
+    plt.xlabel("Сложность маршрута (число ребер пути)", fontsize=12)
     plt.grid(True, which="both", linestyle='--', alpha=0.5)
-    plt.legend(title="Algorithm & Queue Combo", frameon=True, facecolor='white', edgecolor='#e0e0e0', loc='lower left')
+    
+    # Legend sorted by QPS, reduced font sizes, placed to the right
+    plt.legend(
+        handles,
+        labels,
+        title="Лучшие комбинации\n(Алгоритм + Очередь)",
+        title_fontsize=9,
+        fontsize=8.5,
+        frameon=True,
+        facecolor='white',
+        edgecolor='#e0e0e0',
+        loc='upper left',
+        bbox_to_anchor=(1.01, 1.0)
+    )
     plt.tight_layout()
     plt.savefig(save_path, bbox_inches='tight', dpi=200)
     plt.close()
@@ -211,40 +225,53 @@ def plot_best_combinations(df, x_values, save_path):
 
 def plot_queue_overhead_trend(df, x_values, save_path):
     """
-    Plots the percentage of total time spent inside the queue as a trend vs physical distance.
-    Uses Seaborn's lineplot to automatically calculate and show the dispersion (confidence interval / variance band).
+    Plots the percentage of total execution time spent strictly inside Priority Queue operations.
+    Renders a premium sorted Bar Plot sorted by average overhead (descending order).
     """
     df_copy = df.copy()
     df_copy['QueueOverheadPct'] = (df_copy['QueueTimeMs'] / df_copy['TimeMs']) * 100.0
     df_copy['QueueOverheadPct'] = df_copy['QueueOverheadPct'].clip(0, 100)
     
-    # We round PathLengthKm to 2 decimals for plotting
-    df_copy['PathLengthKm_Rounded'] = df_copy['PathLengthKm'].round(2)
+    # Calculate average overhead for each Queue type
+    agg = df_copy.groupby('Queue', observed=False)['QueueOverheadPct'].mean().reset_index()
+    agg = agg.sort_values(by='QueueOverheadPct', ascending=False) # Order descending (worst to best)
     
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(11, 7))
     
-    # Use seaborn lineplot to draw lines + variance band (shaded area of standard error/deviation)
-    sns.lineplot(
-        data=df_copy,
-        x='PathLengthKm_Rounded',
-        y='QueueOverheadPct',
-        hue='Queue',
-        palette=COLORS,
-        err_style="band",   # Renders the variance band
-        errorbar=("ci", 95), # 95% confidence interval shows the variance nicely
-        linewidth=2.0
+    # Solid premium blue color #4A90E2 with black edges like in push/pop
+    bars = plt.bar(
+        agg['Queue'],
+        agg['QueueOverheadPct'],
+        color='#4A90E2',
+        edgecolor='black',
+        linewidth=1.0,
+        width=0.6
     )
     
-    plt.title("Queue Overhead Trend vs Route Distance (with 95% Variance Band)", fontweight='bold', pad=15, fontsize=14)
-    plt.ylabel("Time spent in Queue Operations (%)", fontsize=12)
-    plt.xlabel("Route Physical Length (Kilometers)", fontsize=12)
-    plt.xticks(rotation=45)
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.legend(title="Queue Types", frameon=True, facecolor='white', edgecolor='#e0e0e0')
+    # Add exact values on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(
+            bar.get_x() + bar.get_width()/2.0,
+            height + 0.5,
+            f"{height:.1f}%",
+            ha='center',
+            va='bottom',
+            fontweight='bold',
+            fontsize=10,
+            color='#333333'
+        )
+        
+    plt.title("Доля времени на операции с очередью приоритетов (меньше — лучше)", fontweight='bold', pad=15, fontsize=13)
+    plt.ylabel("Доля времени выполнения (%)", fontsize=11)
+    plt.xlabel("Тип очереди приоритетов", fontsize=11)
+    plt.ylim(0, max(agg['QueueOverheadPct']) + 12)
+    plt.grid(True, axis='y', linestyle='--', alpha=0.5)
+    
     plt.tight_layout()
     plt.savefig(save_path, bbox_inches='tight', dpi=200)
     plt.close()
-    print(f"  [Saved] Queue overhead trend with variance saved to: {save_path}")
+    print(f"  [Saved] Queue overhead bar plot saved to: {save_path}")
 
 def plot_hardware_cycles_comparison(df, save_path):
     """
@@ -258,7 +285,7 @@ def plot_hardware_cycles_comparison(df, save_path):
     melted = pd.melt(agg, id_vars=['Queue'], value_vars=['AvgPushCycles', 'AvgPopCycles'],
                      var_name='Operation', value_name='CpuCycles')
     
-    melted['Operation'] = melted['Operation'].map({'AvgPushCycles': 'Push Operation', 'AvgPopCycles': 'Pop Operation'})
+    melted['Operation'] = melted['Operation'].map({'AvgPushCycles': 'Операция Push (вставка)', 'AvgPopCycles': 'Операция Pop (извлечение)'})
     
     plt.figure(figsize=(12, 7))
     sns.barplot(
@@ -266,15 +293,16 @@ def plot_hardware_cycles_comparison(df, save_path):
         x='Queue',
         y='CpuCycles',
         hue='Operation',
-        palette={'Push Operation': '#4A90E2', 'Pop Operation': '#D0021B'},
+        palette={'Операция Push (вставка)': '#4A90E2', 'Операция Pop (извлечение)': '#D0021B'},
         edgecolor='black',
         linewidth=1.0
     )
     
-    plt.title("Hardware Performance: Precise CPU Cycles per Operation (lfence serialized)", fontweight='bold', pad=15, fontsize=14)
-    plt.ylabel("Average CPU Cycles (Lower is Faster)", fontsize=12)
-    plt.xlabel("Queue Type", fontsize=12)
+    plt.title("Аппаратная сложность: среднее число тактов CPU на операцию с очередью (lfence сериализация)", fontweight='bold', pad=15, fontsize=14)
+    plt.ylabel("Среднее число тактов CPU (меньше — лучше)", fontsize=12)
+    plt.xlabel("Тип очереди приоритетов", fontsize=12)
     plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend(title="Аппаратные операции", frameon=True, facecolor='white', edgecolor='#e0e0e0')
     plt.tight_layout()
     plt.savefig(save_path, bbox_inches='tight', dpi=200)
     plt.close()
@@ -282,8 +310,8 @@ def plot_hardware_cycles_comparison(df, save_path):
 
 def plot_multithreading_scalability(csv_path, save_path):
     """
-    Plots absolute RPS throughput and relative Speedup vs Thread Count.
-    Includes SMT vs No-SMT strict cores comparison and the Ideal Linear reference limit.
+    Plots absolute RPS throughput vs Thread Count.
+    Includes SMT comparison and the Ideal Linear reference limit.
     """
     if not os.path.exists(csv_path):
         print(f"  [Skip] Multithreading CSV not found at: {csv_path}")
@@ -293,10 +321,10 @@ def plot_multithreading_scalability(csv_path, save_path):
     if df.empty:
         return
         
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6.5))
-    
-    # 1. Absolute RPS Plot
-    ax1 = axes[0]
+    # Исключаем физические ядра по запросу пользователя
+    df = df[df['Mode'] != 'No-SMT-Affinity'].copy()
+        
+    plt.figure(figsize=(10, 6))
     
     # Extract baseline RPS for 1 thread (use SMT-Affinity 1 thread)
     baseline_rps_row = df[(df['Mode'] == 'SMT-Affinity') & (df['ThreadCount'] == 1)]
@@ -305,10 +333,10 @@ def plot_multithreading_scalability(csv_path, save_path):
     
     baseline_rps = baseline_rps_row['RPS'].iloc[0] if not baseline_rps_row.empty else 600.0
     
-    # Plot Ideal Linear throughput limit (kx + b where k = baseline_rps, b = 0)
+    # Plot Ideal Linear throughput limit
     thread_counts = sorted(df['ThreadCount'].unique())
     ideal_rps_vals = [t * baseline_rps for t in thread_counts]
-    ax1.plot(
+    plt.plot(
         thread_counts,
         ideal_rps_vals,
         linestyle='--',
@@ -320,24 +348,23 @@ def plot_multithreading_scalability(csv_path, save_path):
     colors_map = {
         'No-Affinity': '#4A90E2',      # Soft Blue
         'SMT-Affinity': '#D0021B',     # Vibrant Red (SMT / Hyper-Threading)
-        'No-SMT-Affinity': '#7ED321'   # Green (Strict Physical Cores Only)
     }
     
     markers_map = {
         'No-Affinity': 'o',
         'SMT-Affinity': '^',
-        'No-SMT-Affinity': 's'
     }
     
     mode_labels = {
-        'No-Affinity': 'Без привязки',
-        'SMT-Affinity': 'SMT привязка',
-        'No-SMT-Affinity': 'Физические ядра'
+        'No-Affinity': 'Без привязки (планировщик ОС)',
+        'SMT-Affinity': 'С привязкой к ядрам (CPU Affinity)',
     }
     
     for mode in df['Mode'].unique():
+        if mode not in colors_map:
+            continue
         mode_data = df[df['Mode'] == mode].sort_values('ThreadCount')
-        ax1.plot(
+        plt.plot(
             mode_data['ThreadCount'],
             mode_data['RPS'],
             marker=markers_map.get(mode, 'o'),
@@ -347,47 +374,13 @@ def plot_multithreading_scalability(csv_path, save_path):
             color=colors_map.get(mode, '#000000')
         )
         
-    ax1.set_title("Абсолютная производительность (ALT + 8-ary)", fontweight='bold', pad=10)
-    ax1.set_xlabel("Число рабочих потоков", fontsize=11)
-    ax1.set_ylabel("Запросы в секунду (RPS)", fontsize=11)
-    ax1.set_xticks(thread_counts)
-    ax1.grid(True, linestyle='--', alpha=0.5)
-    ax1.legend(frameon=True, facecolor='white', edgecolor='#e0e0e0', loc='upper left')
+    plt.title("Анализ многопоточной масштабируемости (ALT + 4-ary)", fontweight='bold', pad=15, fontsize=13)
+    plt.xlabel("Число рабочих потоков", fontsize=11)
+    plt.ylabel("Запросы в секунду (RPS)", fontsize=11)
+    plt.xticks(thread_counts)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend(frameon=True, facecolor='white', edgecolor='#e0e0e0', loc='upper left')
     
-    # 2. Relative Speedup Plot
-    ax2 = axes[1]
-    
-    # Plot Ideal linear speedup (y = x)
-    ax2.plot(
-        thread_counts,
-        thread_counts,
-        linestyle='--',
-        color='#9B9B9B',
-        linewidth=2,
-        label="Идеальное ускорение"
-    )
-    
-    for mode in df['Mode'].unique():
-        mode_data = df[df['Mode'] == mode].sort_values('ThreadCount')
-        ax2.plot(
-            mode_data['ThreadCount'],
-            mode_data['Speedup'],
-            marker=markers_map.get(mode, 'o'),
-            markersize=8,
-            linewidth=2.5 if mode != 'No-Affinity' else 1.8,
-            label=mode_labels.get(mode, mode),
-            color=colors_map.get(mode, '#000000')
-        )
-        
-    ax2.set_title("Кратность ускорения (Speedup)", fontweight='bold', pad=10)
-    ax2.set_xlabel("Число рабочих потоков", fontsize=11)
-    ax2.set_ylabel("Коэффициент ускорения (x)", fontsize=11)
-    ax2.set_xticks(thread_counts)
-    ax2.set_ylim(0, max(thread_counts) + 1)
-    ax2.grid(True, linestyle='--', alpha=0.5)
-    ax2.legend(frameon=True, facecolor='white', edgecolor='#e0e0e0', loc='upper left')
-    
-    plt.suptitle("Анализ многопоточной масштабируемости и CPU Affinity", fontweight='bold', y=0.98, fontsize=15)
     plt.tight_layout()
     plt.savefig(save_path, bbox_inches='tight', dpi=200)
     plt.close()
@@ -414,8 +407,8 @@ def main():
     plot_metric_vs_complexity(
         df, x_values,
         metric_col='QPS',
-        y_label='Average QPS (Queries/sec)',
-        title='Routing Performance (QPS) vs Route Distance',
+        y_label='Производительность QPS (запросов/сек)',
+        title='Производительность алгоритмов поиска пути (QPS) в зависимости от длины маршрута',
         save_path=os.path.join(results_dir, 'qps_comparison.png'),
         log_scale=True,
         formula_lambda=lambda x: 1000.0 / x['TimeMs']
@@ -425,8 +418,8 @@ def main():
     plot_metric_vs_complexity(
         df, x_values,
         metric_col='VisitedNodes',
-        y_label='Average Visited Nodes count',
-        title='Search Space Complexity (Visited Nodes) vs Route Distance',
+        y_label='Количество раскрытых узлов',
+        title='Размер исследованного пространства поиска (раскрытые узлы) в зависимости от длины маршрута',
         save_path=os.path.join(results_dir, 'visited_nodes_comparison.png'),
         log_scale=True
     )
@@ -435,8 +428,8 @@ def main():
     plot_metric_vs_complexity(
         df, x_values,
         metric_col='IterationTimeNs',
-        y_label='Average Step Duration (Nanoseconds)',
-        title='Single Node Processing Cost (Iteration Duration) vs Route Distance',
+        y_label='Время шага поиска (наносекунды)',
+        title='Вычислительная сложность обработки одного узла в зависимости от длины маршрута',
         save_path=os.path.join(results_dir, 'iteration_time_comparison.png'),
         log_scale=True,
         formula_lambda=lambda x: (x['TimeMs'] * 1e6) / x['VisitedNodes'].replace(0, 1)
@@ -446,8 +439,8 @@ def main():
     plot_metric_vs_complexity(
         df, x_values,
         metric_col='QueueOps',
-        y_label='Queue Operations (Push + Pop Count)',
-        title='Queue Workload (Total Push & Pop Operations) vs Route Distance',
+        y_label='Количество операций с очередью (Push + Pop)',
+        title='Интенсивность обращений к очереди приоритетов (Push + Pop) в зависимости от длины маршрута',
         save_path=os.path.join(results_dir, 'queue_operations_comparison.png'),
         log_scale=True,
         formula_lambda=lambda x: x['PushCount'] + x['PopCount']
@@ -467,6 +460,6 @@ def main():
     plot_multithreading_scalability(mt_csv, os.path.join(results_dir, 'multithreading_scalability.png'))
     
     print("\n🎉 Analysis completed! All premium scientific charts have been saved to benchmarks/traffic-core/results/\n")
-
+ 
 if __name__ == "__main__":
     main()
