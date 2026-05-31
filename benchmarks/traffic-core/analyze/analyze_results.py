@@ -54,6 +54,8 @@ def load_data(filepath):
         raise FileNotFoundError(f"CSV data file not found at: {filepath}")
     df = pd.read_csv(filepath)
     df = df[df['Crashed'] == 0].copy()
+    # Исключаем 8-ary-lazy, чтобы не перегружать графики и отчет дублирующимися данными
+    df = df[df['Queue'] != '8-ary-lazy'].copy()
     if 'PathEdges' not in df.columns:
         df['PathEdges'] = 0
     return df
@@ -141,15 +143,18 @@ def plot_best_combinations(df, x_values, save_path):
     """
     df_copy = df.copy()
     
-    # Dynamically select TOP-2 queues (TOP-3 for ALT) for each algorithm based on mean execution time
+    # Dynamically select TOP-2 queues (strictly '8-ary' and '4-ary' for ALT) for each algorithm based on mean execution time
     best_combos = []
     for algo in df_copy['Algorithm'].unique():
         algo_df = df_copy[df_copy['Algorithm'] == algo]
-        mean_time = algo_df.groupby('Queue')['TimeMs'].mean().sort_values(ascending=True) # Less time is better
-        n_top = 3 if algo == 'ALT' else 2
-        top_queues = mean_time.index[:n_top].tolist()
-        for q in top_queues:
-            best_combos.append((algo, q))
+        if algo == 'ALT':
+            best_combos.append(('ALT', '8-ary'))
+            best_combos.append(('ALT', '4-ary'))
+        else:
+            mean_time = algo_df.groupby('Queue')['TimeMs'].mean().sort_values(ascending=True) # Less time is better
+            top_queues = mean_time.index[:2].tolist()
+            for q in top_queues:
+                best_combos.append((algo, q))
             
     print("  [Динамический отбор лучших комбинаций по QPS]:", best_combos)
     

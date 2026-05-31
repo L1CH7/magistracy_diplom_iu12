@@ -1,0 +1,338 @@
+=== GLOBAL BENCHMARK SUMMARY ===
+
+Algorithm: A-Star, Queue: 16-ary
+  Mean Time: 51.2554 ms
+  QPS: 19.51
+  Mean Visited Nodes: 239842.8
+  Mean Queue Ops (Push+Pop): 481712.4
+  Mean Push Cycles: 73.68
+  Mean Pop Cycles: 182.52
+  Mean Queue Overhead: 49.46%
+  Mean Relative Error (MRE): 0.0096%
+  Max Relative Error (MaxRE): 1.2680%
+  Exact Match Rate (EMR): 98.00%
+
+Algorithm: A-Star, Queue: 2-ary
+  Mean Time: 53.0958 ms
+  QPS: 18.83
+  Mean Visited Nodes: 239863.0
+  Mean Queue Ops (Push+Pop): 481752.8
+  Mean Push Cycles: 79.32
+  Mean Pop Cycles: 199.20
+  Mean Queue Overhead: 51.99%
+  Mean Relative Error (MRE): 0.0096%
+  Max Relative Error (MaxRE): 1.2680%
+  Exact Match Rate (EMR): 98.00%
+
+Algorithm: A-Star, Queue: 4-ary
+  Mean Time: 50.5757 ms
+  QPS: 19.77
+  Mean Visited Nodes: 239859.4
+  Mean Queue Ops (Push+Pop): 481746.2
+  Mean Push Cycles: 75.79
+  Mean Pop Cycles: 170.60
+  Mean Queue Overhead: 48.25%
+  Mean Relative Error (MRE): 0.0096%
+  Max Relative Error (MaxRE): 1.2680%
+  Exact Match Rate (EMR): 98.00%
+
+Algorithm: A-Star, Queue: 8-ary
+  Mean Time: 52.3569 ms
+  QPS: 19.10
+  Mean Visited Nodes: 239849.2
+  Mean Queue Ops (Push+Pop): 481724.6
+  Mean Push Cycles: 74.55
+  Mean Pop Cycles: 189.44
+  Mean Queue Overhead: 49.99%
+  Mean Relative Error (MRE): 0.0096%
+  Max Relative Error (MaxRE): 1.2680%
+  Exact Match Rate (EMR): 98.00%
+
+Algorithm: A-Star, Queue: bucket
+  Mean Time: 39.9235 ms
+  QPS: 25.05
+  Mean Visited Nodes: 254850.5
+  Mean Queue Ops (Push+Pop): 512055.1
+  Mean Push Cycles: 74.08
+  Mean Pop Cycles: 77.89
+  Mean Queue Overhead: 39.46%
+  Mean Relative Error (MRE): 0.0184%
+  Max Relative Error (MaxRE): 1.2680%
+  Exact Match Rate (EMR): 94.67%
+
+Algorithm: A-Star, Queue: delta
+  Mean Time: 39.0879 ms
+  QPS: 25.58
+  Mean Visited Nodes: 254850.5
+  Mean Queue Ops (Push+Pop): 512055.1
+  Mean Push Cycles: 74.20
+  Mean Pop Cycles: 77.91
+  Mean Queue Overhead: 40.15%
+  Mean Relative Error (MRE): 0.0184%
+  Max Relative Error (MaxRE): 1.2680%
+  Exact Match Rate (EMR): 94.67%
+
+Algorithm: A-Star, Queue: radix
+  Mean Time: 46.3339 ms
+  QPS: 21.58
+  Mean Visited Nodes: 240100.2
+  Mean Queue Ops (Push+Pop): 482251.3
+  Mean Push Cycles: 83.58
+  Mean Pop Cycles: 115.51
+  Mean Queue Overhead: 42.16%
+  Mean Relative Error (MRE): 0.0096%
+  Max Relative Error (MaxRE): 1.2680%
+  Exact Match Rate (EMR): 98.00%
+
+Algorithm: ALT, Queue: 16-ary
+  Mean Time: 3.9319 ms
+  QPS: 254.33
+  Mean Visited Nodes: 21613.4
+  Mean Queue Ops (Push+Pop): 44252.5
+  Mean Push Cycles: 83.08
+  Mean Pop Cycles: 160.25
+  Mean Queue Overhead: 50.10%
+  Mean Relative Error (MRE): 1.2466%
+  Max Relative Error (MaxRE): 8.6449%
+  Exact Match Rate (EMR): 8.00%
+
+Algorithm: ALT, Queue: 2-ary
+  Mean Time: 3.9568 ms
+  QPS: 252.73
+  Mean Visited Nodes: 21758.8
+  Mean Queue Ops (Push+Pop): 44543.1
+  Mean Push Cycles: 91.74
+  Mean Pop Cycles: 151.22
+  Mean Queue Overhead: 49.96%
+  Mean Relative Error (MRE): 1.3021%
+  Max Relative Error (MaxRE): 11.9149%
+  Exact Match Rate (EMR): 8.67%
+
+Algorithm: ALT, Queue: 4-ary
+  Mean Time: 3.9213 ms
+  QPS: 255.02
+  Mean Visited Nodes: 21543.6
+  Mean Queue Ops (Push+Pop): 44104.2
+  Mean Push Cycles: 86.09
+  Mean Pop Cycles: 160.35
+  Mean Queue Overhead: 50.98%
+  Mean Relative Error (MRE): 1.3340%
+  Max Relative Error (MaxRE): 11.9149%
+  Exact Match Rate (EMR): 8.67%
+
+Algorithm: ALT, Queue: 8-ary
+  Mean Time: 3.9254 ms
+  QPS: 254.75
+  Mean Visited Nodes: 21580.3
+  Mean Queue Ops (Push+Pop): 44186.8
+  Mean Push Cycles: 82.83
+  Mean Pop Cycles: 160.89
+  Mean Queue Overhead: 50.74%
+  Mean Relative Error (MRE): 1.2939%
+  Max Relative Error (MaxRE): 11.9149%
+  Exact Match Rate (EMR): 8.67%
+
+Algorithm: ALT, Queue: bucket
+  Mean Time: 5.7911 ms
+  QPS: 172.68
+  Mean Visited Nodes: 44243.4
+  Mean Queue Ops (Push+Pop): 90122.5
+  Mean Push Cycles: 76.75
+  Mean Pop Cycles: 78.33
+  Mean Queue Overhead: 42.88%
+  Mean Relative Error (MRE): 2.4333%
+  Max Relative Error (MaxRE): 12.6596%
+  Exact Match Rate (EMR): 0.67%
+
+Algorithm: ALT, Queue: delta
+  Mean Time: 5.7948 ms
+  QPS: 172.57
+  Mean Visited Nodes: 44243.4
+  Mean Queue Ops (Push+Pop): 90122.5
+  Mean Push Cycles: 76.74
+  Mean Pop Cycles: 78.18
+  Mean Queue Overhead: 42.88%
+  Mean Relative Error (MRE): 2.4333%
+  Max Relative Error (MaxRE): 12.6596%
+  Exact Match Rate (EMR): 0.67%
+
+Algorithm: ALT, Queue: radix
+  Mean Time: 16.4078 ms
+  QPS: 60.95
+  Mean Visited Nodes: 135138.8
+  Mean Queue Ops (Push+Pop): 276566.1
+  Mean Push Cycles: 80.56
+  Mean Pop Cycles: 79.82
+  Mean Queue Overhead: 47.99%
+  Mean Relative Error (MRE): 10.2824%
+  Max Relative Error (MaxRE): 14.7606%
+  Exact Match Rate (EMR): 0.00%
+
+Algorithm: Bi-Dijkstra, Queue: 16-ary
+  Mean Time: 37.6378 ms
+  QPS: 26.57
+  Mean Visited Nodes: 192028.1
+  Mean Queue Ops (Push+Pop): 386973.2
+  Mean Push Cycles: 72.02
+  Mean Pop Cycles: 192.57
+  Mean Queue Overhead: 55.42%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Bi-Dijkstra, Queue: 2-ary
+  Mean Time: 39.3466 ms
+  QPS: 25.42
+  Mean Visited Nodes: 192025.4
+  Mean Queue Ops (Push+Pop): 386968.7
+  Mean Push Cycles: 76.20
+  Mean Pop Cycles: 191.44
+  Mean Queue Overhead: 54.23%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Bi-Dijkstra, Queue: 4-ary
+  Mean Time: 37.3730 ms
+  QPS: 26.76
+  Mean Visited Nodes: 192026.1
+  Mean Queue Ops (Push+Pop): 386970.4
+  Mean Push Cycles: 73.52
+  Mean Pop Cycles: 167.44
+  Mean Queue Overhead: 51.33%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Bi-Dijkstra, Queue: 8-ary
+  Mean Time: 37.7932 ms
+  QPS: 26.46
+  Mean Visited Nodes: 192026.6
+  Mean Queue Ops (Push+Pop): 386970.5
+  Mean Push Cycles: 72.43
+  Mean Pop Cycles: 185.41
+  Mean Queue Overhead: 54.15%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Bi-Dijkstra, Queue: bucket
+  Mean Time: 29.0315 ms
+  QPS: 34.45
+  Mean Visited Nodes: 201578.6
+  Mean Queue Ops (Push+Pop): 406407.8
+  Mean Push Cycles: 74.74
+  Mean Pop Cycles: 78.90
+  Mean Queue Overhead: 43.28%
+  Mean Relative Error (MRE): 0.0064%
+  Max Relative Error (MaxRE): 0.6081%
+  Exact Match Rate (EMR): 98.00%
+
+Algorithm: Bi-Dijkstra, Queue: delta
+  Mean Time: 28.8518 ms
+  QPS: 34.66
+  Mean Visited Nodes: 201578.6
+  Mean Queue Ops (Push+Pop): 406407.8
+  Mean Push Cycles: 74.43
+  Mean Pop Cycles: 78.17
+  Mean Queue Overhead: 43.26%
+  Mean Relative Error (MRE): 0.0064%
+  Max Relative Error (MaxRE): 0.6081%
+  Exact Match Rate (EMR): 98.00%
+
+Algorithm: Bi-Dijkstra, Queue: radix
+  Mean Time: 34.6179 ms
+  QPS: 28.89
+  Mean Visited Nodes: 191968.1
+  Mean Queue Ops (Push+Pop): 386872.2
+  Mean Push Cycles: 83.68
+  Mean Pop Cycles: 120.18
+  Mean Queue Overhead: 46.22%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Dijkstra, Queue: 16-ary
+  Mean Time: 60.9193 ms
+  QPS: 16.42
+  Mean Visited Nodes: 377231.2
+  Mean Queue Ops (Push+Pop): 756439.4
+  Mean Push Cycles: 72.01
+  Mean Pop Cycles: 183.08
+  Mean Queue Overhead: 64.34%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Dijkstra, Queue: 2-ary
+  Mean Time: 64.7642 ms
+  QPS: 15.44
+  Mean Visited Nodes: 377227.5
+  Mean Queue Ops (Push+Pop): 756431.6
+  Mean Push Cycles: 75.27
+  Mean Pop Cycles: 205.56
+  Mean Queue Overhead: 66.73%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Dijkstra, Queue: 4-ary
+  Mean Time: 59.1745 ms
+  QPS: 16.90
+  Mean Visited Nodes: 377228.3
+  Mean Queue Ops (Push+Pop): 756434.2
+  Mean Push Cycles: 72.81
+  Mean Pop Cycles: 169.06
+  Mean Queue Overhead: 62.94%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Dijkstra, Queue: 8-ary
+  Mean Time: 62.4412 ms
+  QPS: 16.02
+  Mean Visited Nodes: 377227.7
+  Mean Queue Ops (Push+Pop): 756432.2
+  Mean Push Cycles: 72.28
+  Mean Pop Cycles: 190.27
+  Mean Queue Overhead: 64.66%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
+Algorithm: Dijkstra, Queue: bucket
+  Mean Time: 45.7630 ms
+  QPS: 21.85
+  Mean Visited Nodes: 401835.0
+  Mean Queue Ops (Push+Pop): 805973.0
+  Mean Push Cycles: 73.52
+  Mean Pop Cycles: 76.94
+  Mean Queue Overhead: 53.32%
+  Mean Relative Error (MRE): 0.0024%
+  Max Relative Error (MaxRE): 0.1388%
+  Exact Match Rate (EMR): 96.67%
+
+Algorithm: Dijkstra, Queue: delta
+  Mean Time: 45.6618 ms
+  QPS: 21.90
+  Mean Visited Nodes: 401835.0
+  Mean Queue Ops (Push+Pop): 805973.0
+  Mean Push Cycles: 73.11
+  Mean Pop Cycles: 76.89
+  Mean Queue Overhead: 53.19%
+  Mean Relative Error (MRE): 0.0024%
+  Max Relative Error (MaxRE): 0.1388%
+  Exact Match Rate (EMR): 96.67%
+
+Algorithm: Dijkstra, Queue: radix
+  Mean Time: 53.4496 ms
+  QPS: 18.71
+  Mean Visited Nodes: 377045.7
+  Mean Queue Ops (Push+Pop): 756091.2
+  Mean Push Cycles: 81.24
+  Mean Pop Cycles: 115.80
+  Mean Queue Overhead: 56.33%
+  Mean Relative Error (MRE): 0.0000%
+  Max Relative Error (MaxRE): 0.0000%
+  Exact Match Rate (EMR): 100.00%
+
