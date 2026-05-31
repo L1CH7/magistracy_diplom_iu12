@@ -139,6 +139,7 @@ struct RouteTask {
 inline bool g_has_baseline = false;
 inline std::vector<PathWeight> g_baseline_weights;
 inline std::vector<std::vector<EdgeID>> g_baseline_paths;
+inline std::vector<PathWeight> g_dijkstra_weights; // Идеальные точные веса Дейкстры
 
 struct DetailedResult {
     std::string algorithm;
@@ -160,6 +161,9 @@ struct DetailedResult {
     double avg_pop_cycles;
     uint32_t path_edges;
     bool crashed = false;
+    double rel_error = 0.0;
+    bool is_exact = false;
+    PathWeight dijkstra_weight = INF_WEIGHT;
 };
 
 // Multi-axis metrics collector
@@ -197,6 +201,9 @@ std::vector<DetailedResult> RunBenchmarkSuite(
                 }
             }
 
+            if (g_dijkstra_weights.empty() && algo_name == "Dijkstra" && pq_name == "2-ary") {
+                g_dijkstra_weights.resize(tasks.size(), INF_WEIGHT);
+            }
             if (!g_has_baseline) {
                 g_baseline_weights.resize(tasks.size(), INF_WEIGHT);
                 g_baseline_paths.resize(tasks.size());
@@ -269,6 +276,23 @@ std::vector<DetailedResult> RunBenchmarkSuite(
                     euclidean_dist = std::sqrt(dx * dx + dy * dy);
                 }
 
+                if (algo_name == "Dijkstra" && pq_name == "2-ary") {
+                    g_dijkstra_weights[i] = route_res.total_weight;
+                }
+
+                double rel_error = 0.0;
+                bool is_exact = false;
+                PathWeight d_weight = INF_WEIGHT;
+                if (!g_dijkstra_weights.empty() && i < g_dijkstra_weights.size()) {
+                    d_weight = g_dijkstra_weights[i];
+                    if (d_weight != INF_WEIGHT) {
+                        is_exact = (route_res.total_weight == d_weight);
+                        if (route_res.total_weight != INF_WEIGHT && d_weight > 0) {
+                            rel_error = std::abs(static_cast<double>(route_res.total_weight) - d_weight) / d_weight * 100.0;
+                        }
+                    }
+                }
+
                 double avg_push = QueueMetrics::total_push_count ? static_cast<double>(QueueMetrics::push_cycles_sum) / QueueMetrics::total_push_count : 0.0;
                 double avg_pop = QueueMetrics::total_pop_count ? static_cast<double>(QueueMetrics::pop_cycles_sum) / QueueMetrics::total_pop_count : 0.0;
 
@@ -291,7 +315,10 @@ std::vector<DetailedResult> RunBenchmarkSuite(
                     QueueMetrics::max_pop_cycles,
                     avg_pop,
                     route_res.path.empty() ? 0u : static_cast<uint32_t>(route_res.path.size() - 1),
-                    false
+                    false,
+                    rel_error,
+                    is_exact,
+                    d_weight
                 });
             }
             g_has_baseline = true;
@@ -301,7 +328,7 @@ std::vector<DetailedResult> RunBenchmarkSuite(
         }
     } else {
         std::cout << " !!! CRASHED !!!\n";
-        results.push_back({algo_name, pq_name, 0, 0, 0, 0, 0, 0, INF_WEIGHT, 0, 0, 0, 0, 0, 0, 0, 0, 0, true});
+        results.push_back({algo_name, pq_name, 0, 0, 0, 0, 0, 0, INF_WEIGHT, 0, 0, 0, 0, 0, 0, 0, 0, 0, true, 0.0, false, INF_WEIGHT});
     }
 
     return results;
@@ -402,15 +429,16 @@ int main(int argc, char** argv) {
     // Write all detailed results to CSV
     std::filesystem::create_directories(std::filesystem::path(out_csv).parent_path());
     std::ofstream csv(out_csv);
-    csv << "Algorithm,Queue,RouteID,VisitedNodes,TimeMs,PushCount,PopCount,QueueTimeMs,PathWeight,PathLengthM,EuclideanDistanceM,MinPushCycles,MaxPushCycles,AvgPushCycles,MinPopCycles,MaxPopCycles,AvgPopCycles,PathEdges,Crashed\n";
+    csv << "Algorithm,Queue,RouteID,VisitedNodes,TimeMs,PushCount,PopCount,QueueTimeMs,PathWeight,PathLengthM,EuclideanDistanceM,MinPushCycles,MaxPushCycles,AvgPushCycles,MinPopCycles,MaxPopCycles,AvgPopCycles,PathEdges,Crashed,DijkstraWeight,RelativeErrorPct,IsExactMatch\n";
     for (const auto& r : all_results) {
-        csv << std::format("{},{},{},{},{:.6f},{},{},{:.6f},{},{:.2f},{:.2f},{},{},{:.2f},{},{},{:.2f},{},{}\n",
+        csv << std::format("{},{},{},{},{:.6f},{},{},{:.6f},{},{:.2f},{:.2f},{},{},{:.2f},{},{},{:.2f},{},{},{},{:.6f},{}\n",
             r.algorithm, r.queue, r.route_idx, r.visited_nodes, r.route_ms,
             r.push_count, r.pop_count, r.queue_ms, r.path_weight,
             r.path_length_m, r.euclidean_dist_m,
             r.min_push_cycles, r.max_push_cycles, r.avg_push_cycles,
             r.min_pop_cycles, r.max_pop_cycles, r.avg_pop_cycles,
-            r.path_edges, r.crashed ? 1 : 0);
+            r.path_edges, r.crashed ? 1 : 0,
+            r.dijkstra_weight, r.rel_error, r.is_exact ? 1 : 0);
     }
     csv.close();
 

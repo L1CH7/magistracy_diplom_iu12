@@ -372,7 +372,7 @@ def plot_multithreading_scalability(csv_path, save_path):
             color=colors_map.get(mode, '#000000')
         )
         
-    plt.title("Анализ многопоточной масштабируемости (ALT + 4-ary)", fontweight='bold', pad=15, fontsize=13)
+    plt.title("Анализ многопоточной масштабируемости (ALT + 8-ary)", fontweight='bold', pad=15, fontsize=13)
     plt.xlabel("Число рабочих потоков", fontsize=11)
     plt.ylabel("Запросы в секунду (RPS)", fontsize=11)
     plt.xticks(thread_counts)
@@ -456,6 +456,17 @@ def main():
     # 9. Multithreading scalability plot (Affinity vs No-Affinity)
     mt_csv = os.path.abspath(os.path.join(script_dir, "..", "stats", "multithreading_results.csv"))
     plot_multithreading_scalability(mt_csv, os.path.join(results_dir, 'multithreading_scalability.png'))
+    
+    # 10. Accuracy Comparison vs Route Complexity (Relative Error %)
+    if 'RelativeErrorPct' in df.columns:
+        plot_metric_vs_complexity(
+            df, x_values,
+            metric_col='RelativeErrorPct',
+            y_label='Средняя относительная погрешность (%)',
+            title='Точность поиска пути (относительная погрешность в %) в зависимости от длины маршрута',
+            save_path=os.path.join(results_dir, 'accuracy_comparison.png'),
+            log_scale=False
+        )
     
     print("\n🎉 Analysis completed! All premium scientific charts have been saved to benchmarks/traffic-core/results/\n")
  
