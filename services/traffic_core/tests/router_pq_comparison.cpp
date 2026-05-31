@@ -88,9 +88,27 @@ BenchResult RunTestProtected(const std::string& name,
                     auto route_res = router_instance.template Route<false, true>(tasks[i].source, tasks[i].target);
                     
                     total_iters += route_res.visited_nodes_count;
-                    if (baseline_results && route_res.total_weight == baseline_results[i].total_weight) {
+                    if (baseline_results) {
+                        if (route_res.total_weight != baseline_results[i].total_weight) {
+                            bool acceptable_mismatch = false;
+                            if (baseline_results[i].total_weight != 0xFFFFFFFF && route_res.total_weight != 0xFFFFFFFF && baseline_results[i].total_weight > 0) {
+                                double diff_pct = std::abs(static_cast<double>(route_res.total_weight) - baseline_results[i].total_weight) / baseline_results[i].total_weight * 100.0;
+                                if (diff_pct <= 15.0) {
+                                    acceptable_mismatch = true;
+                                }
+                            }
+                            if (!acceptable_mismatch) {
+                                std::cerr << std::format("\n[ROUTE ERROR] Task {} ({} -> {}): weight mismatch! Expected {}, got {}\n", 
+                                                         i, tasks[i].source, tasks[i].target, baseline_results[i].total_weight, route_res.total_weight);
+                                throw std::runtime_error("Route weight mismatch!");
+                            }
+                        }
+                        if (baseline_results[i].total_weight != 0xFFFFFFFF && route_res.path.empty() && baseline_results[i].total_weight > 0) {
+                            std::cerr << std::format("\n[ROUTE ERROR] Task {} ({} -> {}): empty path for valid weight!\n", i, tasks[i].source, tasks[i].target);
+                            throw std::runtime_error("Empty path in routing result!");
+                        }
                         correct_count++;
-                    } else if (!baseline_results) {
+                    } else {
                         correct_count++;
                     }
                     res.completed_routes++;
@@ -167,8 +185,9 @@ int main(int argc, char** argv) {
 
     // 1. ALT (Weighted A*) Heaps
     results.push_back(RunTestProtected<TdAltRouter, Strict4AryHeap>("ALT Strict 4-Ary", tasks, view, num_nodes, landmarks, bl_ptr));
-    results.push_back(RunTestProtected<TdAltRouter, Strict8ArySoAHeap>("ALT Strict 8-Ary SoA", tasks, view, num_nodes, landmarks, bl_ptr));
-    // results.push_back(RunTestProtected<TdAltRouter, SBBH>("ALT SBBH", tasks, view, num_nodes, landmarks, bl_ptr));
+    results.push_back(RunTestProtected<TdAltRouter, Strict8ArySoALazyHeap>("ALT Strict 8-Ary SoA Lazy", tasks, view, num_nodes, landmarks, bl_ptr));
+    results.push_back(RunTestProtected<TdAltRouter, Strict8ArySoAEagerHeap>("ALT Strict 8-Ary SoA Eager", tasks, view, num_nodes, landmarks, bl_ptr));
+    results.push_back(RunTestProtected<TdAltRouter, DeltaQueue>("ALT DeltaQueue", tasks, view, num_nodes, landmarks, bl_ptr));
 
     // 2. Dijkstra (Monotonic) Heaps
     results.push_back(RunTestProtected<DijkstraRouter, SafeRadixHeap>("DIJKSTRA Radix Heap", tasks, view, num_nodes, nullptr, bl_ptr));

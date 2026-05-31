@@ -24,7 +24,7 @@ COLORS = {
     '4-ary': '#50E3C2',        # Mint/Teal
     '8-ary': '#D0021B',        # Vibrant Red (Our Ultimate Solution)
     '16-ary': '#F5A623',       # Warm Orange
-    'sbbh': '#BD10E0',         # Purple
+    'delta': '#BD10E0',        # Purple
     'bucket': '#9013FE',       # Indigo
     'radix': '#7ED321'         # Green
 }
@@ -34,7 +34,7 @@ LINE_STYLES = {
     '4-ary': '-.',
     '8-ary': '-',
     '16-ary': ':',
-    'sbbh': '--',
+    'delta': '--',
     'bucket': '-.',
     'radix': '-'
 }
@@ -44,7 +44,7 @@ MARKERS = {
     '4-ary': 's',
     '8-ary': '^',
     '16-ary': 'D',
-    'sbbh': 'X',
+    'delta': 'X',
     'bucket': '*',
     'radix': 'p'
 }
