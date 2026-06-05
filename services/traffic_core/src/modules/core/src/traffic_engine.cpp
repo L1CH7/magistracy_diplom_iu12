@@ -348,17 +348,8 @@ void TrafficEngine::Step(float dt) {
                       mpr_requests_buffer_, reroute_tokens);
 
     if (!mpr_requests_buffer_.empty()) {
-      if constexpr (ROUTER_TRAFFIC_ENABLED) {
-        auto vol_mgr = router_manager_.get_volume_manager();
-        if (vol_mgr) {
-          for (const auto &req : mpr_requests_buffer_) {
-            auto path = route_arena_.GetRoute(req.agent_id);
-            auto etas = route_arena_.GetEtas(req.agent_id);
-            if (!path.empty())
-              vol_mgr->unbook_route(path, etas, asf_);
-          }
-        }
-      }
+      // Разбронирование старых маршрутов — только в HandleResponses,
+      // чтобы избежать double-unbook и underflow uint16_t.
       mpr_ep_->Send(mpr_requests_buffer_);
     }
   }
@@ -378,7 +369,13 @@ void TrafficEngine::Step(float dt) {
     std::uniform_int_distribution<uint32_t> edge_dist(
         0, static_cast<uint32_t>(router_manager_.num_edges()) - 1);
 
-    uint32_t respawn_quota = 1000; // Task 3: Limit respawns per tick
+    // Квота синхронизирована с пропускной способностью роутера (~4000 QPS).
+    // Формула зеркальна reroute_tokens: не превышаем целевой RPS за тик,
+    // чтобы не затапливать очередь в 357x быстрее ответов (было 1000/тик = 100k/сек).
+    float accel_for_quota = target_accel_.load();
+    if (accel_for_quota < 0.01f) accel_for_quota = 0.01f;
+    uint32_t respawn_quota = static_cast<uint32_t>(
+        std::max(1, static_cast<int>(4000.0f / (25.0f * (accel_for_quota / 10.0f)))));
     mpr_requests_buffer_.clear();  // Reuse buffer for respawn requests
 
     uint32_t i = last_respawn_idx_;
@@ -431,17 +428,8 @@ void TrafficEngine::Step(float dt) {
     last_respawn_idx_ = i;
   }
   if (!mpr_requests_buffer_.empty()) {
-    if constexpr (ROUTER_TRAFFIC_ENABLED) {
-      auto vol_mgr = router_manager_.get_volume_manager();
-      if (vol_mgr) {
-        for (const auto &req : mpr_requests_buffer_) {
-          auto path = route_arena_.GetRoute(req.agent_id);
-          auto etas = route_arena_.GetEtas(req.agent_id);
-          if (!path.empty())
-            vol_mgr->unbook_route(path, etas, asf_);
-        }
-      }
-    }
+    // Разбронирование старых маршрутов — только в HandleResponses,
+    // чтобы избежать double-unbook и underflow uint16_t.
     mpr_ep_->Send(mpr_requests_buffer_);
   }
 

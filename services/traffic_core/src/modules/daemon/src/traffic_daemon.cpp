@@ -248,26 +248,28 @@ int main(int argc, char **argv) {
                       if (osm_id <= 0)
                         continue;
 
-                      float vis_cap_agents = std::max<float>(
+                      float vis_cap = std::max<float>(
                           1.0f,
                           static_cast<float>(rm.get_edge_capacity(edge_id)));
-                      float jam_cap_agents = std::max<float>(
+                      float jam_cap = std::max<float>(
                           1.0f, static_cast<float>(
                                     rm.get_edge_physical_capacity(edge_id)));
 
-                      if (jam_cap_agents < vis_cap_agents)
-                        jam_cap_agents = vis_cap_agents + 1.0f;
+                      if (jam_cap < vis_cap)
+                        jam_cap = vis_cap + 1.0f;
+
+                      float cars_count = agents_count * static_cast<float>(asf);
 
                       float r = 0.0f;
-                      if (agents_count <= vis_cap_agents) {
+                      if (cars_count <= vis_cap) {
                         r = 0.01f;
-                      } else if (agents_count >= jam_cap_agents) {
+                      } else if (cars_count >= jam_cap) {
                         float over =
-                            (agents_count - jam_cap_agents) / jam_cap_agents;
+                            (cars_count - jam_cap) / jam_cap;
                         r = 1.0f + over;
                       } else {
-                        float denom = jam_cap_agents - vis_cap_agents;
-                        r = (agents_count - vis_cap_agents) / denom;
+                        float denom = jam_cap - vis_cap;
+                        r = (cars_count - vis_cap) / denom;
                         if (r < 0.01f)
                           r = 0.01f;
                       }
@@ -411,23 +413,25 @@ int main(int argc, char **argv) {
                       if (osm_id <= 0)
                         continue;
 
-                      float vis_cap_agents = std::max<float>(
+                      float vis_cap = std::max<float>(
                           1.0f,
                           static_cast<float>(rm.get_edge_capacity(edge_id)));
-                      float jam_cap_agents = std::max<float>(
+                      float jam_cap = std::max<float>(
                           1.0f, static_cast<float>(
                                     rm.get_edge_physical_capacity(edge_id)));
 
-                      if (jam_cap_agents < vis_cap_agents)
-                        jam_cap_agents = vis_cap_agents + 1.0f;
+                      if (jam_cap < vis_cap)
+                        jam_cap = vis_cap + 1.0f;
+
+                      float cars_count = agents_count * static_cast<float>(asf);
 
                       float r = 0.0f;
-                      if (agents_count <= vis_cap_agents) {
-                        r = agents_count / vis_cap_agents;
+                      if (cars_count <= vis_cap) {
+                        r = cars_count / vis_cap;
                       } else {
-                        float denom = jam_cap_agents - vis_cap_agents;
+                        float denom = jam_cap - vis_cap;
                         float ratio_over =
-                            (agents_count - vis_cap_agents) / denom;
+                            (cars_count - vis_cap) / denom;
                         r = 1.0f + ratio_over;
                       }
 

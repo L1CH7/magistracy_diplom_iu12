@@ -69,7 +69,7 @@ struct PhysicsContext {
     uint32_t current_vol = ctx.live_volumes[edge_id];
     uint64_t scale = static_cast<uint64_t>(ctx.k_magic[edge_id]);
 
-    // Penalty computation: scale by ASF because agents represent multiple cars
+    // Penalty computation: scale by ASF because VolumeManager books routes with weight=asf
     uint64_t scaled_vol = static_cast<uint64_t>(current_vol) * ctx.asf;
     uint32_t penalty =
         static_cast<uint32_t>((scale * scaled_vol * scaled_vol) >> 20);
@@ -149,7 +149,7 @@ public:
           lanes = 1;
       }
 
-      float queue_length_m = static_cast<float>(queue_size) *
+      float queue_length_m = static_cast<float>(queue_size * ctx.asf) *
                              static_cast<float>(TRAFFIC_CAR_LENGTH_M) /
                              static_cast<float>(lanes);
 
@@ -174,11 +174,11 @@ public:
       if (ctx.edge_attributes && ctx.live_volumes) {
         uint32_t vis_cap = ctx.edge_attributes[current_edge].visual_capacity;
         uint32_t live_vol = ctx.live_volumes[current_edge];
-        if (live_vol > vis_cap && live_vol > 0) {
-          float C_vis_agents =
-              std::max<float>(1.0f, static_cast<float>(vis_cap));
+        uint32_t live_vol_cars = live_vol * ctx.asf;
+        if (live_vol_cars > vis_cap && live_vol > 0) {
+          float C_vis_cars = std::max<float>(1.0f, static_cast<float>(vis_cap));
           v_discharge =
-              v_free_mps * (C_vis_agents / static_cast<float>(live_vol));
+              v_free_mps * (C_vis_cars / static_cast<float>(live_vol_cars));
         }
       }
       if (v_discharge < 1.3f)
@@ -309,19 +309,18 @@ public:
               ctx.live_volumes ? ctx.live_volumes[old_edge] : 0;
 
           // 1. Check if next edge is congested (even for 1 more agent)
-          if (__builtin_expect(load_next + 1 > jam_cap_next, 0)) {
+          // Always allow transition if the next edge is empty (load_next == 0)
+          uint32_t load_next_cars = load_next * ctx.asf;
+          if (load_next > 0 && __builtin_expect(load_next_cars + ctx.asf > jam_cap_next, 0)) {
             bool blocked_transition = true;
 
-            // 2. Absolute limit in agents (150%, but not less than +1 agent
-            // buffer)
-            uint32_t absolute_max_agents =
+            // 2. Absolute limit in cars (150% of physical capacity)
+            uint32_t absolute_max_cars =
                 jam_cap_next + std::max<uint32_t>(1, jam_cap_next / 2);
 
-            if (load_next + 1 <= absolute_max_agents) {
-              // 3. Pressure is calculated strictly in agents using integer
-              // cross-multiplication: load_curr / jam_cap_curr >= load_next /
-              // jam_cap_next  => load_curr * jam_cap_next >= load_next *
-              // jam_cap_curr
+            if (load_next_cars + ctx.asf <= absolute_max_cars) {
+              // 3. Pressure is calculated strictly in agents using integer cross-multiplication (asf cancels out):
+              // load_curr / jam_cap_curr >= load_next / jam_cap_next
               if (static_cast<uint64_t>(load_curr) * jam_cap_next >=
                   static_cast<uint64_t>(load_next) * jam_cap_curr) {
                 float next_len = 25.0f; // fallback
