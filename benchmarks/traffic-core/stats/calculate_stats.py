@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-df = pd.read_csv('/home/lich/dev/bmstu/diplom-iu12/magistracy-diplom-iu12/benchmarks/traffic-core/stats/run_results.csv')
+df = pd.read_csv('run_results.csv')
 df = df[df['Crashed'] == 0]
 
 print("=== Unique Algorithms and Queues ===")
@@ -39,9 +39,9 @@ for (algo, queue), group in df.groupby(['Algorithm', 'Queue']):
     })
 
 summary_df = pd.DataFrame(summary_records)
-summary_df.to_csv('/home/lich/dev/bmstu/diplom-iu12/magistracy-diplom-iu12/benchmarks/traffic-core/stats/stats_summary.csv', index=False)
+summary_df.to_csv('stats_summary.csv', index=False)
 
-with open('/home/lich/dev/bmstu/diplom-iu12/magistracy-diplom-iu12/benchmarks/traffic-core/stats/stats_summary.txt', 'w') as f:
+with open('stats_summary.txt', 'w') as f:
     f.write("=== GLOBAL BENCHMARK SUMMARY ===\n\n")
     for rec in summary_records:
         f.write(f"Algorithm: {rec['Algorithm']}, Queue: {rec['Queue']}\n")

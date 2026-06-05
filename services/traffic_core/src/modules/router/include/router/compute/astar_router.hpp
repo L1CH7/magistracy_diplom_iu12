@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include "common/graph_types.hpp"
+#include "common/geometry_store.hpp"
 #include "router/compute/priority_queue.hpp"
 #include "router/compute/advanced_pqs.hpp"
 #include "graph_builder/road_config.hpp" // For GeometryStore if needed

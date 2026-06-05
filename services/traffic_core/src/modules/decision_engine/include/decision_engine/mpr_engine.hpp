@@ -100,12 +100,8 @@ public:
 
     // === PHASE 2: Prepare reroute requests ===
     for (uint32_t idx : stuck_indices_) {
-      const bool already_waiting = (pool.is_waiting_route[idx] == 1);
-
       pool.is_waiting_route[idx] = 1;
-      if (!already_waiting) {
-        pool.route_epoch[idx]++;
-      }
+      pool.route_epoch[idx]++;
       
       last_route_request_edge_[idx] = pool.current_edge[idx];
 

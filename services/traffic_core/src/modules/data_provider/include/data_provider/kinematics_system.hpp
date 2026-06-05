@@ -282,31 +282,32 @@ public:
                     }
 
                     // --- LWR FLUID DYNAMICS SPILLBACK SYSTEM ---
-                    uint32_t agent_jam_cap_next = 1;
-                    uint32_t agent_jam_cap_curr = 1;
+                    float asf_val = (ctx.asf > 0) ? static_cast<float>(ctx.asf) : 1.0f;
+                    float agent_jam_cap_next = 1.0f;
+                    float agent_jam_cap_curr = 1.0f;
 
                     if ( ctx.edge_attributes )
                     {
-                        agent_jam_cap_next = std::max<uint32_t>( 1, ctx.edge_attributes[ next_edge ].jam_capacity / ctx.asf );
-                        agent_jam_cap_curr = std::max<uint32_t>( 1, ctx.edge_attributes[ old_edge ].jam_capacity / ctx.asf );
+                        agent_jam_cap_next = std::max<float>( 1.0f, static_cast<float>(ctx.edge_attributes[ next_edge ].jam_capacity) / asf_val );
+                        agent_jam_cap_curr = std::max<float>( 1.0f, static_cast<float>(ctx.edge_attributes[ old_edge ].jam_capacity) / asf_val );
                     }
 
-                    uint32_t load_next_agents = ctx.live_volumes ? ctx.live_volumes[ next_edge ] : 0;
-                    uint32_t load_curr_agents = ctx.live_volumes ? ctx.live_volumes[ old_edge ] : 0;
+                    float load_next_agents = ctx.live_volumes ? static_cast<float>(ctx.live_volumes[ next_edge ]) : 0.0f;
+                    float load_curr_agents = ctx.live_volumes ? static_cast<float>(ctx.live_volumes[ old_edge ]) : 0.0f;
 
                     // 1. Check if next edge is congested (even for 1 more agent)
-                    if ( __builtin_expect( load_next_agents + 1 > agent_jam_cap_next, 0 ) )
+                    if ( __builtin_expect( load_next_agents + 1.0f > agent_jam_cap_next, 0 ) )
                     {
                         bool blocked_transition = true;
                         
                         // 2. Absolute limit in agents (150%, but not less than +1 agent buffer)
-                        uint32_t absolute_max_agents = agent_jam_cap_next + std::max<uint32_t>( 1, agent_jam_cap_next / 2 );
+                        float absolute_max_agents = agent_jam_cap_next + std::max<float>( 1.0f, agent_jam_cap_next * 0.5f );
                         
-                        if ( load_next_agents + 1 <= absolute_max_agents )
+                        if ( load_next_agents + 1.0f <= absolute_max_agents )
                         {
                             // 3. Pressure is calculated strictly in agents!
-                            float pressure_curr = static_cast<float>( load_curr_agents ) / static_cast<float>( agent_jam_cap_curr );
-                            float pressure_next = static_cast<float>( load_next_agents ) / static_cast<float>( agent_jam_cap_next );
+                            float pressure_curr = load_curr_agents / agent_jam_cap_curr;
+                            float pressure_next = load_next_agents / agent_jam_cap_next;
                             
                             if ( pressure_curr >= pressure_next )
                             {
