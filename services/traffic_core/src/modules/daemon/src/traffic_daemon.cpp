@@ -241,40 +241,43 @@ int main(int argc, char **argv) {
                     entries.reserve(hm_nodes / 50);
 
                     for (uint32_t edge_id = 0; edge_id < hm_nodes; ++edge_id) {
-                      const auto sv = static_cast<uint32_t>(
-                          std::ceil(heatmap_smooth[edge_id]));
-                      if (sv == 0)
+                      float agents_count = heatmap_smooth[edge_id];
+                      if (agents_count < 0.1f)
                         continue;
                       const int64_t osm_id = rm.get_osm_id(edge_id);
                       if (osm_id <= 0)
                         continue;
 
-                      float agents_count = static_cast<float>(sv); // Real agent count on the edge
-                      float asf_val = (asf > 0) ? static_cast<float>(asf) : 1.0f;
-                      float vis_cap_agents = std::max<float>(1.0f, static_cast<float>(rm.get_edge_capacity(edge_id)) / asf_val);
-                      float jam_cap_agents = std::max<float>(1.0f, static_cast<float>(rm.get_edge_physical_capacity(edge_id)) / asf_val);
+                      float vis_cap_agents = std::max<float>(
+                          1.0f,
+                          static_cast<float>(rm.get_edge_capacity(edge_id)));
+                      float jam_cap_agents = std::max<float>(
+                          1.0f, static_cast<float>(
+                                    rm.get_edge_physical_capacity(edge_id)));
 
-                      if (jam_cap_agents < vis_cap_agents) jam_cap_agents = vis_cap_agents + 1.0f;
+                      if (jam_cap_agents < vis_cap_agents)
+                        jam_cap_agents = vis_cap_agents + 1.0f;
 
                       float r = 0.0f;
                       if (agents_count <= vis_cap_agents) {
-                          r = 0.01f;
+                        r = 0.01f;
                       } else if (agents_count >= jam_cap_agents) {
-                          float over = (agents_count - jam_cap_agents) / jam_cap_agents;
-                          r = 1.0f + over;
+                        float over =
+                            (agents_count - jam_cap_agents) / jam_cap_agents;
+                        r = 1.0f + over;
                       } else {
-                          float denom = jam_cap_agents - vis_cap_agents;
-                          r = (agents_count - vis_cap_agents) / denom;
-                          if (r < 0.01f) r = 0.01f;
+                        float denom = jam_cap_agents - vis_cap_agents;
+                        r = (agents_count - vis_cap_agents) / denom;
+                        if (r < 0.01f)
+                          r = 0.01f;
                       }
 
                       uint16_t true_cap = 1000;
-                      uint16_t send_vol = static_cast<uint16_t>(std::min<float>(std::max<float>(r * 1000.0f, 0.0f), 65535.0f));
+                      uint16_t send_vol = static_cast<uint16_t>(std::min<float>(
+                          std::max<float>(r * 1000.0f, 0.0f), 65535.0f));
 
                       entries.push_back(common::net::HeatmapEntry{
-                          static_cast<uint64_t>(osm_id),
-                          send_vol,
-                          true_cap});
+                          static_cast<uint64_t>(osm_id), send_vol, true_cap});
                     }
                     if (!entries.empty()) {
                       LOG_INFO("Heatmap: {} entries, peak_smooth_agents={:.2f}",
@@ -401,37 +404,39 @@ int main(int argc, char **argv) {
 
                     for (uint32_t edge_id = 0; edge_id < hm_nodes_r;
                          ++edge_id) {
-                      const auto sv = static_cast<uint32_t>(
-                          std::ceil(heatmap_smooth_r[edge_id]));
-                      if (sv == 0)
+                      float agents_count = heatmap_smooth_r[edge_id];
+                      if (agents_count < 0.1f)
                         continue;
                       const int64_t osm_id = rm.get_osm_id(edge_id);
                       if (osm_id <= 0)
                         continue;
 
-                      float agents_count = static_cast<float>(sv); // Real agent count on the edge
-                      float asf_val = (asf > 0) ? static_cast<float>(asf) : 1.0f;
-                      float vis_cap_agents = std::max<float>(1.0f, static_cast<float>(rm.get_edge_capacity(edge_id)) / asf_val);
-                      float jam_cap_agents = std::max<float>(1.0f, static_cast<float>(rm.get_edge_physical_capacity(edge_id)) / asf_val);
+                      float vis_cap_agents = std::max<float>(
+                          1.0f,
+                          static_cast<float>(rm.get_edge_capacity(edge_id)));
+                      float jam_cap_agents = std::max<float>(
+                          1.0f, static_cast<float>(
+                                    rm.get_edge_physical_capacity(edge_id)));
 
-                      if (jam_cap_agents < vis_cap_agents) jam_cap_agents = vis_cap_agents + 1.0f;
+                      if (jam_cap_agents < vis_cap_agents)
+                        jam_cap_agents = vis_cap_agents + 1.0f;
 
                       float r = 0.0f;
                       if (agents_count <= vis_cap_agents) {
-                          r = agents_count / vis_cap_agents;
+                        r = agents_count / vis_cap_agents;
                       } else {
-                          float denom = jam_cap_agents - vis_cap_agents;
-                          float ratio_over = (agents_count - vis_cap_agents) / denom;
-                          r = 1.0f + ratio_over;
+                        float denom = jam_cap_agents - vis_cap_agents;
+                        float ratio_over =
+                            (agents_count - vis_cap_agents) / denom;
+                        r = 1.0f + ratio_over;
                       }
 
                       uint16_t true_cap = 1000;
-                      uint16_t send_vol = static_cast<uint16_t>(std::min<float>(std::max<float>(r * 1000.0f, 0.0f), 65535.0f));
+                      uint16_t send_vol = static_cast<uint16_t>(std::min<float>(
+                          std::max<float>(r * 1000.0f, 0.0f), 65535.0f));
 
                       entries.push_back(common::net::HeatmapEntry{
-                          static_cast<uint64_t>(osm_id),
-                          send_vol,
-                          true_cap});
+                          static_cast<uint64_t>(osm_id), send_vol, true_cap});
                     }
                     if (!entries.empty()) {
                       LOG_INFO("Heatmap(R): {} entries, peak_agents={:.2f}",
@@ -482,13 +487,16 @@ int main(int argc, char **argv) {
         json << "\"active_agents\":" << engine.GetActiveAgents() << ",";
         json << "\"agents_driving\":" << engine.GetDrivingAgents() << ",";
         json << "\"agents_rerouting\":" << engine.GetReroutingAgents() << ",";
-        json << "\"agents_waiting_spawn\":" << engine.GetWaitingSpawnAgents() << ",";
+        json << "\"agents_waiting_spawn\":" << engine.GetWaitingSpawnAgents()
+             << ",";
         json << "\"agents_idle\":" << engine.GetIdleAgents() << ",";
         json << "\"total_spawns\":" << engine.GetTotalSpawns() << ",";
         json << "\"reroutes\":" << engine.GetTotalReroutes() << ",";
         json << "\"routes_computed\":" << engine.GetRoutesComputed() << ",";
-        json << "\"routes_successful\":" << engine.GetTotalSuccessfulRoutes() << ",";
-        json << "\"routes_discarded\":" << engine.GetTotalDiscardedRoutes() << ",";
+        json << "\"routes_successful\":" << engine.GetTotalSuccessfulRoutes()
+             << ",";
+        json << "\"routes_discarded\":" << engine.GetTotalDiscardedRoutes()
+             << ",";
         json << "\"routes_stale\":" << engine.GetTotalStaleRoutes() << ",";
         json << "\"routes_completed\":" << engine.GetTotalCompletedRoutes()
              << ",";
@@ -500,20 +508,28 @@ int main(int argc, char **argv) {
         json << "\"asf\":" << engine.GetASF() << ",";
         json << "\"num_buckets\":" << TRAFFIC_NUM_BUCKETS << ",";
         json << "\"slot_sec\":" << TRAFFIC_SLOT_SEC << ",";
-        json << "\"bpr_enabled\":" << (engine.IsBPREnabled() ? "true" : "false") << ",";
-        json << "\"profiling_enabled\":" << (engine.IsProfilingEnabled() ? "true" : "false") << ",";
+        json << "\"bpr_enabled\":" << (engine.IsBPREnabled() ? "true" : "false")
+             << ",";
+        json << "\"profiling_enabled\":"
+             << (engine.IsProfilingEnabled() ? "true" : "false") << ",";
         uint64_t profile_count = engine.GetProfiledRoutesCount();
         double visited_nodes_avg = 0.0;
         double route_cycles_avg = 0.0;
         if (profile_count > 0) {
-            visited_nodes_avg = static_cast<double>(engine.GetTotalVisitedNodes()) / profile_count;
-            route_cycles_avg = static_cast<double>(engine.GetTotalRouteCycles()) / profile_count;
-            engine.ResetProfileCounters();
+          visited_nodes_avg =
+              static_cast<double>(engine.GetTotalVisitedNodes()) /
+              profile_count;
+          route_cycles_avg =
+              static_cast<double>(engine.GetTotalRouteCycles()) / profile_count;
+          engine.ResetProfileCounters();
         }
         uint32_t route_time_max = engine.GetRouteTimeMaxUs();
         uint64_t route_time_sum = engine.GetRouteTimeSumUs();
         uint64_t route_time_cnt = engine.GetRouteTimeCount();
-        double route_time_avg = (route_time_cnt > 0) ? (static_cast<double>(route_time_sum) / route_time_cnt) : 0.0;
+        double route_time_avg =
+            (route_time_cnt > 0)
+                ? (static_cast<double>(route_time_sum) / route_time_cnt)
+                : 0.0;
         uint64_t router_wait_time = engine.GetRouterWaitTimeUs();
 
         // Reset counters for interval-based tracking in next poll

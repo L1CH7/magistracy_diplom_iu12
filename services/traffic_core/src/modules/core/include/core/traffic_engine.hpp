@@ -78,7 +78,13 @@ public:
     float GetTTI() const
     {
         uint64_t cnt = tti_count_.load( std::memory_order_relaxed );
-        return ( cnt > 0 ) ? static_cast<float>( tti_sum_ / static_cast<double>( cnt ) ) : 0.0f;
+        if( cnt > 0 )
+        {
+            float tti = static_cast<float>( tti_sum_ / static_cast<double>( cnt ) );
+            last_valid_tti_ = tti;
+            return tti;
+        }
+        return last_valid_tti_;
     }
     uint64_t GetTTISampleCount() const { return tti_count_.load(); }
     float GetCurrentSimTime() const { return current_sim_time_; }
@@ -165,6 +171,7 @@ private:
     // read from daemon thread only during STATS command (rare, acceptable torn read for diagnostics)
     std::atomic< uint64_t > tti_count_{ 0 };
     double                  tti_sum_{ 0.0 };
+    mutable float           last_valid_tti_{ 1.0f };
 
     // Per-agent free-flow trip cost (set on first successful route, used on trip completion for TTI)
     std::vector< float > trip_free_flow_sec_;
