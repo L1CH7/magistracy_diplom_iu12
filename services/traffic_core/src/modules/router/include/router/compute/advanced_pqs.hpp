@@ -10,6 +10,57 @@
 
 namespace traffic::router::compute {
 
+namespace details {
+    /**
+     * @brief АКАДЕМИЧЕСКАЯ СПРАВКА: Key-Index Packing для SIMD-оптимизации многоарных куч.
+     * 
+     * В классических многоарных (d-ary) кучах операция извлечения минимума (pop) требует поиска 
+     * минимального потомка среди d кандидатов. При использовании SIMD-инструкций (SSE/AVX2) 
+     * поиск минимального значения выполняется за O(log d) векторных шагов, однако нахождение его 
+     * индекса (позиции) требует выполнения ресурсоемких инструкций:
+     *   1) Векторного сравнения на равенство (_mm256_cmpeq_epi32)
+     *   2) Получения битовой маски (_mm256_movemask_ps)
+     *   3) Сканирования битов (__builtin_ctz / tzcnt)
+     * 
+     * Эти операции создают длинную цепочку зависимостей по данным (data dependency chain) длиной 
+     * 18-20 тактов CPU, что блокирует конвейер Out-of-Order Execution и мешает спекулятивной загрузке 
+     * потомков на следующем уровне (Pointer Chasing).
+     * 
+     * Данный шаблон KeyIndexPacking реализует упаковку относительного индекса (0..Arity-1) в младшие 
+     * биты ключа (PathWeight). Сдвиг реального веса влево на Shift бит:
+     *   - Для 4-арной кучи: сдвиг на 2 бита (маска 3)
+     *   - Для 8-арной кучи: сдвиг на 3 бита (маска 7)
+     *   - Для 16-арной кучи: сдвиг на 4 бита (маска 15)
+     * 
+     * Поскольку индекс первого потомка для родителя p равен (Arity * p + 1), младшие биты абсолютного 
+     * индекса любого потомка idx автоматически соответствуют его относительной позиции [0..Arity-1] 
+     * в векторном регистре. При поиске минимума редукция возвращает упакованное значение, из которого 
+     * вес и индекс извлекаются за 0 тактов (через сдвиг и маску), полностью исключая cmpeq/movemask/ctz 
+     * из критического пути выполнения.
+     */
+    template<uint32_t Arity>
+    struct KeyIndexPacking {
+        static constexpr uint32_t Shift = (Arity == 4) ? 2 : ((Arity == 8) ? 3 : 4);
+        static constexpr uint32_t Mask = Arity - 1;
+        
+        static inline traffic::PathWeight encode(traffic::PathWeight w, uint32_t idx) noexcept {
+            return (w << Shift) | (idx ? ((idx - 1) & Mask) : 0);
+        }
+        
+        static inline traffic::PathWeight decode_weight(traffic::PathWeight ew) noexcept {
+            return ew >> Shift;
+        }
+        
+        static inline uint32_t decode_index(traffic::PathWeight ew) noexcept {
+            return ew & Mask;
+        }
+        
+        static inline traffic::PathWeight update_index(traffic::PathWeight ew, uint32_t idx) noexcept {
+            return (ew & ~Mask) | (idx ? ((idx - 1) & Mask) : 0);
+        }
+    };
+}
+
 /**
  * @brief EXTREME HFT STRICT 8-ARY SoA HEAP
  */
@@ -42,17 +93,23 @@ public:
     }
     inline void push(traffic::PQElement el) noexcept {
         uint32_t idx = size_++;
+        traffic::PathWeight ew = el.weight << 3;
         while (idx > 0) {
             uint32_t p = (idx - 1) >> 3;
-            if (weights_[p] <= el.weight) break;
-            weights_[idx] = weights_[p]; elements_[idx] = elements_[p]; idx = p;
+            if ((weights_[p] >> 3) <= el.weight) break;
+            weights_[idx] = (weights_[p] & ~7) | ((idx - 1) & 7);
+            elements_[idx] = elements_[p];
+            idx = p;
         }
-        weights_[idx] = el.weight; elements_[idx] = el;
+        weights_[idx] = ew | (idx ? ((idx - 1) & 7) : 0);
+        elements_[idx] = el;
     }
     inline traffic::PQElement pop() noexcept {
         traffic::PQElement top = elements_[0];
         if (__builtin_expect(--size_ == 0, 0)) { weights_[0] = 0xFFFFFFFF; return top; }
-        traffic::PathWeight lw = weights_[size_]; traffic::PQElement le = elements_[size_]; weights_[size_] = 0xFFFFFFFF;
+        traffic::PathWeight lw = weights_[size_] >> 3; 
+        traffic::PQElement le = elements_[size_]; 
+        weights_[size_] = 0xFFFFFFFF;
         uint32_t idx = 0;
         while (true) {
             uint32_t first = (idx << 3) + 1;
@@ -63,14 +120,20 @@ public:
             __m256i m1 = _mm256_min_epu32(v, p1);
             __m256i m2 = _mm256_min_epu32(m1, _mm256_shuffle_epi32(m1, _MM_SHUFFLE(1, 0, 3, 2)));
             __m256i m3 = _mm256_min_epu32(m2, _mm256_shuffle_epi32(m2, _MM_SHUFFLE(2, 3, 0, 1)));
-            traffic::PathWeight min_w = _mm256_extract_epi32(m3, 0);
+            uint32_t min_combined = _mm256_extract_epi32(m3, 0);
+            
+            uint32_t min_w = min_combined >> 3;
             if (lw <= min_w) break;
-            uint32_t mask = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(v, _mm256_set1_epi32(min_w))));
-            uint32_t min_idx = first + __builtin_ctz(mask);
+            
+            uint32_t local_idx = min_combined & 7;
+            uint32_t min_idx = first + local_idx;
             _mm_prefetch(reinterpret_cast<const char*>(&weights_[(min_idx << 3) + 1]), _MM_HINT_T0);
-            weights_[idx] = weights_[min_idx]; elements_[idx] = elements_[min_idx]; idx = min_idx;
+            weights_[idx] = (weights_[min_idx] & ~7) | (idx ? ((idx - 1) & 7) : 0);
+            elements_[idx] = elements_[min_idx];
+            idx = min_idx;
         }
-        weights_[idx] = lw; elements_[idx] = le;
+        weights_[idx] = (lw << 3) | (idx ? ((idx - 1) & 7) : 0);
+        elements_[idx] = le;
         return top;
     }
     [[nodiscard]] inline bool empty() const noexcept { return size_ == 0; }
@@ -246,22 +309,23 @@ public:
     }
     inline void push(traffic::PQElement el) noexcept {
         uint32_t idx = size_++;
+        traffic::PathWeight ew = el.weight << 3;
         while (idx > 0) {
             uint32_t p = (idx - 1) >> 3;
-            if (weights_[p] <= el.weight) break;
-            weights_[idx] = weights_[p]; elements_[idx] = elements_[p]; idx = p;
+            if ((weights_[p] >> 3) <= el.weight) break;
+            weights_[idx] = (weights_[p] & ~7) | ((idx - 1) & 7);
+            elements_[idx] = elements_[p];
+            idx = p;
         }
-        weights_[idx] = el.weight; elements_[idx] = el;
+        weights_[idx] = ew | (idx ? ((idx - 1) & 7) : 0);
+        elements_[idx] = el;
     }
     inline traffic::PQElement pop() noexcept {
         traffic::PQElement top = elements_[0];
         if (__builtin_expect(--size_ == 0, 0)) { return top; }
-        traffic::PathWeight lw = weights_[size_]; traffic::PQElement le = elements_[size_];
+        traffic::PathWeight lw = weights_[size_] >> 3; 
+        traffic::PQElement le = elements_[size_];
         uint32_t idx = 0;
-        
-        const __m256i v_offsets = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
-        const __m256i inf = _mm256_set1_epi32(0xFFFFFFFF);
-        const __m256i v_size = _mm256_set1_epi32(size_);
         
         while (true) {
             uint32_t first = (idx << 3) + 1;
@@ -269,24 +333,34 @@ public:
             
             __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&weights_[first]));
             
-            // Векторное маскирование невалидных потомков на лету
-            __m256i v_first = _mm256_set1_epi32(first);
-            __m256i v_indices = _mm256_add_epi32(v_first, v_offsets);
-            __m256i mask = _mm256_cmpgt_epi32(v_size, v_indices); // mask = 0xFFFFFFFF where index < size_
-            v = _mm256_blendv_epi8(inf, v, mask);
+            if (first + 8 > size_) {
+                const __m256i v_offsets = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+                const __m256i inf = _mm256_set1_epi32(0xFFFFFFFF);
+                const __m256i v_size = _mm256_set1_epi32(size_);
+                __m256i v_first = _mm256_set1_epi32(first);
+                __m256i v_indices = _mm256_add_epi32(v_first, v_offsets);
+                __m256i mask = _mm256_cmpgt_epi32(v_size, v_indices);
+                v = _mm256_blendv_epi8(inf, v, mask);
+            }
             
             __m256i p1 = _mm256_permute2x128_si256(v, v, 1);
             __m256i m1 = _mm256_min_epu32(v, p1);
             __m256i m2 = _mm256_min_epu32(m1, _mm256_shuffle_epi32(m1, _MM_SHUFFLE(1, 0, 3, 2)));
             __m256i m3 = _mm256_min_epu32(m2, _mm256_shuffle_epi32(m2, _MM_SHUFFLE(2, 3, 0, 1)));
-            traffic::PathWeight min_w = _mm256_extract_epi32(m3, 0);
+            uint32_t min_combined = _mm256_extract_epi32(m3, 0);
+            
+            uint32_t min_w = min_combined >> 3;
             if (lw <= min_w) break;
-            uint32_t match_mask = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(v, _mm256_set1_epi32(min_w))));
-            uint32_t min_idx = first + __builtin_ctz(match_mask);
+            
+            uint32_t local_idx = min_combined & 7;
+            uint32_t min_idx = first + local_idx;
             _mm_prefetch(reinterpret_cast<const char*>(&weights_[(min_idx << 3) + 1]), _MM_HINT_T0);
-            weights_[idx] = weights_[min_idx]; elements_[idx] = elements_[min_idx]; idx = min_idx;
+            weights_[idx] = (weights_[min_idx] & ~7) | (idx ? ((idx - 1) & 7) : 0);
+            elements_[idx] = elements_[min_idx];
+            idx = min_idx;
         }
-        weights_[idx] = lw; elements_[idx] = le;
+        weights_[idx] = (lw << 3) | (idx ? ((idx - 1) & 7) : 0);
+        elements_[idx] = le;
         return top;
     }
     [[nodiscard]] inline bool empty() const noexcept { return size_ == 0; }
@@ -519,7 +593,7 @@ public:
     bool empty() const { return sz_ == 0; }
     void reserve(size_t) {} 
     void clear() { 
-        if (sz_ > 0 && mw_ != 0xFFFFFFFF && max_w_ != 0) {
+        if (sz_ > 0 && mw_ != 0xFFFFFFFF) {
             uint32_t start_idx = (mw_ >> S) & 8191;
             uint32_t end_idx = (max_w_ >> S) & 8191;
             if (end_idx >= start_idx) {
@@ -592,7 +666,7 @@ public:
     inline void reserve(size_t) noexcept {} 
     
     inline void clear() noexcept { 
-        if (sz_ > 0 && mw_ != 0xFFFFFFFF && max_w_ != 0) {
+        if (sz_ > 0 && mw_ != 0xFFFFFFFF) {
             uint32_t start_idx = (mw_ >> S) & MASK;
             uint32_t end_idx = (max_w_ >> S) & MASK;
             if (end_idx >= start_idx) {

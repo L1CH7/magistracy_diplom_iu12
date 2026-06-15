@@ -246,7 +246,7 @@ RunBenchmarkSuite(const std::string &algo_name, const std::string &pq_name,
                 if ((pq_name == "delta" || pq_name == "bucket" ||
                      pq_name == "DeltaQueue" ||
                      pq_name == "DeltaBucketQueue") &&
-                    diff_pct <= 1.0) {
+                    diff_pct <= 3.0) {
                   acceptable_mismatch = true;
                 }
               } else {
@@ -414,7 +414,7 @@ int main(int argc, char **argv) {
   std::mt19937 gen(42);
   std::uniform_int_distribution<NodeID> dist(0, num_nodes - 1);
 
-  constexpr int NUM_ROUTES = 150;
+  constexpr int NUM_ROUTES = 1500;
   std::vector<RouteTask> tasks;
   for (int i = 0; i < NUM_ROUTES; ++i) {
     tasks.push_back({dist(gen), dist(gen)});

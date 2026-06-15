@@ -37,6 +37,7 @@ private:
  */
 struct HotNodeState {
     traffic::PathWeight g_score  = traffic::INF_WEIGHT;
+    traffic::PathWeight h_score  = 0;
     traffic::PointCount visit_id = 0;
 };
 
@@ -90,10 +91,6 @@ public:
         
         current_visit_id_++;
         
-        hot_states_[source].g_score = 0;
-        hot_states_[source].visit_id = current_visit_id_;
-        cold_parents_[source] = traffic::INVALID_NODE;
-        
         traffic::PathWeight h_source = 0;
         if (target_l_ptr) {
             h_source = alt.get_heuristic_avx2(
@@ -104,6 +101,11 @@ public:
             h_source = (h_source * WA_STAR_NUM) / WA_STAR_DEN;
         }
 
+        hot_states_[source].g_score = 0;
+        hot_states_[source].h_score = h_source;
+        hot_states_[source].visit_id = current_visit_id_;
+        cold_parents_[source] = traffic::INVALID_NODE;
+        
         pq_.clear();
         pq_.push({h_source, source});
 
@@ -116,15 +118,7 @@ public:
             // if (u == target) break;
 
             traffic::PathWeight g_u = hot_states_[u].g_score;
-            traffic::PathWeight h_u = 0;
-            if (target_l_ptr) {
-                h_u = alt.get_heuristic_avx2(
-                    reinterpret_cast<const uint16_t*>(landmarks + (u * TRAFFIC_TOTAL_LANDMARKS * VALUES_PER_LANDMARK)), 
-                    target_l0, 
-                    target_l1
-                );
-                h_u = (h_u * WA_STAR_NUM) / WA_STAR_DEN;
-            }
+            traffic::PathWeight h_u = hot_states_[u].h_score;
             if (f_curr > g_u + h_u) continue;
 
             _mm_prefetch(reinterpret_cast<const char*>(&view_.row_ptr[u + 1]), _MM_HINT_T0);
@@ -158,10 +152,6 @@ public:
 
                 traffic::PathWeight new_g = g_u + w;
                 if (hot_states_[v].visit_id != current_visit_id_ || new_g < hot_states_[v].g_score) {
-                    hot_states_[v].g_score = new_g;
-                    hot_states_[v].visit_id = current_visit_id_;
-                    cold_parents_[v] = u;
-
                     traffic::PathWeight h_v = 0;
                     if (target_l_ptr) {
                         h_v = alt.get_heuristic_avx2(
@@ -171,6 +161,10 @@ public:
                         );
                         h_v = (h_v * WA_STAR_NUM) / WA_STAR_DEN;
                     }
+                    hot_states_[v].g_score = new_g;
+                    hot_states_[v].h_score = h_v;
+                    hot_states_[v].visit_id = current_visit_id_;
+                    cold_parents_[v] = u;
                     pq_.push({new_g + h_v, v});
                 }
             }

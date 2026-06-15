@@ -9,6 +9,7 @@
 #include "router/compute/priority_queue.hpp"
 #include "router/compute/advanced_pqs.hpp"
 #include "graph_builder/road_config.hpp" // For GeometryStore if needed
+#include "common/geometry_store.hpp"
 #include <x86intrin.h>
 
 namespace traffic::router::compute {
@@ -52,13 +53,13 @@ public:
         uint32_t pop_count = 0;
         current_visit_id_++;
         
+        traffic::PathWeight h_source = GetHeuristic(source, target);
         hot_states_[source].g_score = 0;
+        hot_states_[source].h_score = h_source;
         hot_states_[source].visit_id = current_visit_id_;
         cold_parents_[source] = traffic::INVALID_NODE;
         
         pq_.clear();
-        
-        traffic::PathWeight h_source = GetHeuristic(source, target);
         pq_.push({h_source, source});
 
         while (!pq_.empty()) {
@@ -68,7 +69,7 @@ public:
             if (u == target) break;
             
             traffic::PathWeight g_u = hot_states_[u].g_score;
-            traffic::PathWeight h_u = GetHeuristic(u, target);
+            traffic::PathWeight h_u = hot_states_[u].h_score;
             if (f_curr > g_u + h_u) continue;
 
             _mm_prefetch(reinterpret_cast<const char*>(&view_.row_ptr[u + 1]), _MM_HINT_T0);
@@ -79,11 +80,11 @@ public:
 
                 traffic::PathWeight new_g = g_u + w;
                 if (hot_states_[v].visit_id != current_visit_id_ || new_g < hot_states_[v].g_score) {
+                    traffic::PathWeight h_v = GetHeuristic(v, target);
                     hot_states_[v].g_score = new_g;
+                    hot_states_[v].h_score = h_v;
                     hot_states_[v].visit_id = current_visit_id_;
                     cold_parents_[v] = u;
-                    
-                    traffic::PathWeight h_v = GetHeuristic(v, target);
                     pq_.push({new_g + h_v, v});
                 }
             }
@@ -118,7 +119,7 @@ private:
         
         // We use dynamic casting or manual offset because common::GeometryStore is a C++ type
         // Let's assume it's common::GeometryStore
-        const auto* gs = static_cast<const common::GeometryStore*>(geom_store_);
+        const auto* gs = static_cast<const traffic::common::GeometryStore*>(geom_store_);
         auto geom_u = gs->get_geometry(u);
         auto geom_t = gs->get_geometry(target);
         if (geom_u.points.empty() || geom_t.points.empty()) return 0;
@@ -138,6 +139,7 @@ private:
 
     struct HotNodeState {
         traffic::PathWeight g_score  = traffic::INF_WEIGHT;
+        traffic::PathWeight h_score  = 0;
         traffic::PointCount visit_id = 0;
     };
     traffic::GraphView view_;
