@@ -32,7 +32,8 @@ def pearson_correlation(x, y):
 def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
                     router_rps, router_load, active_agents, waiting_reroute,
                     green_zones, visited_nodes, route_cycles,
-                    waiting_spawn=None, route_time_max=None, route_time_avg=None, router_wait_time=None):
+                    waiting_spawn=None, route_time_max=None, route_time_avg=None, router_wait_time=None,
+                    completed_trips=None):
     """Generate high-quality multi-panel scientific dashboard using matplotlib."""
     try:
         import matplotlib
@@ -105,14 +106,25 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     axs[1, 1].grid(True, linestyle=':', alpha=0.6)
     axs[1, 1].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
 
-    # 5. Free-Flow Roads (Green Zones) - separate plot so they don't blot out other zones
-    axs[2, 0].plot(sim_time, green_zones, color='#2ca02c', linewidth=2.0, label='Зеленые зоны (Свободно < 0.3x)')
-    axs[2, 0].set_title("Свободные дороги дорожной сети", fontsize=12, fontweight='bold')
-    axs[2, 0].set_xlabel("Время симуляции (сек)", fontsize=10)
-    axs[2, 0].set_ylabel("Количество ребер", fontsize=10)
-    axs[2, 0].grid(True, linestyle=':', alpha=0.6)
-    axs[2, 0].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
-
+    # 5. Free-Flow Roads (Green Zones) and Completed Trips
+    ax5_left = axs[2, 0]
+    ax5_right = ax5_left.twinx()
+    
+    line1_ax5 = ax5_left.plot(sim_time, green_zones, color='#2ca02c', linewidth=2.0, label='Зеленые зоны (Свободно < 0.3x)')
+    if completed_trips is not None and any(completed_trips):
+        line2_ax5 = ax5_right.plot(sim_time, completed_trips, color='#1f77b4', linewidth=2.0, linestyle='--', label='Накопленные поездки')
+        ax5_right.set_ylabel("Завершенные поездки (ед.)", fontsize=10)
+        lines_ax5 = line1_ax5 + line2_ax5
+    else:
+        lines_ax5 = line1_ax5
+        
+    ax5_left.set_title("Свободные дороги и Завершенные Поездки", fontsize=12, fontweight='bold')
+    ax5_left.set_xlabel("Время симуляции (сек)", fontsize=10)
+    ax5_left.set_ylabel("Количество ребер (Зеленые зоны)", fontsize=10)
+    ax5_left.grid(True, linestyle=':', alpha=0.6)
+    
+    labels_ax5 = [l.get_label() for l in lines_ax5]
+    ax5_left.legend(lines_ax5, labels_ax5, loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     # 6. A* Search Space & CPU Cycles / Wall-clock times (Double Y-Axis)
     ax6_left = axs[2, 1]
     ax6_right = ax6_left.twinx()
@@ -313,7 +325,8 @@ def analyze_latest():
     plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
                     router_rps, router_load, active_agents, waiting_reroute,
                     green_zones, visited_nodes, route_cycles,
-                    waiting_spawn, route_time_max, route_time_avg, router_wait_time)
+                    waiting_spawn, route_time_max, route_time_avg, router_wait_time,
+                    completed_trips)
     
     print(f"{C_GREEN}Анализ завершен успешно! Данные готовы для использования в научной работе.{C_RESET}")
 

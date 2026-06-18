@@ -146,7 +146,9 @@ public:
                     uint64_t pen_1 = scale * v1 * v1;
                     uint64_t pen_2 = scale * v2 * v2;
 
-                    uint32_t dynamic_penalty = static_cast<uint32_t>((pen_1 + ((pen_2 - pen_1) * local_sec) / traffic::router::compute::BUCKET_INTERVAL_SEC) >> 20);
+                    int64_t diff = static_cast<int64_t>(pen_2) - static_cast<int64_t>(pen_1);
+                    int64_t delta = (diff * local_sec) / traffic::router::compute::BUCKET_INTERVAL_SEC;
+                    uint32_t dynamic_penalty = static_cast<uint32_t>((static_cast<int64_t>(pen_1) + delta) >> 20);
                     
                     // (Аномальные пробки - это не норма)
                     // if (__builtin_expect(dynamic_penalty > static_cast<uint32_t>(w) * 10, 0)) {

@@ -80,7 +80,7 @@ public:
         uint64_t cnt = tti_count_.load( std::memory_order_relaxed );
         if( cnt > 0 )
         {
-            float tti = static_cast<float>( tti_sum_ / static_cast<double>( cnt ) );
+            float tti = static_cast<float>( tti_sum_.load(std::memory_order_relaxed) / static_cast<double>( cnt ) );
             last_valid_tti_ = tti;
             return tti;
         }
@@ -109,7 +109,7 @@ public:
 
     void ResetTTICounters()
     {
-        tti_sum_ = 0.0;
+        tti_sum_.store( 0.0, std::memory_order_relaxed );
         tti_count_.store( 0, std::memory_order_relaxed );
     }
 
@@ -170,7 +170,7 @@ private:
     // TTI accumulators — written only from the engine step thread (no data race),
     // read from daemon thread only during STATS command (rare, acceptable torn read for diagnostics)
     std::atomic< uint64_t > tti_count_{ 0 };
-    double                  tti_sum_{ 0.0 };
+    std::atomic< double >   tti_sum_{ 0.0 };
     mutable float           last_valid_tti_{ 1.0f };
 
     // Per-agent free-flow trip cost (set on first successful route, used on trip completion for TTI)

@@ -304,7 +304,7 @@ void TrafficEngine::Step(float dt) {
     ctx.completed_agents_out = &completed_agents_buf;
 
     kin_system_.AdvanceKinematics(actual_dt, ctx);
-    total_completed_routes_ += kin_system_.ProcessTransitions(ctx);
+    total_completed_routes_ += kin_system_.ProcessTransitions(ctx, dt);
     current_sim_time_ += actual_dt;
 
     // Process completed agents for TTI calculation
@@ -324,9 +324,7 @@ void TrafficEngine::Step(float dt) {
 
       if (local_tti_count > 0) {
         tti_count_.fetch_add(local_tti_count, std::memory_order_relaxed);
-        // Simple non-atomic sum since this is the only writer thread (engine
-        // step)
-        tti_sum_ += local_tti_sum;
+        tti_sum_.fetch_add(local_tti_sum, std::memory_order_relaxed);
       }
       completed_agents_buf.clear();
     }
@@ -340,8 +338,10 @@ void TrafficEngine::Step(float dt) {
     // ticks_per_real_sec = 25.0f * (accel / 10.0f);
     // tokens_this_tick = 4000 / ticks_per_real_sec;
     float accel = target_accel_.load();
-    int reroute_tokens =
-        std::max(1, static_cast<int>(4000.0f / (25.0f * (accel / 10.0f))));
+    int reroute_tokens = std::max(
+        1, static_cast<int>(
+               static_cast<float>(TRAFFIC_ROUTER_MAX_QPS) /
+               (static_cast<float>(TRAFFIC_BASE_FPS) * (accel / 10.0f))));
 
     mpr_requests_buffer_.clear();
     mpr_engine_->Tick(last_mpr_tick_sim_sec_, agent_pool_, route_arena_,
@@ -371,12 +371,16 @@ void TrafficEngine::Step(float dt) {
 
     // Квота синхронизирована с пропускной способностью роутера (~4000 QPS).
     // Формула зеркальна reroute_tokens: не превышаем целевой RPS за тик,
-    // чтобы не затапливать очередь в 357x быстрее ответов (было 1000/тик = 100k/сек).
+    // чтобы не затапливать очередь в 357x быстрее ответов (было 1000/тик =
+    // 100k/сек).
     float accel_for_quota = target_accel_.load();
-    if (accel_for_quota < 0.01f) accel_for_quota = 0.01f;
-    uint32_t respawn_quota = static_cast<uint32_t>(
-        std::max(1, static_cast<int>(4000.0f / (25.0f * (accel_for_quota / 10.0f)))));
-    mpr_requests_buffer_.clear();  // Reuse buffer for respawn requests
+    if (accel_for_quota < 0.01f)
+      accel_for_quota = 0.01f;
+    uint32_t respawn_quota = static_cast<uint32_t>(std::max(
+        1, static_cast<int>(static_cast<float>(TRAFFIC_ROUTER_MAX_QPS) /
+                            (static_cast<float>(TRAFFIC_BASE_FPS) *
+                             (accel_for_quota / 10.0f)))));
+    mpr_requests_buffer_.clear(); // Reuse buffer for respawn requests
 
     uint32_t i = last_respawn_idx_;
     for (uint32_t count = 0; count < num_agents_ && respawn_quota > 0;

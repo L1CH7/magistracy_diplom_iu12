@@ -41,50 +41,6 @@ struct PhysicsContext {
   std::vector<uint32_t> *completed_agents_out = nullptr;
 };
 
-/**
- * @brief Computes the effective velocity for an agent entering an edge.
- * Mirrors the BPR logic in TdAltRouter hot-path exactly.
- * Called ONCE at edge entry, not every tick.
- * @param edge_id  The edge the agent is entering.
- * @param ctx      Physics context (buckets, k_magic, static weights, lengths).
- * @param length_m Physical length of the edge in meters.
- * @return Effective velocity in m/s.
- */
-[[nodiscard]] inline float ComputeEdgeEntrySpeed(traffic::EdgeID edge_id,
-                                                 const PhysicsContext &ctx,
-                                                 float length_m) noexcept {
-  if (length_m < 0.1f)
-    length_m = 0.1f;
-
-  // w = static free-flow weight in seconds.
-  // Matches TdAltRouter: the CSR `w` IS the free-flow travel time.
-  float w = (ctx.static_weights)
-                ? static_cast<float>(ctx.static_weights[edge_id])
-                : (length_m / 15.0f); // fallback: assume 15 m/s free-flow
-
-  if (w < 0.001f)
-    w = 0.001f; // guard zero-weight edges
-
-  if (ctx.live_volumes && ctx.k_magic) {
-    uint32_t current_vol = ctx.live_volumes[edge_id];
-    uint64_t scale = static_cast<uint64_t>(ctx.k_magic[edge_id]);
-
-    // Penalty computation: scale by ASF because VolumeManager books routes with weight=asf
-    uint64_t scaled_vol = static_cast<uint64_t>(current_vol) * ctx.asf;
-    uint32_t penalty =
-        static_cast<uint32_t>((scale * scaled_vol * scaled_vol) >> 20);
-
-    // Cap at 10x free-flow, same as TdAltRouter
-    // Use float to avoid zero-cap for short edges (w < 1s)
-    const float max_penalty = w * 10.0f;
-    if (static_cast<float>(penalty) > max_penalty)
-      penalty = static_cast<uint32_t>(max_penalty);
-
-    w += static_cast<float>(penalty);
-  }
-
-  return length_m / w;
-}
 
 struct TransitionCandidate {
   uint32_t agent_idx;
@@ -107,6 +63,17 @@ class KinematicsSystem {
 public:
   KinematicsSystem(AgentPool &pool, RouteArena &arena)
       : pool_(pool), arena_(arena) {}
+
+  inline uint32_t FastRand() noexcept {
+    xorshift_state_ ^= xorshift_state_ << 13;
+    xorshift_state_ ^= xorshift_state_ >> 17;
+    xorshift_state_ ^= xorshift_state_ << 5;
+    return xorshift_state_;
+  }
+
+  inline float FastRandFloat() noexcept {
+    return (FastRand() & 0xFFFFFF) / 16777216.0f;
+  }
 
   /**
    * @brief Updates position for all active agents.
@@ -256,9 +223,10 @@ public:
    * - [x] Update peak volumes in `ProcessTransitions()` during edge hops
    *
    * @param ctx Physics context for BPR speed and geometry lookup.
+   * @param dt  Elapsed time in seconds (used for leak probability).
    * @return Number of agents that completed their route this tick.
    */
-  uint32_t ProcessTransitions(const PhysicsContext &ctx) {
+  uint32_t ProcessTransitions(const PhysicsContext &ctx, float dt = 0.1f) {
     uint32_t completed_agents = 0;
     for (uint32_t agent_idx : pool_.transition_queue) {
       bool blocked = false;
@@ -328,10 +296,21 @@ public:
                   next_len = ctx.edge_attributes[next_edge].length_m;
                 }
                 uint32_t leak_chance = (next_len < 20.0f) ? 15 : 5;
-                if (static_cast<uint32_t>(std::rand() % 100) < leak_chance) {
+                if ((FastRand() % 100) < leak_chance) {
                   blocked_transition = false; // Successfully squeezed through!
                 }
               }
+
+              // Защита от вечного gridlock'a: если всё же заблокированы, даем шанс просочиться
+              if (blocked_transition) {
+                 float leak_prob = (static_cast<float>(jam_cap_next) * 0.01f * dt) / static_cast<float>(ctx.asf);
+                 if (FastRandFloat() < leak_prob) {
+                     blocked_transition = false;
+                 }
+              }
+            } else {
+               // ЖЕСТКИЙ БЛОК. Больше абсолютного максимума машин не пускаем ни при каких условиях.
+               blocked_transition = true;
             }
 
             if (blocked_transition) {
@@ -437,6 +416,7 @@ public:
 private:
   AgentPool &pool_;
   RouteArena &arena_;
+  uint32_t xorshift_state_ = 123456789;
 };
 
 } // namespace traffic::data_provider
