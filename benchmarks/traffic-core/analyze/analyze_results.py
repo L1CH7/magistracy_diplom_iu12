@@ -22,11 +22,12 @@ plt.rcParams.update({
 COLORS = {
     '2-ary': '#4A90E2',        # Soft Blue
     '4-ary': '#50E3C2',        # Mint/Teal
-    '8-ary': '#D0021B',        # Vibrant Red (Our Ultimate Solution)
+    '8-ary': '#D0021B',        # Vibrant Red
     '16-ary': '#F5A623',       # Warm Orange
     'delta': '#BD10E0',        # Purple
     'bucket': '#9013FE',       # Indigo
-    'radix': '#7ED321'         # Green
+    'radix': '#7ED321',        # Green
+    'quickheap': '#FF8C00'     # Dark Orange / Gold (Our New Solution)
 }
 
 LINE_STYLES = {
@@ -36,7 +37,8 @@ LINE_STYLES = {
     '16-ary': ':',
     'delta': '--',
     'bucket': '-.',
-    'radix': '-'
+    'radix': '-',
+    'quickheap': '-'
 }
 
 MARKERS = {
@@ -46,7 +48,8 @@ MARKERS = {
     '16-ary': 'D',
     'delta': 'X',
     'bucket': '*',
-    'radix': 'p'
+    'radix': 'p',
+    'quickheap': 'P'
 }
 
 def load_data(filepath):
@@ -94,7 +97,10 @@ def plot_metric_vs_complexity(df, x_values, metric_col, y_label, title, save_pat
         agg = df_copy.groupby(['Algorithm', 'Queue', 'PathEdgesAvg'], observed=False)[metric_col].mean().reset_index()
     
     algorithms = agg['Algorithm'].unique()
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    num_algos = len(algorithms)
+    ncols = 2
+    nrows = (num_algos + 1) // 2
+    fig, axes = plt.subplots(nrows, ncols, figsize=(15, 5.5 * nrows))
     axes = axes.flatten()
     
     for idx, algo in enumerate(algorithms):
@@ -125,13 +131,16 @@ def plot_metric_vs_complexity(df, x_values, metric_col, y_label, title, save_pat
         else:
             ax.set_ylabel(y_label if idx % 2 == 0 else "")
             
-        ax.set_xlabel("Сложность маршрута (число ребер пути)" if idx >= 2 else "")
+        ax.set_xlabel("Сложность маршрута (число ребер пути)", fontsize=10)
         ax.grid(True, which="both", linestyle='--', alpha=0.5)
         
         if idx == 0:
             ax.legend(title="Типы очередей", frameon=True, shadow=False, facecolor='white', edgecolor='#e0e0e0')
             
-    plt.suptitle(title, fontweight='bold', y=0.98, fontsize=16)
+    for i in range(num_algos, len(axes)):
+        fig.delaxes(axes[i])
+        
+    plt.suptitle(title, fontweight='bold', y=0.99, fontsize=16)
     plt.tight_layout()
     plt.savefig(save_path, bbox_inches='tight', dpi=200)
     plt.close()
@@ -143,19 +152,21 @@ def plot_best_combinations(df, x_values, save_path):
     """
     df_copy = df.copy()
     
-    # Dynamically select TOP-2 queues (strictly '8-ary' and '4-ary' for ALT) for each algorithm based on mean execution time
+    # Dynamically select TOP-2 queues for each main algorithm based on mean execution time
+    # To keep the plot clean, we only analyze: 'Dijkstra', 'A-Star w=1.15', and 'ALT w=1.15'
+    target_algos = ['Dijkstra', 'A-Star w=1.15', 'ALT w=1.15']
+    available_algos = [a for a in target_algos if a in df_copy['Algorithm'].unique()]
+    if not available_algos:
+        available_algos = list(df_copy['Algorithm'].unique())[:3]
+
     best_combos = []
-    for algo in df_copy['Algorithm'].unique():
+    for algo in available_algos:
         algo_df = df_copy[df_copy['Algorithm'] == algo]
-        if algo == 'ALT':
-            best_combos.append(('ALT', '8-ary'))
-            best_combos.append(('ALT', '4-ary'))
-        else:
-            mean_time = algo_df.groupby('Queue')['TimeMs'].mean().sort_values(ascending=True) # Less time is better
-            top_queues = mean_time.index[:2].tolist()
-            for q in top_queues:
-                best_combos.append((algo, q))
-            
+        mean_time = algo_df.groupby('Queue')['TimeMs'].mean().sort_values(ascending=True) # Less time is better
+        top_queues = mean_time.index[:2].tolist()
+        for q in top_queues:
+            best_combos.append((algo, q))
+
     print("  [Динамический отбор лучших комбинаций по QPS]:", best_combos)
     
     combo_names = [f"{algo} + {queue}" for algo, queue in best_combos]

@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <immintrin.h>
 #include <cstdint>
 #include <cstdlib>
@@ -7,6 +8,7 @@
 #include <cstring>
 #include "common/graph_types.hpp"
 #include "router/compute/priority_queue.hpp"
+#include "router/compute/quick_heap.hpp"
 
 namespace traffic::router::compute {
 

@@ -37,9 +37,9 @@ public:
         traffic::NodeID target_node, 
         traffic::AbsoluteTime start_time = 0
     ) {
-        if (!mapped_graph_.csr_region) return std::unexpected("Graphs not loaded");
+        if (!mapped_graph_.csr_region) return std::unexpected<std::string>(std::string("Graphs not loaded"));
         if (start_node == traffic::INVALID_NODE || target_node == traffic::INVALID_NODE) {
-            return std::unexpected("Invalid NodeID provided");
+            return std::unexpected<std::string>(std::string("Invalid NodeID provided"));
         }
 
         const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
@@ -47,7 +47,7 @@ public:
         std::memcpy(&num_nodes, csr_ptr, sizeof(num_nodes));
 
         if (start_node >= num_nodes || target_node >= num_nodes) {
-            return std::unexpected(std::format("Node out of bounds: max {}", num_nodes));
+            return std::unexpected<std::string>(std::format("Node out of bounds: max {}", num_nodes));
         }
 
         // Thread-local изоляция A* для конкурентных запросов
@@ -71,7 +71,7 @@ public:
 
         // Обработка разрыва графа (отсутствие пути)
         if (result.total_weight == traffic::INF_WEIGHT && start_node != target_node) {
-            return std::unexpected(std::format("Route disconnected between {} and {}", start_node, target_node));
+            return std::unexpected<std::string>(std::format("Route disconnected between {} and {}", start_node, target_node));
         }
 
         return result;
@@ -85,13 +85,13 @@ public:
         float lon1, float lat1, float lon2, float lat2, 
         traffic::AbsoluteTime start_time = 0
     ) {
-        if (!spatial_grid_) return std::unexpected("Spatial grid not loaded");
+        if (!spatial_grid_) return std::unexpected<std::string>(std::string("Spatial grid not loaded"));
 
         auto start_pt = spatial_grid_->MapToEdge(lon1, lat1);
         auto target_pt = spatial_grid_->MapToEdge(lon2, lat2);
 
-        if (start_pt.edge_id == traffic::INVALID_NODE) return std::unexpected(std::format("Start coord ({}, {}) not found on graph", lon1, lat1));
-        if (target_pt.edge_id == traffic::INVALID_NODE) return std::unexpected(std::format("Target coord ({}, {}) not found on graph", lon2, lat2));
+        if (start_pt.edge_id == traffic::INVALID_NODE) return std::unexpected<std::string>(std::format("Start coord ({}, {}) not found on graph", lon1, lat1));
+        if (target_pt.edge_id == traffic::INVALID_NODE) return std::unexpected<std::string>(std::format("Target coord ({}, {}) not found on graph", lon2, lat2));
 
         return Route<TrafficEnabled, ProfileEnabled>(start_pt.edge_id, target_pt.edge_id, start_time);
     }
@@ -104,7 +104,7 @@ public:
         const std::vector<traffic::NodeID>& waypoints, 
         traffic::AbsoluteTime start_time = 0
     ) {
-        if (waypoints.empty()) return std::unexpected("Waypoints array is empty");
+        if (waypoints.empty()) return std::unexpected<std::string>(std::string("Waypoints array is empty"));
         if (waypoints.size() == 1) return Route<TrafficEnabled, ProfileEnabled>(waypoints[0], waypoints[0], start_time);
         
         traffic::RoutingResult total_result;
@@ -115,7 +115,7 @@ public:
             auto res = Route<TrafficEnabled, ProfileEnabled>(waypoints[i], waypoints[i+1], current_time);
             
             // Если сегмент недостижим или возникла ошибка, прокидываем её наверх
-            if (!res) return std::unexpected(std::format("Multipoint segment [{}] failed: {}", i, res.error()));
+            if (!res) return std::unexpected<std::string>(std::format("Multipoint segment [{}] failed: {}", i, res.error()));
             
             total_result.total_weight += res->total_weight;
             total_result.visited_nodes_count += res->visited_nodes_count;
@@ -147,8 +147,8 @@ public:
         const std::vector<std::pair<float, float>>& coords, 
         traffic::AbsoluteTime start_time = 0
     ) {
-        if (!spatial_grid_) return std::unexpected("Spatial grid not loaded");
-        if (coords.empty()) return std::unexpected("Coordinate array is empty");
+        if (!spatial_grid_) return std::unexpected<std::string>(std::string("Spatial grid not loaded"));
+        if (coords.empty()) return std::unexpected<std::string>(std::string("Coordinate array is empty"));
 
         std::vector<traffic::NodeID> waypoints;
         waypoints.reserve(coords.size());
@@ -156,7 +156,7 @@ public:
         for (size_t i = 0; i < coords.size(); ++i) {
             auto wp = spatial_grid_->MapToEdge(coords[i].first, coords[i].second);
             if (wp.edge_id == traffic::INVALID_NODE) {
-                return std::unexpected(std::format("Failed to map coordinate index {} ({}, {})", i, coords[i].first, coords[i].second));
+                return std::unexpected<std::string>(std::format("Failed to map coordinate index {} ({}, {})", i, coords[i].first, coords[i].second));
             }
             waypoints.push_back(wp.edge_id);
         }

@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <vector>
 #include <limits>
 #include <string>
@@ -41,7 +42,7 @@ struct HotNodeState {
     traffic::PointCount visit_id = 0;
 };
 
-template<typename PriorityQueueType = Strict8ArySoAHeap>
+template<typename PriorityQueueType = Strict8ArySoAHeap, uint32_t HeuristicWeightNum = 115, uint32_t HeuristicWeightDen = 100>
 class TdAltRouter {
 public:
     explicit TdAltRouter(traffic::GraphView view, traffic::NodeID max_nodes) 
@@ -98,7 +99,7 @@ public:
                 target_l0, 
                 target_l1
             );
-            h_source = (h_source * WA_STAR_NUM) / WA_STAR_DEN;
+            h_source = (h_source * HeuristicWeightNum) / HeuristicWeightDen;
         }
 
         hot_states_[source].g_score = 0;
@@ -159,7 +160,7 @@ public:
                             target_l0, 
                             target_l1
                         );
-                        h_v = (h_v * WA_STAR_NUM) / WA_STAR_DEN;
+                        h_v = (h_v * HeuristicWeightNum) / HeuristicWeightDen;
                     }
                     hot_states_[v].g_score = new_g;
                     hot_states_[v].h_score = h_v;

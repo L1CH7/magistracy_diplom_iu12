@@ -22,12 +22,12 @@ traffic::PointCount RouterManager::num_nodes() const noexcept {
 std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& data_dir) {
     std::cout << " [1/3] Loading CSR..." << std::flush;
     if (!mapped_graph_.load(data_dir)) {
-        return std::unexpected(std::string("Failed to mmap CSR graph from ") + data_dir);
+        return std::unexpected<std::string>(std::string("Failed to mmap CSR graph from ") + data_dir);
     }
     std::cout << " Done." << std::endl;
 
     if (!mapped_graph_.csr_region || !mapped_graph_.csr_region->data()) {
-        return std::unexpected("CSR region or data is NULL after loading");
+        return std::unexpected<std::string>(std::string("CSR region or data is NULL after loading"));
     }
 
     const uint8_t* csr_ptr = static_cast<const uint8_t*>(mapped_graph_.csr_region->data());
@@ -41,9 +41,9 @@ std::expected<void, std::string> RouterManager::LoadGraphs(const std::string& da
         std::cout << " [3/3] Loading Spatial Grid..." << std::flush;
         spatial_grid_ = std::make_unique<traffic::common::SpatialGrid>();
         namespace fs = std::filesystem;
-        auto grid_path = (fs::path(data_dir) / "spatial_grid.bin").string();
+        auto grid_path = (fs::path(data_dir.c_str()) / "spatial_grid.bin").string();
         if (!spatial_grid_->load(grid_path, mapped_graph_.geometry_store.get())) {
-            return std::unexpected("Failed to load spatial_grid.bin at " + grid_path);
+            return std::unexpected<std::string>(std::string("Failed to load spatial_grid.bin at ") + grid_path);
         }
         std::cout << " Done." << std::endl;
     }

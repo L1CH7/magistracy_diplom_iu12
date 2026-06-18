@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <vector>
 #include <limits>
 #include <string>
@@ -9,7 +10,6 @@
 #include "router/compute/priority_queue.hpp"
 #include "router/compute/advanced_pqs.hpp"
 #include "graph_builder/road_config.hpp" // For GeometryStore if needed
-#include "common/geometry_store.hpp"
 #include <x86intrin.h>
 
 namespace traffic::router::compute {
@@ -17,7 +17,7 @@ namespace traffic::router::compute {
 /**
  * @brief A* Router using Euclidean distance heuristic on edge-based graph.
  */
-template<typename PriorityQueueType = Strict8ArySoAHeap>
+template<typename PriorityQueueType = Strict8ArySoAHeap, uint32_t HeuristicWeightNum = 100, uint32_t HeuristicWeightDen = 100>
 class AStarRouter {
 public:
     explicit AStarRouter(traffic::GraphView view, traffic::NodeID max_nodes, const void* geom_store = nullptr) 
@@ -53,7 +53,7 @@ public:
         uint32_t pop_count = 0;
         current_visit_id_++;
         
-        traffic::PathWeight h_source = GetHeuristic(source, target);
+        traffic::PathWeight h_source = (GetHeuristic(source, target) * HeuristicWeightNum) / HeuristicWeightDen;
         hot_states_[source].g_score = 0;
         hot_states_[source].h_score = h_source;
         hot_states_[source].visit_id = current_visit_id_;
@@ -80,7 +80,7 @@ public:
 
                 traffic::PathWeight new_g = g_u + w;
                 if (hot_states_[v].visit_id != current_visit_id_ || new_g < hot_states_[v].g_score) {
-                    traffic::PathWeight h_v = GetHeuristic(v, target);
+                    traffic::PathWeight h_v = (GetHeuristic(v, target) * HeuristicWeightNum) / HeuristicWeightDen;
                     hot_states_[v].g_score = new_g;
                     hot_states_[v].h_score = h_v;
                     hot_states_[v].visit_id = current_visit_id_;

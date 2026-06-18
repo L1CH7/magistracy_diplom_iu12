@@ -23,7 +23,7 @@ struct MappedGraph {
     bool load(const std::string& data_dir) {
         try {
             namespace fs = std::filesystem;
-            auto base = fs::path(data_dir);
+            auto base = fs::path(data_dir.c_str());
             
             // В нашем дампе (binary_dumper.cpp) CSR может быть в одном файле или разделен.
             // По ТЗ: csr.bin содержит [row_ptr, col_ind, weights] последовательно? 

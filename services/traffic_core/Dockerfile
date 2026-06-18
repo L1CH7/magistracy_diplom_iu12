@@ -7,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     cmake \
     git \
+    curl \
     ninja-build \
     libnuma-dev \
     libpqxx-dev \
@@ -16,6 +17,10 @@ RUN apt-get update && apt-get install -y \
     postgresql-server-dev-all \
     ccache \
     && rm -rf /var/lib/apt/lists/*
+
+# Устанавливаем Rust (nightly-версию) для компиляции SimdQuickHeap
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 COPY services/traffic_core /app/services/traffic_core

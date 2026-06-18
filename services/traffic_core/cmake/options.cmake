@@ -10,11 +10,13 @@ set(TRAFFIC_CACHE_LINE_SIZE 64 CACHE STRING "CPU Cache Line Size in bytes for al
 set(TRAFFIC_MPR_TOLERANCE_NUM 3 CACHE STRING "MPR ETA Tolerance Numerator (e.g., 3 for 1.5x)")
 set(TRAFFIC_MPR_TOLERANCE_DEN 2 CACHE STRING "MPR ETA Tolerance Denominator (e.g., 2 for 1.5x)")
 set(TRAFFIC_MAX_ROUTE_PATH 128 CACHE STRING "Max number of edges in a RouteResponse POD")
+set(TRAFFIC_ROUTER_MAX_QPS 4000 CACHE STRING "Max queries per second for the router pool")
+set(TRAFFIC_BASE_FPS 25 CACHE STRING "Base ticks per second for quota calculations")
 set(QUILL_COMPILE_ACTIVE_LOG_LEVEL "QUILL_LOG_LEVEL_INFO" CACHE STRING "Active log level for Quill in compile-time")
 
 # === Feature / Performance Flags ===
 set(TRAFFIC_DISABLE_ROUTER_BPR OFF CACHE STRING "Disable BPR congestion weights in the router for purely static routing (ON/OFF)")
-set(TRAFFIC_ENABLE_ROUTER_PROFILE OFF CACHE STRING "Enable CPU cycle profiling and search space counting in A* (ON/OFF)")
+set(TRAFFIC_ENABLE_ROUTER_PROFILE ON CACHE STRING "Enable CPU cycle profiling and search space counting in A* (ON/OFF)")
 
 # Convert ON/OFF strings or booleans to 1/0 for C++ preprocessor
 if(TRAFFIC_DISABLE_ROUTER_BPR STREQUAL "ON" OR TRAFFIC_DISABLE_ROUTER_BPR)
@@ -58,6 +60,8 @@ add_compile_definitions(
     TRAFFIC_MPR_TOLERANCE_NUM=${TRAFFIC_MPR_TOLERANCE_NUM}
     TRAFFIC_MPR_TOLERANCE_DEN=${TRAFFIC_MPR_TOLERANCE_DEN}
     TRAFFIC_MAX_ROUTE_PATH=${TRAFFIC_MAX_ROUTE_PATH}
+    TRAFFIC_ROUTER_MAX_QPS=${TRAFFIC_ROUTER_MAX_QPS}
+    TRAFFIC_BASE_FPS=${TRAFFIC_BASE_FPS}
     TRAFFIC_ROUTER_THREADS=${TRAFFIC_ROUTER_THREADS}
     TRAFFIC_ROUTER_CORES="${TRAFFIC_ROUTER_CORES}"
     TRAFFIC_SIM_AFFINITY=${TRAFFIC_SIM_AFFINITY}
