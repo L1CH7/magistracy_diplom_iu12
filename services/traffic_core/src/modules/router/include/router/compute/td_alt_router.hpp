@@ -77,7 +77,7 @@ public:
         traffic::CpuCycles start_cycles = 0;
         if constexpr (ProfileEnabled) start_cycles = __rdtsc();
 
-        uint32_t pop_count = 0;
+        uint32_t unique_visited_nodes = 0;
         ALTHeuristic alt;
         const traffic::EdgeWeight* landmarks = heuristic_module_.get_landmark_ptr();
         const traffic::EdgeWeight* target_l_ptr = nullptr;
@@ -99,7 +99,9 @@ public:
                 target_l0, 
                 target_l1
             );
-            h_source = (h_source * HeuristicWeightNum) / HeuristicWeightDen;
+            if constexpr (HeuristicWeightNum != HeuristicWeightDen) {
+                h_source = (h_source * HeuristicWeightNum) / HeuristicWeightDen;
+            }
         }
 
         hot_states_[source].g_score = 0;
@@ -112,15 +114,17 @@ public:
 
         while (!pq_.empty()) {
             auto [f_curr, u] = pq_.pop();
-            if constexpr (ProfileEnabled) pop_count++;
 
             // (Это происходит лишь однажды в самом конце пути)
-            if (__builtin_expect(u == target, 0)) break;
-            // if (u == target) break;
+            if (__builtin_expect(u == target, 0)) {
+                if constexpr (ProfileEnabled) unique_visited_nodes++;
+                break;
+            }
 
             traffic::PathWeight g_u = hot_states_[u].g_score;
             traffic::PathWeight h_u = hot_states_[u].h_score;
             if (f_curr > g_u + h_u) continue;
+            if constexpr (ProfileEnabled) unique_visited_nodes++;
 
             _mm_prefetch(reinterpret_cast<const char*>(&view_.row_ptr[u + 1]), _MM_HINT_T0);
 
@@ -144,7 +148,6 @@ public:
                     uint32_t dynamic_penalty = static_cast<uint32_t>((pen_1 + ((pen_2 - pen_1) * local_sec) / traffic::router::compute::BUCKET_INTERVAL_SEC) >> 20);
                     
                     // (Аномальные пробки - это не норма)
-                    // if (__builtin_expect(dynamic_penalty > static_cast<uint32_t>(w) * 10, 0)) {
                     if (dynamic_penalty > static_cast<uint32_t>(w) * 10) {
                         dynamic_penalty = w * 10;
                     }                    
@@ -160,7 +163,9 @@ public:
                             target_l0, 
                             target_l1
                         );
-                        h_v = (h_v * HeuristicWeightNum) / HeuristicWeightDen;
+                        if constexpr (HeuristicWeightNum != HeuristicWeightDen) {
+                            h_v = (h_v * HeuristicWeightNum) / HeuristicWeightDen;
+                        }
                     }
                     hot_states_[v].g_score = new_g;
                     hot_states_[v].h_score = h_v;
@@ -172,7 +177,7 @@ public:
         }
 
         if constexpr (ProfileEnabled) {
-            result.visited_nodes_count = pop_count;
+            result.visited_nodes_count = unique_visited_nodes;
             result.route_cycles = __rdtsc() - start_cycles;
         }
 

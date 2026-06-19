@@ -250,13 +250,16 @@ RunBenchmarkSuite(const std::string &algo_name, const std::string &pq_name,
                   acceptable_mismatch = true;
                 }
               } else {
-                // A-Star и ALT используют субоптимальные эвристики, поэтому различная
-                // структура очередей priority queue влияет на порядок извлечения вершин
-                // с одинаковым f. Это может приводить к расхождениям путей.
-                // Задаем допустимый порог в зависимости от веса эвристики.
+                // A-Star и ALT используют субоптимальные эвристики, поэтому
+                // различная структура очередей priority queue влияет на порядок
+                // извлечения вершин с одинаковым f. Это может приводить к
+                // расхождениям путей. Задаем допустимый порог в зависимости от
+                // веса эвристики.
                 double max_allowed = 15.0;
-                if (algo_name.find("w=1.15") != std::string::npos) max_allowed = 30.0;
-                else if (algo_name.find("w=1.2") != std::string::npos) max_allowed = 40.0;
+                if (algo_name.find("w=1.15") != std::string::npos)
+                  max_allowed = 30.0;
+                else if (algo_name.find("w=1.2") != std::string::npos)
+                  max_allowed = 40.0;
 
                 if (diff_pct <= max_allowed) {
                   acceptable_mismatch = true;
@@ -273,10 +276,11 @@ RunBenchmarkSuite(const std::string &algo_name, const std::string &pq_name,
           }
           if (g_baseline_weights[i] != INF_WEIGHT && route_res.path.empty() &&
               g_baseline_weights[i] > 0) {
-            std::cerr << std::format(
-                "\n[CORRECTNESS WARNING] {} + {}: Path is empty for valid route "
-                "weight {} on task {}!\n",
-                algo_name, pq_name, g_baseline_weights[i], i);
+            std::cerr << std::format("\n[CORRECTNESS WARNING] {} + {}: Path is "
+                                     "empty for valid route "
+                                     "weight {} on task {}!\n",
+                                     algo_name, pq_name, g_baseline_weights[i],
+                                     i);
           }
         }
 
@@ -392,51 +396,68 @@ void RunAStarWeightSuite(GraphView view, NodeID num_nodes,
                          RunSuiteType &run_suite) {
   run_suite(AStarRouter<InstrumentedQueue<Strict2AryHeap>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
-            InstrumentedQueue<Strict2AryHeap>(), "A-Star " + weight_str, "2-ary");
+            InstrumentedQueue<Strict2AryHeap>(), "A-Star " + weight_str,
+            "2-ary");
   run_suite(AStarRouter<InstrumentedQueue<Strict4AryHeap>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
-            InstrumentedQueue<Strict4AryHeap>(), "A-Star " + weight_str, "4-ary");
+            InstrumentedQueue<Strict4AryHeap>(), "A-Star " + weight_str,
+            "4-ary");
   run_suite(AStarRouter<InstrumentedQueue<Strict8ArySoALazyHeap>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
-            InstrumentedQueue<Strict8ArySoALazyHeap>(), "A-Star " + weight_str, "8-ary");
+            InstrumentedQueue<Strict8ArySoALazyHeap>(), "A-Star " + weight_str,
+            "8-ary");
   run_suite(AStarRouter<InstrumentedQueue<Strict16AryHeap>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
-            InstrumentedQueue<Strict16AryHeap>(), "A-Star " + weight_str, "16-ary");
+            InstrumentedQueue<Strict16AryHeap>(), "A-Star " + weight_str,
+            "16-ary");
   run_suite(AStarRouter<InstrumentedQueue<DeltaQueue>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
             InstrumentedQueue<DeltaQueue>(), "A-Star " + weight_str, "delta");
   run_suite(AStarRouter<InstrumentedQueue<DeltaBucketQueue<4>>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
-            InstrumentedQueue<DeltaBucketQueue<4>>(), "A-Star " + weight_str, "bucket");
+            InstrumentedQueue<DeltaBucketQueue<4>>(), "A-Star " + weight_str,
+            "bucket");
   run_suite(AStarRouter<InstrumentedQueue<SafeRadixHeap>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
-            InstrumentedQueue<SafeRadixHeap>(), "A-Star " + weight_str, "radix");
+            InstrumentedQueue<SafeRadixHeap>(), "A-Star " + weight_str,
+            "radix");
   run_suite(AStarRouter<InstrumentedQueue<QuickHeapQueue>, Num, Den>(
                 view, num_nodes, manager.get_geometry_store()),
-            InstrumentedQueue<QuickHeapQueue>(), "A-Star " + weight_str, "quickheap");
+            InstrumentedQueue<QuickHeapQueue>(), "A-Star " + weight_str,
+            "quickheap");
 }
 
 template <uint32_t Num, uint32_t Den, typename RunSuiteType>
 void RunAltWeightSuite(GraphView view, NodeID num_nodes,
                        const router::control::RouterManager &manager,
-                       const std::string &weight_str,
-                       RunSuiteType &run_suite) {
-  run_suite(TdAltRouter<InstrumentedQueue<Strict2AryHeap>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<Strict2AryHeap>(), "ALT " + weight_str, "2-ary");
-  run_suite(TdAltRouter<InstrumentedQueue<Strict4AryHeap>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<Strict4AryHeap>(), "ALT " + weight_str, "4-ary");
-  run_suite(TdAltRouter<InstrumentedQueue<Strict8ArySoALazyHeap>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<Strict8ArySoALazyHeap>(), "ALT " + weight_str, "8-ary");
-  run_suite(TdAltRouter<InstrumentedQueue<Strict16AryHeap>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<Strict16AryHeap>(), "ALT " + weight_str, "16-ary");
-  run_suite(TdAltRouter<InstrumentedQueue<DeltaQueue>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<DeltaQueue>(), "ALT " + weight_str, "delta");
-  run_suite(TdAltRouter<InstrumentedQueue<DeltaBucketQueue<4>>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<DeltaBucketQueue<4>>(), "ALT " + weight_str, "bucket");
-  run_suite(TdAltRouter<InstrumentedQueue<SafeRadixHeap>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<SafeRadixHeap>(), "ALT " + weight_str, "radix");
-  run_suite(TdAltRouter<InstrumentedQueue<QuickHeapQueue>, Num, Den>(view, num_nodes),
-            InstrumentedQueue<QuickHeapQueue>(), "ALT " + weight_str, "quickheap");
+                       const std::string &weight_str, RunSuiteType &run_suite) {
+  run_suite(
+      TdAltRouter<InstrumentedQueue<Strict2AryHeap>, Num, Den>(view, num_nodes),
+      InstrumentedQueue<Strict2AryHeap>(), "ALT " + weight_str, "2-ary");
+  run_suite(
+      TdAltRouter<InstrumentedQueue<Strict4AryHeap>, Num, Den>(view, num_nodes),
+      InstrumentedQueue<Strict4AryHeap>(), "ALT " + weight_str, "4-ary");
+  run_suite(TdAltRouter<InstrumentedQueue<Strict8ArySoALazyHeap>, Num, Den>(
+                view, num_nodes),
+            InstrumentedQueue<Strict8ArySoALazyHeap>(), "ALT " + weight_str,
+            "8-ary");
+  run_suite(TdAltRouter<InstrumentedQueue<Strict16AryHeap>, Num, Den>(
+                view, num_nodes),
+            InstrumentedQueue<Strict16AryHeap>(), "ALT " + weight_str,
+            "16-ary");
+  run_suite(
+      TdAltRouter<InstrumentedQueue<DeltaQueue>, Num, Den>(view, num_nodes),
+      InstrumentedQueue<DeltaQueue>(), "ALT " + weight_str, "delta");
+  run_suite(TdAltRouter<InstrumentedQueue<DeltaBucketQueue<4>>, Num, Den>(
+                view, num_nodes),
+            InstrumentedQueue<DeltaBucketQueue<4>>(), "ALT " + weight_str,
+            "bucket");
+  run_suite(
+      TdAltRouter<InstrumentedQueue<SafeRadixHeap>, Num, Den>(view, num_nodes),
+      InstrumentedQueue<SafeRadixHeap>(), "ALT " + weight_str, "radix");
+  run_suite(
+      TdAltRouter<InstrumentedQueue<QuickHeapQueue>, Num, Den>(view, num_nodes),
+      InstrumentedQueue<QuickHeapQueue>(), "ALT " + weight_str, "quickheap");
 }
 
 int main(int argc, char **argv) {
@@ -469,7 +490,7 @@ int main(int argc, char **argv) {
   std::mt19937 gen(42);
   std::uniform_int_distribution<NodeID> dist(0, num_nodes - 1);
 
-  constexpr int NUM_ROUTES = 100;
+  constexpr int NUM_ROUTES = 750;
   std::vector<RouteTask> tasks;
   for (int i = 0; i < NUM_ROUTES; ++i) {
     tasks.push_back({dist(gen), dist(gen)});
@@ -541,6 +562,7 @@ int main(int argc, char **argv) {
   // 3. A* (Euclidean Heuristic) с различными весами эвристик (от 1.0 до 1.2)
   RunAStarWeightSuite<100, 100>(view, num_nodes, manager, "w=1.0", run_suite);
   RunAStarWeightSuite<105, 100>(view, num_nodes, manager, "w=1.05", run_suite);
+  RunAStarWeightSuite<110, 100>(view, num_nodes, manager, "w=1.10", run_suite);
   RunAStarWeightSuite<115, 100>(view, num_nodes, manager, "w=1.15", run_suite);
   RunAStarWeightSuite<120, 100>(view, num_nodes, manager, "w=1.2", run_suite);
 
@@ -548,6 +570,7 @@ int main(int argc, char **argv) {
   if (manager.get_landmarks_ptr()) {
     RunAltWeightSuite<100, 100>(view, num_nodes, manager, "w=1.0", run_suite);
     RunAltWeightSuite<105, 100>(view, num_nodes, manager, "w=1.05", run_suite);
+    RunAltWeightSuite<110, 100>(view, num_nodes, manager, "w=1.10", run_suite);
     RunAltWeightSuite<115, 100>(view, num_nodes, manager, "w=1.15", run_suite);
     RunAltWeightSuite<120, 100>(view, num_nodes, manager, "w=1.2", run_suite);
   } else {

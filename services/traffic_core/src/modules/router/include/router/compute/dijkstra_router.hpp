@@ -46,7 +46,7 @@ public:
         traffic::CpuCycles start_cycles = 0;
         if constexpr (ProfileEnabled) start_cycles = __rdtsc();
 
-        uint32_t pop_count = 0;
+        uint32_t unique_visited_nodes = 0;
         current_visit_id_++;
         
         hot_states_[source].g_score = 0;
@@ -58,10 +58,13 @@ public:
 
         while (!pq_.empty()) {
             auto [g_curr, u] = pq_.pop();
-            if constexpr (ProfileEnabled) pop_count++;
 
-            if (u == target) break;
+            if (u == target) {
+                if constexpr (ProfileEnabled) unique_visited_nodes++;
+                break;
+            }
             if (g_curr > hot_states_[u].g_score) continue;
+            if constexpr (ProfileEnabled) unique_visited_nodes++;
 
             _mm_prefetch(reinterpret_cast<const char*>(&view_.row_ptr[u + 1]), _MM_HINT_T0);
 
@@ -98,7 +101,7 @@ public:
         }
 
         if constexpr (ProfileEnabled) {
-            result.visited_nodes_count = pop_count;
+            result.visited_nodes_count = unique_visited_nodes;
             result.route_cycles = __rdtsc() - start_cycles;
         }
 

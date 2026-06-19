@@ -50,10 +50,13 @@ public:
         traffic::CpuCycles start_cycles = 0;
         if constexpr (ProfileEnabled) start_cycles = __rdtsc();
 
-        uint32_t pop_count = 0;
+        uint32_t unique_visited_nodes = 0;
         current_visit_id_++;
         
-        traffic::PathWeight h_source = (GetHeuristic(source, target) * HeuristicWeightNum) / HeuristicWeightDen;
+        traffic::PathWeight h_source = GetHeuristic(source, target);
+        if constexpr (HeuristicWeightNum != HeuristicWeightDen) {
+            h_source = (h_source * HeuristicWeightNum) / HeuristicWeightDen;
+        }
         hot_states_[source].g_score = 0;
         hot_states_[source].h_score = h_source;
         hot_states_[source].visit_id = current_visit_id_;
@@ -61,26 +64,32 @@ public:
         
         pq_.clear();
         pq_.push({h_source, source});
-
+ 
         while (!pq_.empty()) {
             auto [f_curr, u] = pq_.pop();
-            if constexpr (ProfileEnabled) pop_count++;
-
-            if (u == target) break;
+ 
+            if (u == target) {
+                if constexpr (ProfileEnabled) unique_visited_nodes++;
+                break;
+            }
             
             traffic::PathWeight g_u = hot_states_[u].g_score;
             traffic::PathWeight h_u = hot_states_[u].h_score;
             if (f_curr > g_u + h_u) continue;
-
+            if constexpr (ProfileEnabled) unique_visited_nodes++;
+ 
             _mm_prefetch(reinterpret_cast<const char*>(&view_.row_ptr[u + 1]), _MM_HINT_T0);
-
+ 
             for (auto edge : view_.get_edges(u)) {
                 traffic::NodeID v = edge.to;
                 traffic::PathWeight w = edge.w;
-
+ 
                 traffic::PathWeight new_g = g_u + w;
                 if (hot_states_[v].visit_id != current_visit_id_ || new_g < hot_states_[v].g_score) {
-                    traffic::PathWeight h_v = (GetHeuristic(v, target) * HeuristicWeightNum) / HeuristicWeightDen;
+                    traffic::PathWeight h_v = GetHeuristic(v, target);
+                    if constexpr (HeuristicWeightNum != HeuristicWeightDen) {
+                        h_v = (h_v * HeuristicWeightNum) / HeuristicWeightDen;
+                    }
                     hot_states_[v].g_score = new_g;
                     hot_states_[v].h_score = h_v;
                     hot_states_[v].visit_id = current_visit_id_;
@@ -89,9 +98,9 @@ public:
                 }
             }
         }
-
+ 
         if constexpr (ProfileEnabled) {
-            result.visited_nodes_count = pop_count;
+            result.visited_nodes_count = unique_visited_nodes;
             result.route_cycles = __rdtsc() - start_cycles;
         }
 

@@ -37,9 +37,7 @@ REPORTS/
 !README.md
 
 # Tests
-tests/
-test_*.py
-verify_*.py
+# (Included to prevent docker caching issues with tests)
 
 # Data (we mount it via volume)
 data/
