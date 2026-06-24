@@ -693,6 +693,179 @@ private:
 };
 
 /**
+ * @brief Вектор с выравниванием по границе 64 байт для эффективных SIMD-операций.
+ * 
+ * Класс выделяет выровненную память и исключает накладные расходы 
+ * на инициализацию элементов при изменении размера.
+ * Имена методов с маленькой буквы необходимы для совместимости с алгоритмами STL.
+ */
+class alignas( 64 ) AlignedVector
+{
+public:
+    AlignedVector()
+    :   data_( nullptr ),
+        size_( 0 ),
+        capacity_( 0 )
+    {}
+
+    ~AlignedVector()
+    {
+        if( data_ != nullptr )
+        {
+            std::free( data_ );
+        }
+    }
+
+    AlignedVector( const AlignedVector & ) = delete;
+    AlignedVector & operator=( const AlignedVector & ) = delete;
+
+    AlignedVector( AlignedVector && other ) noexcept
+    :   data_( other.data_ ),
+        size_( other.size_ ),
+        capacity_( other.capacity_ )
+    {
+        other.data_ = nullptr;
+        other.size_ = 0;
+        other.capacity_ = 0;
+    }
+
+    AlignedVector & operator=( AlignedVector && other ) noexcept
+    {
+        if( this != &other )
+        {
+            if( data_ != nullptr )
+            {
+                std::free( data_ );
+            }
+            data_ = other.data_;
+            size_ = other.size_;
+            capacity_ = other.capacity_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+            other.capacity_ = 0;
+        }
+        return *this;
+    }
+
+    inline void reserve( size_t cap ) noexcept
+    {
+        if( cap <= capacity_ )
+        {
+            return;
+        }
+
+        size_t new_cap = ( cap + 7 ) & ~7;
+        uint64_t * new_data = static_cast< uint64_t * >( std::aligned_alloc( 64, new_cap * sizeof( uint64_t ) ) );
+        if( size_ > 0 && data_ != nullptr )
+        {
+            std::memcpy( new_data, data_, size_ * sizeof( uint64_t ) );
+        }
+        if( data_ != nullptr )
+        {
+            std::free( data_ );
+        }
+        data_ = new_data;
+        capacity_ = new_cap;
+    }
+
+    inline void clear() noexcept
+    {
+        size_ = 0;
+    }
+
+    [[nodiscard]] inline size_t size() const noexcept
+    {
+        return size_;
+    }
+
+    [[nodiscard]] inline bool empty() const noexcept
+    {
+        return size_ == 0;
+    }
+
+    inline void push_back( uint64_t val ) noexcept
+    {
+        if( size_ >= capacity_ )
+        {
+            reserve( capacity_ == 0 ? 16 : capacity_ * 2 );
+        }
+        data_[ size_++ ] = val;
+    }
+
+    inline void pop_back() noexcept
+    {
+        --size_;
+    }
+
+    [[nodiscard]] inline uint64_t back() const noexcept
+    {
+        return data_[ size_ - 1 ];
+    }
+
+    inline void resize_no_init( size_t new_size ) noexcept
+    {
+        size_ = new_size;
+    }
+
+    [[nodiscard]] inline uint64_t * data() noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] inline const uint64_t * data() const noexcept
+    {
+        return data_;
+    }
+
+    inline uint64_t & operator[]( size_t idx ) noexcept
+    {
+        return data_[ idx ];
+    }
+
+    inline const uint64_t & operator[]( size_t idx ) const noexcept
+    {
+        return data_[ idx ];
+    }
+
+    [[nodiscard]] inline uint64_t * begin() noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] inline const uint64_t * begin() const noexcept
+    {
+        return data_;
+    }
+
+    [[nodiscard]] inline uint64_t * end() noexcept
+    {
+        return data_ + size_;
+    }
+
+    [[nodiscard]] inline const uint64_t * end() const noexcept
+    {
+        return data_ + size_;
+    }
+
+    inline void insert( uint64_t * pos, uint64_t val ) noexcept
+    {
+        size_t idx = pos - data_;
+        if( size_ >= capacity_ )
+        {
+            reserve( capacity_ == 0 ? 16 : capacity_ * 2 );
+        }
+        std::memmove( data_ + idx + 1, data_ + idx, ( size_ - idx ) * sizeof( uint64_t ) );
+        data_[ idx ] = val;
+        size_++;
+    }
+
+private:
+    uint64_t * data_ = nullptr;
+    size_t size_ = 0;
+    size_t capacity_ = 0;
+};
+
+/**
  * @brief Очередь с приоритетом SimdQuickHeap на C++ с использованием AVX2.
  * Оптимизирована для небольших очередей (до ~2048 элементов).
  */
@@ -731,15 +904,20 @@ public:
     }
 
     /**
-     * @brief Очищает очередь без освобождения выделенной памяти.
+     * @brief Очищает только те бакеты, которые реально содержали элементы.
      */
     inline void clear() noexcept
     {
-        pivots_.clear();
-        for( auto & bucket : buckets_ )
+        size_t active_buckets = pivots_.size() + 1;
+        if( active_buckets > buckets_.size() )
         {
-            bucket.clear();
+            active_buckets = buckets_.size();
         }
+        for( size_t i = 0; i < active_buckets; ++i )
+        {
+            buckets_[ i ].clear();
+        }
+        pivots_.clear();
         size_ = 0;
     }
 
@@ -843,25 +1021,14 @@ private:
     static constexpr size_t N = 16;
     static constexpr bool SORT = true;
 
-    alignas( 64 ) static const int32_t UNIQSHUF64[ 16 ][ 8 ];
-
     std::vector< uint64_t > pivots_;
-    std::vector< std::vector< uint64_t > > buckets_;
+    std::vector< AlignedVector > buckets_;
     size_t size_ = 0;
-
-    /**
-     * @brief Вспомогательная функция для беззнакового сравнения векторов u64.
-     */
-    static inline __m256i cmpgt_u64( __m256i a, __m256i b ) noexcept
-    {
-        const __m256i sign_bit = _mm256_set1_epi64x( 0x8000000000000000ULL );
-        return _mm256_cmpgt_epi64( _mm256_xor_si256( a, sign_bit ), _mm256_xor_si256( b, sign_bit ) );
-    }
 
     /**
      * @brief Быстрая сортировка вставками по убыванию для малых массивов.
      */
-    static inline void insertion_sort_greater( std::vector< uint64_t > & vec ) noexcept
+    static inline void insertion_sort_greater( AlignedVector & vec ) noexcept
     {
         size_t n = vec.size();
         for( size_t i = 1; i < n; ++i )
@@ -878,7 +1045,7 @@ private:
     }
 
     /**
-     * @brief Находит индекс слоя для вставки элемента.
+     * @brief Находит индекс слоя для вставки элемента с использованием быстрых проверок границ и бинарного поиска.
      */
     inline size_t push_position( uint64_t t ) const noexcept
     {
@@ -887,40 +1054,21 @@ private:
         {
             return 0;
         }
-        if( n <= 64 )
+        if( t <= pivots_.back() )
         {
-            __m256i t_simd = _mm256_set1_epi64x( t );
-            size_t target_layer = 0;
-            size_t i = 0;
-            for( ; i + 3 < n; i += 4 )
-            {
-                __m256i vals = _mm256_loadu_si256( reinterpret_cast< const __m256i * >( &pivots_[ i ] ) );
-                __m256i lt = cmpgt_u64( vals, t_simd );
-                int lt_mask = _mm256_movemask_pd( _mm256_castsi256_pd( lt ) ) & 0xF;
-                target_layer += std::popcount( static_cast< unsigned int >( lt_mask ) );
-            }
-            for( ; i < n; ++i )
-            {
-                if( t < pivots_[ i ] )
-                {
-                    target_layer++;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            return target_layer;
+            return n;
         }
-        else
+        if( t > pivots_.front() )
         {
-            auto it = std::lower_bound( pivots_.begin(), pivots_.end(), t, std::greater< uint64_t >() );
-            return std::distance( pivots_.begin(), it );
+            return 0;
         }
+
+        auto it = std::lower_bound( pivots_.begin(), pivots_.end(), t, std::greater< uint64_t >() );
+        return std::distance( pivots_.begin(), it );
     }
 
     /**
-     * @brief Разделяет текущий слой на два с использованием AVX2.
+     * @brief Разделяет текущий слой на два с использованием высокоэффективного branchless алгоритма.
      */
     inline void partition() noexcept
     {
@@ -959,46 +1107,31 @@ private:
         pivots_.push_back( pivot );
         next_bucket.clear();
 
-        cur_bucket.resize( n + 4 );
-        next_bucket.resize( n + 4 );
+        cur_bucket.reserve( n );
+        next_bucket.reserve( n );
 
         size_t cur_len = 0;
         size_t next_len = 0;
-        size_t n2 = ( n >= 4 ) ? ( n / 4 ) * 4 : 0;
-        size_t half = ( pivot_pos + 1 < n2 ) ? ( ( pivot_pos + 4 ) / 4 ) * 4 : n2;
 
-        __m256i threshold = _mm256_set1_epi64x( pivot );
-
-        for( size_t i = 0; i < half; i += 4 )
+        for( size_t i = 0; i < n; ++i )
         {
-            __m256i vals = _mm256_loadu_si256( reinterpret_cast< const __m256i * >( &cur_bucket[ i ] ) );
-            partition_fast< true >( vals, threshold, cur_bucket, cur_len, next_bucket, next_len );
-        }
-        for( size_t i = half; i < n2; i += 4 )
-        {
-            __m256i vals = _mm256_loadu_si256( reinterpret_cast< const __m256i * >( &cur_bucket[ i ] ) );
-            partition_fast< false >( vals, threshold, cur_bucket, cur_len, next_bucket, next_len );
-        }
-
-        if( n2 < n )
-        {
-            uint64_t limit_pivot = ( pivot_pos >= n2 ) ? ( pivot + 1 ) : pivot;
-            for( size_t i = n2; i < n; ++i )
+            uint64_t val = cur_bucket[ i ];
+            if( i == pivot_pos )
             {
-                uint64_t val = cur_bucket[ i ];
-                if( val >= limit_pivot )
-                {
-                    cur_bucket[ cur_len++ ] = val;
-                }
-                else
-                {
-                    next_bucket[ next_len++ ] = val;
-                }
+                cur_bucket[ cur_len++ ] = val;
+                continue;
             }
+
+            bool keep = ( val > pivot ) || ( val == pivot && i < pivot_pos );
+            cur_bucket[ cur_len ] = val;
+            next_bucket[ next_len ] = val;
+
+            cur_len += keep;
+            next_len += !keep;
         }
 
-        cur_bucket.resize( cur_len );
-        next_bucket.resize( next_len );
+        cur_bucket.resize_no_init( cur_len );
+        next_bucket.resize_no_init( next_len );
 
         if( cur_len == 0 )
         {
@@ -1006,58 +1139,6 @@ private:
             pivots_.pop_back();
         }
     }
-
-    /**
-     * @brief Векторное разделение элементов на два слоя.
-     */
-    template< bool EQUAL_DOWN >
-    static inline void partition_fast( __m256i vals, __m256i threshold,
-                                       std::vector< uint64_t > & v, size_t & v_idx,
-                                       std::vector< uint64_t > & w, size_t & w_idx ) noexcept
-    {
-        int small = 0;
-        if constexpr( EQUAL_DOWN )
-        {
-            __m256i lt = cmpgt_u64( vals, threshold );
-            int lt_mask = _mm256_movemask_pd( _mm256_castsi256_pd( lt ) ) & 0xF;
-            small = ( ~lt_mask ) & 0xF;
-        }
-        else
-        {
-            __m256i gt = cmpgt_u64( threshold, vals );
-            small = _mm256_movemask_pd( _mm256_castsi256_pd( gt ) ) & 0xF;
-        }
-        int large = small ^ 0xF;
-
-        __m256i key_large = _mm256_load_si256( reinterpret_cast< const __m256i * >( UNIQSHUF64[ small ] ) );
-        __m256i perm_large = _mm256_permutevar8x32_epi32( vals, key_large );
-        _mm256_storeu_si256( reinterpret_cast< __m256i * >( &v[ v_idx ] ), perm_large );
-        v_idx += std::popcount( static_cast< unsigned int >( large ) );
-
-        __m256i key_small = _mm256_load_si256( reinterpret_cast< const __m256i * >( UNIQSHUF64[ large ] ) );
-        __m256i perm_small = _mm256_permutevar8x32_epi32( vals, key_small );
-        _mm256_storeu_si256( reinterpret_cast< __m256i * >( &w[ w_idx ] ), perm_small );
-        w_idx += std::popcount( static_cast< unsigned int >( small ) );
-    }
-};
-
-alignas( 64 ) inline const int32_t SimdQuickHeapQueue::UNIQSHUF64[ 16 ][ 8 ] = {
-    { 0, 1, 2, 3, 4, 5, 6, 7 }, // 0000
-    { 2, 3, 4, 5, 6, 7, 0, 0 }, // 1000
-    { 0, 1, 4, 5, 6, 7, 0, 0 }, // 0100
-    { 4, 5, 6, 7, 0, 0, 0, 0 }, // 1100
-    { 0, 1, 2, 3, 6, 7, 0, 0 }, // 0010
-    { 2, 3, 6, 7, 0, 0, 0, 0 }, // 1010
-    { 0, 1, 6, 7, 0, 0, 0, 0 }, // 0110
-    { 6, 7, 0, 0, 0, 0, 0, 0 }, // 1110
-    { 0, 1, 2, 3, 4, 5, 0, 0 }, // 0001
-    { 2, 3, 4, 5, 0, 0, 0, 0 }, // 1001
-    { 0, 1, 4, 5, 0, 0, 0, 0 }, // 0101
-    { 4, 5, 0, 0, 0, 0, 0, 0 }, // 1101
-    { 0, 1, 2, 3, 0, 0, 0, 0 }, // 0011
-    { 2, 3, 0, 0, 0, 0, 0, 0 }, // 1011
-    { 0, 1, 0, 0, 0, 0, 0, 0 }, // 0111
-    { 0, 0, 0, 0, 0, 0, 0, 0 }  // 1111
 };
 
 using Strict8ArySoAHeap = Strict8ArySoAEagerHeap;

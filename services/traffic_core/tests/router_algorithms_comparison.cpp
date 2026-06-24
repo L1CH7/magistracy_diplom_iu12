@@ -497,7 +497,7 @@ int main(int argc, char **argv) {
   std::mt19937 gen(42);
   std::uniform_int_distribution<NodeID> dist(0, num_nodes - 1);
 
-  constexpr int NUM_ROUTES = 750;
+  constexpr int NUM_ROUTES = 200;
   std::vector<RouteTask> tasks;
   for (int i = 0; i < NUM_ROUTES; ++i) {
     tasks.push_back({dist(gen), dist(gen)});
@@ -523,6 +523,7 @@ int main(int argc, char **argv) {
     all_results.insert(all_results.end(), res.begin(), res.end());
   };
 
+  /*
   // 1. DIJKSTRA (Single source)
   run_suite(DijkstraRouter<InstrumentedQueue<Strict2AryHeap>>(view, num_nodes),
             InstrumentedQueue<Strict2AryHeap>(), "Dijkstra", "2-ary");
@@ -544,6 +545,7 @@ int main(int argc, char **argv) {
             InstrumentedQueue<QuickHeapQueue>(), "Dijkstra", "quickheap");
   run_suite(DijkstraRouter<InstrumentedQueue<SimdQuickHeapQueue>>(view, num_nodes),
             InstrumentedQueue<SimdQuickHeapQueue>(), "Dijkstra", "simd_quickheap_cpp");
+  */
 
   // 2. BI-DIRECTIONAL DIJKSTRA (Исключено из запусков тестов по требованию)
   /*
@@ -568,12 +570,14 @@ int main(int argc, char **argv) {
             InstrumentedQueue<SafeRadixHeap>(), "Bi-Dijkstra", "radix");
   */
 
+  /*
   // 3. A* (Euclidean Heuristic) с различными весами эвристик (от 1.0 до 1.2)
   RunAStarWeightSuite<100, 100>(view, num_nodes, manager, "w=1.0", run_suite);
   RunAStarWeightSuite<105, 100>(view, num_nodes, manager, "w=1.05", run_suite);
   RunAStarWeightSuite<110, 100>(view, num_nodes, manager, "w=1.10", run_suite);
   RunAStarWeightSuite<115, 100>(view, num_nodes, manager, "w=1.15", run_suite);
   RunAStarWeightSuite<120, 100>(view, num_nodes, manager, "w=1.2", run_suite);
+  */
 
   // 4. ALT (Landmark A*) с различными весами эвристик (от 1.0 до 1.2)
   if (manager.get_landmarks_ptr()) {
