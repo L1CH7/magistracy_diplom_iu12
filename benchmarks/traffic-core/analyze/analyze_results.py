@@ -27,7 +27,8 @@ COLORS = {
     'delta': '#BD10E0',        # Purple
     'bucket': '#9013FE',       # Indigo
     'radix': '#7ED321',        # Green
-    'quickheap': '#FF8C00'     # Dark Orange / Gold (Our New Solution)
+    'quickheap': '#FF8C00',    # Dark Orange / Gold (Rust FFI)
+    'simd_quickheap_cpp': '#FF3366' # Hot Pink (C++ AVX2 version)
 }
 
 LINE_STYLES = {
@@ -38,7 +39,8 @@ LINE_STYLES = {
     'delta': '--',
     'bucket': '-.',
     'radix': '-',
-    'quickheap': '-'
+    'quickheap': '--',
+    'simd_quickheap_cpp': '-'
 }
 
 MARKERS = {
@@ -49,7 +51,8 @@ MARKERS = {
     'delta': 'X',
     'bucket': '*',
     'radix': 'p',
-    'quickheap': 'P'
+    'quickheap': 'P',
+    'simd_quickheap_cpp': 'v'
 }
 
 def load_data(filepath):

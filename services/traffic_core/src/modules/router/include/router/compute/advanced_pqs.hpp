@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <bit>
+#include <vector>
 #include "common/graph_types.hpp"
 #include "router/compute/priority_queue.hpp"
 #include "router/compute/quick_heap.hpp"
@@ -667,6 +669,7 @@ public:
     [[nodiscard]] inline bool empty() const noexcept { return sz_ == 0; }
     inline void reserve(size_t) noexcept {} 
     
+
     inline void clear() noexcept { 
         if (sz_ > 0 && mw_ != 0xFFFFFFFF) {
             uint32_t start_idx = (mw_ >> S) & MASK;
@@ -687,6 +690,374 @@ private:
     size_t sz_; 
     uint32_t mw_;
     uint32_t max_w_;
+};
+
+/**
+ * @brief Очередь с приоритетом SimdQuickHeap на C++ с использованием AVX2.
+ * Оптимизирована для небольших очередей (до ~2048 элементов).
+ */
+class alignas( 64 ) SimdQuickHeapQueue
+{
+public:
+    SimdQuickHeapQueue()
+    {
+        pivots_.reserve( 32 );
+        buckets_.resize( 32 );
+        for( auto & bucket : buckets_ )
+        {
+            bucket.reserve( 128 );
+        }
+    }
+
+    ~SimdQuickHeapQueue() = default;
+
+    SimdQuickHeapQueue( const SimdQuickHeapQueue & ) = delete;
+    SimdQuickHeapQueue & operator=( const SimdQuickHeapQueue & ) = delete;
+
+    /**
+     * @brief Резервирует память для предотвращения динамических аллокаций.
+     */
+    inline void reserve( size_t cap ) noexcept
+    {
+        pivots_.reserve( 32 );
+        if( buckets_.size() < 32 )
+        {
+            buckets_.resize( 32 );
+        }
+        for( auto & bucket : buckets_ )
+        {
+            bucket.reserve( cap + 4 );
+        }
+    }
+
+    /**
+     * @brief Очищает очередь без освобождения выделенной памяти.
+     */
+    inline void clear() noexcept
+    {
+        pivots_.clear();
+        for( auto & bucket : buckets_ )
+        {
+            bucket.clear();
+        }
+        size_ = 0;
+    }
+
+    /**
+     * @brief Проверяет, пуста ли очередь.
+     */
+    [[nodiscard]] inline bool empty() const noexcept
+    {
+        return size_ == 0;
+    }
+
+    /**
+     * @brief Возвращает количество элементов в очереди.
+     */
+    [[nodiscard]] inline size_t size() const noexcept
+    {
+        return size_;
+    }
+
+    /**
+     * @brief Вставляет элемент в очередь.
+     */
+    inline void push( traffic::PQElement el ) noexcept
+    {
+        uint64_t val = ( static_cast< uint64_t >( el.weight ) << 32 ) | el.id;
+        size_t target_layer = push_position( val );
+        if( target_layer >= buckets_.size() )
+        {
+            buckets_.resize( target_layer + 1 );
+        }
+        auto & bucket = buckets_[ target_layer ];
+        if( SORT && target_layer == pivots_.size() && bucket.size() < N )
+        {
+            auto it = std::lower_bound( bucket.begin(), bucket.end(), val, std::greater< uint64_t >() );
+            bucket.insert( it, val );
+        }
+        else
+        {
+            bucket.push_back( val );
+        }
+        size_++;
+    }
+
+    /**
+     * @brief Извлекает минимальный элемент из очереди.
+     */
+    inline traffic::PQElement pop() noexcept
+    {
+        size_t layer = pivots_.size();
+        if( layer == 0 && buckets_[ 0 ].empty() )
+        {
+            return traffic::PQElement{};
+        }
+        if( buckets_[ layer ].size() > N )
+        {
+            while( buckets_[ pivots_.size() ].size() > N )
+            {
+                partition();
+            }
+            if( SORT )
+            {
+                auto & last_bucket = buckets_[ pivots_.size() ];
+                if( last_bucket.size() <= 16 )
+                {
+                    insertion_sort_greater( last_bucket );
+                }
+                else
+                {
+                    std::sort( last_bucket.begin(), last_bucket.end(), std::greater< uint64_t >() );
+                }
+            }
+        }
+        auto & last_bucket = buckets_[ pivots_.size() ];
+        uint64_t val = last_bucket.back();
+        last_bucket.pop_back();
+
+        if( last_bucket.empty() && pivots_.size() > 0 )
+        {
+            pivots_.pop_back();
+            if( SORT && buckets_[ pivots_.size() ].size() <= N )
+            {
+                auto & prev_bucket = buckets_[ pivots_.size() ];
+                if( prev_bucket.size() <= 16 )
+                {
+                    insertion_sort_greater( prev_bucket );
+                }
+                else
+                {
+                    std::sort( prev_bucket.begin(), prev_bucket.end(), std::greater< uint64_t >() );
+                }
+            }
+        }
+        size_--;
+        traffic::PQElement el;
+        el.weight = static_cast< traffic::PathWeight >( val >> 32 );
+        el.id = static_cast< traffic::NodeID >( val & 0xFFFFFFFF );
+        return el;
+    }
+
+private:
+    static constexpr size_t N = 16;
+    static constexpr bool SORT = true;
+
+    alignas( 64 ) static const int32_t UNIQSHUF64[ 16 ][ 8 ];
+
+    std::vector< uint64_t > pivots_;
+    std::vector< std::vector< uint64_t > > buckets_;
+    size_t size_ = 0;
+
+    /**
+     * @brief Вспомогательная функция для беззнакового сравнения векторов u64.
+     */
+    static inline __m256i cmpgt_u64( __m256i a, __m256i b ) noexcept
+    {
+        const __m256i sign_bit = _mm256_set1_epi64x( 0x8000000000000000ULL );
+        return _mm256_cmpgt_epi64( _mm256_xor_si256( a, sign_bit ), _mm256_xor_si256( b, sign_bit ) );
+    }
+
+    /**
+     * @brief Быстрая сортировка вставками по убыванию для малых массивов.
+     */
+    static inline void insertion_sort_greater( std::vector< uint64_t > & vec ) noexcept
+    {
+        size_t n = vec.size();
+        for( size_t i = 1; i < n; ++i )
+        {
+            uint64_t key = vec[ i ];
+            int64_t j = static_cast< int64_t >( i ) - 1;
+            while( j >= 0 && vec[ j ] < key )
+            {
+                vec[ j + 1 ] = vec[ j ];
+                --j;
+            }
+            vec[ j + 1 ] = key;
+        }
+    }
+
+    /**
+     * @brief Находит индекс слоя для вставки элемента.
+     */
+    inline size_t push_position( uint64_t t ) const noexcept
+    {
+        size_t n = pivots_.size();
+        if( n == 0 )
+        {
+            return 0;
+        }
+        if( n <= 64 )
+        {
+            __m256i t_simd = _mm256_set1_epi64x( t );
+            size_t target_layer = 0;
+            size_t i = 0;
+            for( ; i + 3 < n; i += 4 )
+            {
+                __m256i vals = _mm256_loadu_si256( reinterpret_cast< const __m256i * >( &pivots_[ i ] ) );
+                __m256i lt = cmpgt_u64( vals, t_simd );
+                int lt_mask = _mm256_movemask_pd( _mm256_castsi256_pd( lt ) ) & 0xF;
+                target_layer += std::popcount( static_cast< unsigned int >( lt_mask ) );
+            }
+            for( ; i < n; ++i )
+            {
+                if( t < pivots_[ i ] )
+                {
+                    target_layer++;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            return target_layer;
+        }
+        else
+        {
+            auto it = std::lower_bound( pivots_.begin(), pivots_.end(), t, std::greater< uint64_t >() );
+            return std::distance( pivots_.begin(), it );
+        }
+    }
+
+    /**
+     * @brief Разделяет текущий слой на два с использованием AVX2.
+     */
+    inline void partition() noexcept
+    {
+        size_t layer = pivots_.size();
+        if( layer + 1 >= buckets_.size() )
+        {
+            buckets_.resize( layer + 2 );
+        }
+        auto & cur_bucket = buckets_[ layer ];
+        auto & next_bucket = buckets_[ layer + 1 ];
+        size_t n = cur_bucket.size();
+
+        uint64_t pivot = 0;
+        size_t pivot_pos = 0;
+        size_t mid = n / 2;
+        uint64_t a = cur_bucket[ 0 ];
+        uint64_t b = cur_bucket[ mid ];
+        uint64_t c = cur_bucket[ n - 1 ];
+
+        if( ( a <= b && b <= c ) || ( c <= b && b <= a ) )
+        {
+            pivot = b;
+            pivot_pos = mid;
+        }
+        else if( ( b <= a && a <= c ) || ( c <= a && a <= b ) )
+        {
+            pivot = a;
+            pivot_pos = 0;
+        }
+        else
+        {
+            pivot = c;
+            pivot_pos = n - 1;
+        }
+
+        pivots_.push_back( pivot );
+        next_bucket.clear();
+
+        cur_bucket.resize( n + 4 );
+        next_bucket.resize( n + 4 );
+
+        size_t cur_len = 0;
+        size_t next_len = 0;
+        size_t n2 = ( n >= 4 ) ? ( n / 4 ) * 4 : 0;
+        size_t half = ( pivot_pos + 1 < n2 ) ? ( ( pivot_pos + 4 ) / 4 ) * 4 : n2;
+
+        __m256i threshold = _mm256_set1_epi64x( pivot );
+
+        for( size_t i = 0; i < half; i += 4 )
+        {
+            __m256i vals = _mm256_loadu_si256( reinterpret_cast< const __m256i * >( &cur_bucket[ i ] ) );
+            partition_fast< true >( vals, threshold, cur_bucket, cur_len, next_bucket, next_len );
+        }
+        for( size_t i = half; i < n2; i += 4 )
+        {
+            __m256i vals = _mm256_loadu_si256( reinterpret_cast< const __m256i * >( &cur_bucket[ i ] ) );
+            partition_fast< false >( vals, threshold, cur_bucket, cur_len, next_bucket, next_len );
+        }
+
+        if( n2 < n )
+        {
+            uint64_t limit_pivot = ( pivot_pos >= n2 ) ? ( pivot + 1 ) : pivot;
+            for( size_t i = n2; i < n; ++i )
+            {
+                uint64_t val = cur_bucket[ i ];
+                if( val >= limit_pivot )
+                {
+                    cur_bucket[ cur_len++ ] = val;
+                }
+                else
+                {
+                    next_bucket[ next_len++ ] = val;
+                }
+            }
+        }
+
+        cur_bucket.resize( cur_len );
+        next_bucket.resize( next_len );
+
+        if( cur_len == 0 )
+        {
+            std::swap( cur_bucket, next_bucket );
+            pivots_.pop_back();
+        }
+    }
+
+    /**
+     * @brief Векторное разделение элементов на два слоя.
+     */
+    template< bool EQUAL_DOWN >
+    static inline void partition_fast( __m256i vals, __m256i threshold,
+                                       std::vector< uint64_t > & v, size_t & v_idx,
+                                       std::vector< uint64_t > & w, size_t & w_idx ) noexcept
+    {
+        int small = 0;
+        if constexpr( EQUAL_DOWN )
+        {
+            __m256i lt = cmpgt_u64( vals, threshold );
+            int lt_mask = _mm256_movemask_pd( _mm256_castsi256_pd( lt ) ) & 0xF;
+            small = ( ~lt_mask ) & 0xF;
+        }
+        else
+        {
+            __m256i gt = cmpgt_u64( threshold, vals );
+            small = _mm256_movemask_pd( _mm256_castsi256_pd( gt ) ) & 0xF;
+        }
+        int large = small ^ 0xF;
+
+        __m256i key_large = _mm256_load_si256( reinterpret_cast< const __m256i * >( UNIQSHUF64[ small ] ) );
+        __m256i perm_large = _mm256_permutevar8x32_epi32( vals, key_large );
+        _mm256_storeu_si256( reinterpret_cast< __m256i * >( &v[ v_idx ] ), perm_large );
+        v_idx += std::popcount( static_cast< unsigned int >( large ) );
+
+        __m256i key_small = _mm256_load_si256( reinterpret_cast< const __m256i * >( UNIQSHUF64[ large ] ) );
+        __m256i perm_small = _mm256_permutevar8x32_epi32( vals, key_small );
+        _mm256_storeu_si256( reinterpret_cast< __m256i * >( &w[ w_idx ] ), perm_small );
+        w_idx += std::popcount( static_cast< unsigned int >( small ) );
+    }
+};
+
+alignas( 64 ) inline const int32_t SimdQuickHeapQueue::UNIQSHUF64[ 16 ][ 8 ] = {
+    { 0, 1, 2, 3, 4, 5, 6, 7 }, // 0000
+    { 2, 3, 4, 5, 6, 7, 0, 0 }, // 1000
+    { 0, 1, 4, 5, 6, 7, 0, 0 }, // 0100
+    { 4, 5, 6, 7, 0, 0, 0, 0 }, // 1100
+    { 0, 1, 2, 3, 6, 7, 0, 0 }, // 0010
+    { 2, 3, 6, 7, 0, 0, 0, 0 }, // 1010
+    { 0, 1, 6, 7, 0, 0, 0, 0 }, // 0110
+    { 6, 7, 0, 0, 0, 0, 0, 0 }, // 1110
+    { 0, 1, 2, 3, 4, 5, 0, 0 }, // 0001
+    { 2, 3, 4, 5, 0, 0, 0, 0 }, // 1001
+    { 0, 1, 4, 5, 0, 0, 0, 0 }, // 0101
+    { 4, 5, 0, 0, 0, 0, 0, 0 }, // 1101
+    { 0, 1, 2, 3, 0, 0, 0, 0 }, // 0011
+    { 2, 3, 0, 0, 0, 0, 0, 0 }, // 1011
+    { 0, 1, 0, 0, 0, 0, 0, 0 }, // 0111
+    { 0, 0, 0, 0, 0, 0, 0, 0 }  // 1111
 };
 
 using Strict8ArySoAHeap = Strict8ArySoAEagerHeap;

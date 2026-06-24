@@ -425,6 +425,10 @@ void RunAStarWeightSuite(GraphView view, NodeID num_nodes,
                 view, num_nodes, manager.get_geometry_store()),
             InstrumentedQueue<QuickHeapQueue>(), "A-Star " + weight_str,
             "quickheap");
+  run_suite(AStarRouter<InstrumentedQueue<SimdQuickHeapQueue>, Num, Den>(
+                view, num_nodes, manager.get_geometry_store()),
+            InstrumentedQueue<SimdQuickHeapQueue>(), "A-Star " + weight_str,
+            "simd_quickheap_cpp");
 }
 
 template <uint32_t Num, uint32_t Den, typename RunSuiteType>
@@ -458,6 +462,9 @@ void RunAltWeightSuite(GraphView view, NodeID num_nodes,
   run_suite(
       TdAltRouter<InstrumentedQueue<QuickHeapQueue>, Num, Den>(view, num_nodes),
       InstrumentedQueue<QuickHeapQueue>(), "ALT " + weight_str, "quickheap");
+  run_suite(
+      TdAltRouter<InstrumentedQueue<SimdQuickHeapQueue>, Num, Den>(view, num_nodes),
+      InstrumentedQueue<SimdQuickHeapQueue>(), "ALT " + weight_str, "simd_quickheap_cpp");
 }
 
 int main(int argc, char **argv) {
@@ -535,6 +542,8 @@ int main(int argc, char **argv) {
             InstrumentedQueue<SafeRadixHeap>(), "Dijkstra", "radix");
   run_suite(DijkstraRouter<InstrumentedQueue<QuickHeapQueue>>(view, num_nodes),
             InstrumentedQueue<QuickHeapQueue>(), "Dijkstra", "quickheap");
+  run_suite(DijkstraRouter<InstrumentedQueue<SimdQuickHeapQueue>>(view, num_nodes),
+            InstrumentedQueue<SimdQuickHeapQueue>(), "Dijkstra", "simd_quickheap_cpp");
 
   // 2. BI-DIRECTIONAL DIJKSTRA (Исключено из запусков тестов по требованию)
   /*
