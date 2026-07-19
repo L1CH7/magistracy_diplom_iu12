@@ -9,8 +9,8 @@ rendering: !include map.rendering.yaml
 
 # Initial map view settings
 initial:
-  center: [37.6173, 55.7558]  # Moscow center [lon, lat]
-  zoom: 12
+  center: [49.1220, 55.7961]  # Kazan center [lon, lat]
+  zoom: 11
   minZoom: 0
   maxZoom: 19
 
@@ -80,9 +80,9 @@ animation:
 # Tile configuration
 tiles:
   tileSize: 256
-  defaultUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+  defaultUrl: 'http://tile.openstreetmap.org/{z}/{x}/{y}.png'
 
 # MapLibre style settings
 style:
-  glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
+  glyphs: 'http://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
   version: 8

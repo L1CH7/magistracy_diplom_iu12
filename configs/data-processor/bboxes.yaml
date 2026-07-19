@@ -28,5 +28,9 @@ moscow_mkad:
   coords: [37.30, 55.45, 37.90, 56.00]
   description: "Moscow MKAD +5km"
 
+kazan:
+  coords: [48.46, 55.63, 49.43, 55.93]
+  description: "Kazan planet region"
+
 # Active bbox for initial load
-default: moscow_mkad
+default: kazan

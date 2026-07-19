@@ -44,6 +44,7 @@ def main():
     # Append chromium flags for docker execution
     sys.argv.append("--no-sandbox")
     sys.argv.append("--ignore-gpu-blocklist")
+    sys.argv.append("--ignore-certificate-errors")
     app = QApplication(sys.argv)
     
     # Явно устанавливаем Fusion style и светлую палитру

@@ -167,7 +167,7 @@ export function getBaseStyle() {
 
   return {
     version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    glyphs: 'http://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {
       'graph-vector': {
         type: 'vector',

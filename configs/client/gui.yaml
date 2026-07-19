@@ -28,12 +28,12 @@ markers:
     - '#0ea5e9'
     - '#10b981'
 
-# Default coordinates (Moscow)
+# Default coordinates (Kazan)
 defaults:
-  start_lat: 55.751244
-  start_lon: 37.618423
-  end_lat: 55.755826
-  end_lon: 37.617300
+  start_lat: 55.7961
+  start_lon: 49.1064
+  end_lat: 55.8030
+  end_lon: 49.1250
 
 # Zoom settings
 zoom:
