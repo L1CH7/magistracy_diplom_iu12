@@ -94,6 +94,13 @@ TrafficEngine::Init(const std::string &data_path) {
     queue_edge_volumes_[i].store(0, std::memory_order_relaxed);
   }
 
+  if (router_manager_.get_geometry_store()) {
+    hub_scenario_mgr_.LoadConfig(
+        data_path + "/../configs/simulation/scenario.yaml",
+        router_manager_.get_geometry_store(),
+        static_cast<uint32_t>(router_manager_.num_edges()));
+  }
+
   return {};
 }
 
@@ -181,7 +188,7 @@ void TrafficEngine::SpawnAgents(uint32_t num_agents, uint16_t asf,
   data_provider::ScenarioGenerator::SpawnRandomAgents(
       agent_pool_, num_agents,
       static_cast<uint32_t>(router_manager_.num_edges()), asf, initial_requests,
-      wp_probs);
+      &hub_scenario_mgr_, static_cast<uint32_t>(current_sim_time_), wp_probs);
 
   // RouteArena resizes automatically in UpdateRoute
 
@@ -203,8 +210,7 @@ void TrafficEngine::Warmup(const std::atomic<bool> *abort_flag) {
   if (!is_initialized_)
     return;
 
-  size_t last_log = 0;
-  while (routes_computed_.load() < num_agents_) {
+  while (GetWaitingSpawnAgents() > 0) {
     if (abort_flag && !abort_flag->load())
       break;
 
@@ -372,63 +378,63 @@ void TrafficEngine::Step(float dt) {
     }
   }
 
-  // Phase 2.5: Agent Recirculation (Task 2 & 3: Rate Limiter)
+  // Phase 2.5: Agent Recirculation (Diurnal Active Volume Control)
   if (respawn_enabled_.load()) {
     static std::mt19937 rec_gen{std::random_device{}()};
-    std::uniform_int_distribution<uint32_t> edge_dist(
-        0, static_cast<uint32_t>(router_manager_.num_edges()) - 1);
 
-    uint32_t respawn_quota = 1000; // Task 3: Limit respawns per tick
-    mpr_requests_buffer_.clear();  // Reuse buffer for respawn requests
+    uint32_t current_active = GetDrivingAgents() + GetReroutingAgents();
+    uint32_t target_active = static_cast<uint32_t>(
+        std::round(num_agents_ * hub_scenario_mgr_.GetTargetActiveRatio(static_cast<uint32_t>(current_sim_time_))));
 
-    uint32_t i = last_respawn_idx_;
-    for (uint32_t count = 0; count < num_agents_ && respawn_quota > 0;
-         ++count) {
-      if (agent_pool_.is_active[i] == 0 &&
-          agent_pool_.is_waiting_route[i] == 0) {
-        respawn_quota--;
-        uint32_t start_edge = edge_dist(rec_gen);
-        uint32_t target_edge = edge_dist(rec_gen);
-        while (target_edge == start_edge)
-          target_edge = edge_dist(rec_gen);
+    if (current_active < target_active) {
+      uint32_t needed = target_active - current_active;
+      uint32_t respawn_quota = std::min(needed, 1000u);
+      mpr_requests_buffer_.clear();
 
-        agent_pool_.current_edge[i] = start_edge;
-        agent_pool_.pos_meters[i] = 0.0f;
+      uint32_t i = last_respawn_idx_;
+      for (uint32_t count = 0; count < num_agents_ && respawn_quota > 0;
+           ++count) {
+        if (agent_pool_.is_active[i] == 0 &&
+            agent_pool_.is_waiting_route[i] == 0) {
+          respawn_quota--;
+          auto [start_edge, target_edge] = hub_scenario_mgr_.GeneratePair(
+              static_cast<uint32_t>(current_sim_time_),
+              static_cast<uint32_t>(router_manager_.num_edges()), rec_gen);
 
-        // СТОП! Машина не должна двигаться, пока нет маршрута (Task: Fix
-        // Respawn Loop)
-        agent_pool_.velocity_mps[i] = 0.0f;
+          agent_pool_.current_edge[i] = start_edge;
+          agent_pool_.pos_meters[i] = 0.0f;
+          agent_pool_.velocity_mps[i] = 0.0f;
 
-        float length = edge_lengths_cache_.empty()
-                           ? router_manager_.get_edge_length(start_edge)
-                           : edge_lengths_cache_[start_edge];
-        agent_pool_.inv_edge_length_m[i] =
-            (length > 0.001f) ? (1.0f / length) : 1.0f;
+          float length = edge_lengths_cache_.empty()
+                             ? router_manager_.get_edge_length(start_edge)
+                             : edge_lengths_cache_[start_edge];
+          agent_pool_.inv_edge_length_m[i] =
+              (length > 0.001f) ? (1.0f / length) : 1.0f;
 
-        // 2 = Состояние ожидания маршрута. Физика её не тронет.
-        agent_pool_.is_active[i] = 2;
-        agent_pool_.is_waiting_route[i] = 1;
-        agent_pool_.route_epoch[i]++;
+          agent_pool_.is_active[i] = 2;
+          agent_pool_.is_waiting_route[i] = 1;
+          agent_pool_.route_epoch[i]++;
 
-        agent_pool_.total_waypoints[i] = 2;
-        agent_pool_.next_waypoint_idx[i] = 1;
-        agent_pool_.waypoints[i][0] = start_edge;
-        agent_pool_.waypoints[i][1] = target_edge;
+          agent_pool_.total_waypoints[i] = 2;
+          agent_pool_.next_waypoint_idx[i] = 1;
+          agent_pool_.waypoints[i][0] = start_edge;
+          agent_pool_.waypoints[i][1] = target_edge;
 
-        traffic::common::net::RouteRequest req;
-        req.agent_id = i;
-        req.epoch = agent_pool_.route_epoch[i];
-        req.asf = asf_;
-        req.current_time_sec = static_cast<uint32_t>(current_sim_time_);
-        req.num_waypoints = 2;
-        req.waypoints[0] = start_edge;
-        req.waypoints[1] = target_edge;
+          traffic::common::net::RouteRequest req;
+          req.agent_id = i;
+          req.epoch = agent_pool_.route_epoch[i];
+          req.asf = asf_;
+          req.current_time_sec = static_cast<uint32_t>(current_sim_time_);
+          req.num_waypoints = 2;
+          req.waypoints[0] = start_edge;
+          req.waypoints[1] = target_edge;
 
-        mpr_requests_buffer_.push_back(std::move(req));
+          mpr_requests_buffer_.push_back(std::move(req));
+        }
+        i = (i + 1) % num_agents_;
       }
-      i = (i + 1) % num_agents_;
+      last_respawn_idx_ = i;
     }
-    last_respawn_idx_ = i;
   }
   if (!mpr_requests_buffer_.empty()) {
     if constexpr (ROUTER_TRAFFIC_ENABLED) {

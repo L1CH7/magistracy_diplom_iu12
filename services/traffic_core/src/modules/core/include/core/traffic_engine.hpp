@@ -14,6 +14,7 @@
 #include "data_provider/agent_pool.hpp"
 #include "data_provider/route_arena.hpp"
 #include "data_provider/kinematics_system.hpp"
+#include "data_provider/scenario_generator.hpp"
 #include "decision_engine/mpr_engine.hpp"
 
 namespace traffic::core
@@ -140,6 +141,7 @@ private:
     data_provider::AgentPool agent_pool_;
     data_provider::RouteArena route_arena_;
     data_provider::KinematicsSystem kin_system_;
+    data_provider::HubScenarioManager hub_scenario_mgr_;
     
     // Communication
     std::unique_ptr< common::net::TypedEndpoint< traffic::common::net::RouteRequest, traffic::common::net::RouteResponse > > mpr_ep_;

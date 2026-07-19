@@ -1,0 +1,31 @@
+# Simulation Traffic Scenario (Hub & Spoke Model + Diurnal Active Volume Curve)
+scenario:
+  name: kazan_hubs
+  hubs_ratio: 0.70  # 70% traffic between hubs, 30% random
+  smoothness: 1.0   # Smoothstep interpolation between profile points
+
+  # Diurnal active volume curve (defines % of max_agents active on roads by hour 0..23)
+  volume_profile:
+    - { hour: 3,  ratio: 0.10 }  # Deep night minimum (10% active)
+    - { hour: 8,  ratio: 1.00 }  # Morning rush peak (100% active)
+    - { hour: 13, ratio: 0.50 }  # Midday lull (50% active)
+    - { hour: 18, ratio: 0.90 }  # Evening rush peak (90% active)
+    - { hour: 22, ratio: 0.25 }  # Late night wind-down (25% active)
+
+  # Central Zone
+  center:
+    lat: 55.7879
+    lon: 49.1221
+    radius_km: 2.5
+
+  # Residential Hubs
+  residential:
+    - { name: "Kvartala", lat: 55.8285, lon: 49.1245, radius_km: 2.0, weight: 0.40 }
+    - { name: "Gorki_Azino", lat: 55.7645, lon: 49.2145, radius_km: 2.5, weight: 0.40 }
+    - { name: "Aviastroitelny", lat: 55.8550, lon: 49.0850, radius_km: 2.0, weight: 0.20 }
+
+  # Suburb Gates
+  suburbs:
+    - { name: "Innopolis", lat: 55.7440, lon: 48.7450, radius_km: 1.0, weight: 0.35 }
+    - { name: "Vysokaya_Gora", lat: 55.9120, lon: 49.3050, radius_km: 1.0, weight: 0.35 }
+    - { name: "Salavat_Kupere", lat: 55.8340, lon: 48.9350, radius_km: 1.5, weight: 0.30 }
