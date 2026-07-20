@@ -32,12 +32,18 @@ struct AgentPool
     std::vector< uint8_t > in_queue;           // 1 = в очереди, 0 = в свободном потоке
     std::vector< uint32_t > route_epoch;       // Current routing epoch to filter stale responses
 
+    // === Поля населения и связности поездок (Zero-Teleportation Home/Work) ===
+    std::vector< traffic::EdgeID > home_edge;    // Исходное ребро дома (для Commuters)
+    std::vector< traffic::EdgeID > work_edge;    // Исходное ребро работы (для Commuters)
+    std::vector< uint8_t > population_type;      // Тип населения (0: Commuter, 1: Commercial, 2: PublicTransport, 3: Random)
+    std::vector< float > schedule_offset_sec;    // Гауссово смещение индивидуального расписания выезда
+
     // === Buffer for agents finishing their current edge ===
     std::vector< uint32_t > transition_queue;
 
     /**
-     * @brief Reservates and resizes all SoA vectors simultaneously.
-     * @param capacity Initial number of agents.
+     * @brief Резервирует и масштабирует все SoA векторы одновременно.
+     * @param capacity Исходное количество агентов.
      */
     void Allocate( size_t capacity )
     {
@@ -55,6 +61,11 @@ struct AgentPool
         is_waiting_route.assign( capacity, 0 );
         in_queue.assign( capacity, 0 );
         route_epoch.assign( capacity, 0 );
+
+        home_edge.assign( capacity, 0 );
+        work_edge.assign( capacity, 0 );
+        population_type.assign( capacity, 0 );
+        schedule_offset_sec.assign( capacity, 0.0f );
 
         // Initial capacity for transitions to avoid allocations during tick
         transition_queue.reserve( capacity / 10 );

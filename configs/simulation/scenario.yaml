@@ -3,6 +3,20 @@ scenario:
   name: kazan_hubs
   hubs_ratio: 0.70  # 70% traffic between hubs, 30% random
   smoothness: 1.0   # Smoothstep interpolation between profile points
+  dt_sec: 0.1       # Physics step size in seconds (100ms)
+
+  # Population Distribution (Percentages, must sum to 1.0)
+  populations:
+    commuters: 0.65       # Home <-> Work trip-chaining (no teleportation)
+    commercial: 0.20      # Continuous hub-to-hub freight/taxi trips
+    public_transport: 0.05 # Fixed route stop loops
+    random: 0.10          # Random background trips
+
+  # Rush-Hour Parameters for Commuter Hazard Rate
+  schedules:
+    morning_peak_hour: 8.0
+    evening_peak_hour: 18.0
+    gaussian_sigma_hours: 1.0  # Jitter spread around peaks
 
   # Diurnal active volume curve (defines % of max_agents active on roads by hour 0..23)
   volume_profile:

@@ -378,13 +378,13 @@ void TrafficEngine::Step(float dt) {
     }
   }
 
-  // Phase 2.5: Agent Recirculation (Diurnal Active Volume Control)
+  // Phase 2.5: Agent Recirculation (Diurnal Active Volume Control & Zero-Teleportation Trip Chaining)
   if (respawn_enabled_.load()) {
     static std::mt19937 rec_gen{std::random_device{}()};
 
     uint32_t current_active = GetDrivingAgents() + GetReroutingAgents();
-    uint32_t target_active = static_cast<uint32_t>(
-        std::round(num_agents_ * hub_scenario_mgr_.GetTargetActiveRatio(static_cast<uint32_t>(current_sim_time_))));
+    float target_ratio = hub_scenario_mgr_.GetTargetActiveRatio(static_cast<uint32_t>(current_sim_time_));
+    uint32_t target_active = static_cast<uint32_t>(std::round(num_agents_ * target_ratio));
 
     if (current_active < target_active) {
       uint32_t needed = target_active - current_active;
@@ -395,10 +395,11 @@ void TrafficEngine::Step(float dt) {
       for (uint32_t count = 0; count < num_agents_ && respawn_quota > 0;
            ++count) {
         if (agent_pool_.is_active[i] == 0 &&
-            agent_pool_.is_waiting_route[i] == 0) {
+            agent_pool_.is_waiting_route[i] == 0 &&
+            hub_scenario_mgr_.ShouldWakeupAgent(i, agent_pool_, static_cast<uint32_t>(current_sim_time_), target_ratio, rec_gen)) {
           respawn_quota--;
-          auto [start_edge, target_edge] = hub_scenario_mgr_.GeneratePair(
-              static_cast<uint32_t>(current_sim_time_),
+          auto [start_edge, target_edge] = hub_scenario_mgr_.GeneratePairForAgent(
+              i, agent_pool_, static_cast<uint32_t>(current_sim_time_),
               static_cast<uint32_t>(router_manager_.num_edges()), rec_gen);
 
           agent_pool_.current_edge[i] = start_edge;

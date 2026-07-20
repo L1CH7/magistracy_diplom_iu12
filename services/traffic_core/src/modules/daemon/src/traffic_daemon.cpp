@@ -366,12 +366,9 @@ int main(int argc, char **argv) {
           std::vector<float> heatmap_smooth_r(hm_nodes_r, 0.0f);
           constexpr float HEATMAP_ALPHA_R = 0.1f;
 
-          auto last_time = std::chrono::steady_clock::now();
+          float dt = 5.0f;
           while (engine_running) {
-            auto now = std::chrono::steady_clock::now();
-            std::chrono::duration<float> dt_duration = now - last_time;
-            float dt = dt_duration.count();
-            last_time = now;
+            auto tick_start = std::chrono::steady_clock::now();
 
             float accel = engine.GetCurrentAcceleration();
             if (accel > 0.0f) {
@@ -450,18 +447,19 @@ int main(int argc, char **argv) {
                   }
                 }
               }
+
+              auto tick_end = std::chrono::steady_clock::now();
+              auto elapsed =
+                  std::chrono::duration_cast<std::chrono::microseconds>(
+                      tick_end - tick_start);
+              auto target_micros =
+                  static_cast<long long>((dt / accel) * 1000000.0f);
+              if (elapsed.count() < target_micros) {
+                std::this_thread::sleep_for(
+                    std::chrono::microseconds(target_micros - elapsed.count()));
+              }
             } else {
               std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            }
-
-            float target_fps = engine.GetCurrentFps();
-            if (target_fps > 0.0f) {
-              auto elapsed = std::chrono::steady_clock::now() - now;
-              float target_micros = (1.0f / target_fps) * 1000000.0f;
-              if (elapsed.count() < target_micros) {
-                std::this_thread::sleep_for(std::chrono::microseconds(
-                    static_cast<long>(target_micros - elapsed.count())));
-              }
             }
           }
         });

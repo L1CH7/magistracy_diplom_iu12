@@ -67,7 +67,7 @@ class SimulationPanel(QWidget):
         agents_layout.addWidget(QLabel(self.tr("Agents:")))
         self.agents_spin = QSpinBox()
         self.agents_spin.setRange(1, 1000000)
-        self.agents_spin.setValue(50000)
+        self.agents_spin.setValue(100000)
         agents_layout.addWidget(self.agents_spin)
         param_layout.addLayout(agents_layout)
 
@@ -76,7 +76,7 @@ class SimulationPanel(QWidget):
         asf_layout.addWidget(QLabel(self.tr("ASF:")))
         self.asf_spin = QSpinBox()
         self.asf_spin.setRange(1, 1000)
-        self.asf_spin.setValue(50)
+        self.asf_spin.setValue(1)
         asf_layout.addWidget(self.asf_spin)
         param_layout.addLayout(asf_layout)
 
@@ -117,7 +117,7 @@ class SimulationPanel(QWidget):
         speed_fps_layout.addWidget(QLabel(self.tr("Speed (x):")))
         self.sim_speed_spin = QDoubleSpinBox()
         self.sim_speed_spin.setRange(0.1, 3000.0)
-        self.sim_speed_spin.setValue(100.0)
+        self.sim_speed_spin.setValue(10.0)
         self.sim_speed_spin.setDecimals(1)
         speed_fps_layout.addWidget(self.sim_speed_spin)
 
