@@ -479,15 +479,19 @@ int main(int argc, char **argv) {
 
       case common::net::CommandOpcode::STATS: {
         // For diagnostic purposes, return a JSON string instead of standard Ack
+        auto counts = engine.GetAgentCounts();
         std::ostringstream json;
         json << "{";
         json << "\"sim_time\":" << engine.GetCurrentSimTime() << ",";
-        json << "\"active_agents\":" << engine.GetActiveAgents() << ",";
-        json << "\"agents_driving\":" << engine.GetDrivingAgents() << ",";
-        json << "\"agents_rerouting\":" << engine.GetReroutingAgents() << ",";
-        json << "\"agents_waiting_spawn\":" << engine.GetWaitingSpawnAgents()
-             << ",";
-        json << "\"agents_idle\":" << engine.GetIdleAgents() << ",";
+        json << "\"active_agents\":" << (counts.driving + counts.rerouting + counts.virtual_buffer) << ",";
+        json << "\"agents_driving\":" << counts.driving << ",";
+        json << "\"agents_rerouting\":" << counts.rerouting << ",";
+        json << "\"agents_waiting_spawn\":" << counts.waiting_spawn << ",";
+        json << "\"agents_idle\":" << counts.idle << ",";
+        json << "\"waiting_in_queue_count\":" << counts.waiting_in_queue << ",";
+        json << "\"virtual_buffer_count\":" << counts.virtual_buffer << ",";
+        json << "\"teleported_jam_count\":" << engine.GetTeleportedJamCount() << ",";
+        json << "\"traffic_flow_percent\":" << engine.GetTrafficFlowPercent() << ",";
         json << "\"total_spawns\":" << engine.GetTotalSpawns() << ",";
         json << "\"reroutes\":" << engine.GetTotalReroutes() << ",";
         json << "\"routes_computed\":" << engine.GetRoutesComputed() << ",";

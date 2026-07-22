@@ -32,7 +32,8 @@ def pearson_correlation(x, y):
 def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
                     router_rps, router_load, active_agents, waiting_reroute,
                     green_zones, visited_nodes, route_cycles,
-                    waiting_spawn=None, route_time_max=None, route_time_avg=None, router_wait_time=None):
+                    waiting_spawn=None, route_time_max=None, route_time_avg=None, router_wait_time=None,
+                    virtual_buffer=None, waiting_spillback=None):
     """Generate high-quality multi-panel scientific dashboard using matplotlib."""
     try:
         import matplotlib
@@ -99,6 +100,10 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     axs[1, 1].plot(sim_time, waiting_reroute, color='#ff7f0e', linewidth=1.5, label='Очередь MPR (Живые)')
     if waiting_spawn is not None and any(waiting_spawn):
         axs[1, 1].plot(sim_time, waiting_spawn, color='#9467bd', linewidth=1.5, linestyle='--', label='Очередь Spawn (Призраки)')
+    if virtual_buffer is not None and any(virtual_buffer):
+        axs[1, 1].plot(sim_time, virtual_buffer, color='#e377c2', linewidth=1.5, linestyle=':', label='Виртуальный буфер SUMO (2 м/с)')
+    if waiting_spillback is not None and any(waiting_spillback):
+        axs[1, 1].plot(sim_time, waiting_spillback, color='#d62728', linewidth=1.5, linestyle='-.', label='Застряли (0 км/ч)')
     axs[1, 1].set_title("Популяция Агентов и Очереди Роутера", fontsize=12, fontweight='bold')
     axs[1, 1].set_xlabel("Время симуляции (сек)", fontsize=10)
     axs[1, 1].set_ylabel("Количество агентов", fontsize=10)
@@ -207,6 +212,9 @@ def analyze_latest():
     route_time_avg = []
     router_wait_time = []
     
+    virtual_buffer = []
+    waiting_spillback = []
+    
     with open(target_file, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -229,6 +237,8 @@ def analyze_latest():
             route_time_max.append(float(row.get("RouteTimeMaxUs", 0.0)))
             route_time_avg.append(float(row.get("RouteTimeAvgUs", 0.0)))
             router_wait_time.append(float(row.get("RouterWaitTimeUs", 0.0)))
+            virtual_buffer.append(int(row.get("VirtualBuffer", 0)))
+            waiting_spillback.append(int(row.get("WaitingSpillbackQueue", 0)))
             
     n_samples = len(sim_time)
     if n_samples < 2:
@@ -313,7 +323,8 @@ def analyze_latest():
     plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_zones, 
                     router_rps, router_load, active_agents, waiting_reroute,
                     green_zones, visited_nodes, route_cycles,
-                    waiting_spawn, route_time_max, route_time_avg, router_wait_time)
+                    waiting_spawn, route_time_max, route_time_avg, router_wait_time,
+                    virtual_buffer, waiting_spillback)
     
     print(f"{C_GREEN}Анализ завершен успешно! Данные готовы для использования в научной работе.{C_RESET}")
 

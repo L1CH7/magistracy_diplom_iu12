@@ -9,37 +9,11 @@
 
 #include "agent_pool.hpp"
 #include "common/graph_types.hpp"
+#include "deadlock_mitigation_system.hpp"
+#include "physics_context.hpp"
 #include "route_arena.hpp"
 
 namespace traffic::data_provider {
-
-/**
- * @brief Lightweight context for physics calculations at edge transitions.
- * All pointers are non-owning. Passed by value into ProcessTransitions.
- */
-struct PhysicsContext {
-  // Live physical occupancy data (updated by KinematicsSystem during
-  // transitions)
-  uint32_t *live_volumes = nullptr;
-  uint32_t *max_volumes = nullptr;
-  std::atomic<uint32_t> *queue_volumes = nullptr;
-  const traffic::PenaltyScale *k_magic = nullptr;
-
-  // Static edge weights from the CSR graph (w_i = free-flow travel time in
-  // seconds). Indexed directly by EdgeID. Non-owning ptr into mmap'd region.
-  const traffic::EdgeWeight *static_weights = nullptr;
-
-  // Precomputed per-edge physical lengths in meters, indexed by EdgeID.
-  // nullptr = fallback to length / 15 m/s
-  const float *edge_lengths_m = nullptr;
-
-  // Pointer to mmap'd ExtendedAttributes array
-  const ExtendedAttributes *edge_attributes = nullptr;
-
-  uint32_t current_time_sec = 0;
-  uint16_t asf = 1;
-  std::vector<uint32_t> *completed_agents_out = nullptr;
-};
 
 /**
  * @brief Computes the effective velocity for an agent entering an edge.
@@ -86,6 +60,9 @@ struct PhysicsContext {
   return length_m / w;
 }
 
+/**
+ * @brief Candidate for edge transition sorting.
+ */
 struct TransitionCandidate {
   uint32_t agent_idx;
   uint32_t edge_id;
@@ -106,7 +83,7 @@ struct TransitionCandidate {
 class KinematicsSystem {
 public:
   KinematicsSystem(AgentPool &pool, RouteArena &arena)
-      : pool_(pool), arena_(arena) {}
+      : pool_(pool), arena_(arena), mitigation_system_(pool, arena) {}
 
   /**
    * @brief Updates position for all active agents.
@@ -120,14 +97,18 @@ public:
       return;
     }
 
+    // Делегируем процесс буфера SUMO и разгрузки заторов отдельному модулю
+    mitigation_system_.Process(dt, ctx);
+
     float *__restrict pos = pool_.pos_meters.data();
     float *__restrict vel = pool_.velocity_mps.data();
-    const uint8_t *__restrict active = pool_.is_active.data();
+    const AgentStatus *__restrict status = pool_.status.data();
     const traffic::EdgeID *__restrict current_edges = pool_.current_edge.data();
     const float *__restrict inv_len = pool_.inv_edge_length_m.data();
 
     for (size_t agent_idx = 0; agent_idx < agent_count; ++agent_idx) {
-      if (active[agent_idx] != 1) {
+      if (status[agent_idx] == AgentStatus::INACTIVE ||
+          status[agent_idx] == AgentStatus::VIRTUAL_BUFFER) {
         continue;
       }
 
@@ -189,6 +170,15 @@ public:
       // 3. Кинематика (Двухрежимная)
       if (!pool_.in_queue[agent_idx] && pos[agent_idx] < stop_line_m - 1.0f) {
         // РЕЖИМ 1: Свободный поток. Агент далеко от пробки, едет на V_free.
+        if (pool_.status[agent_idx] == AgentStatus::ACTIVE_QUEUE) {
+          // Агент вышел из пробки — сбрасываем флаг очереди.
+          pool_.in_queue[agent_idx] = 0;
+          if (ctx.queue_volumes) {
+            uint32_t q = ctx.queue_volumes[current_edge].load(std::memory_order_relaxed);
+            if (q > 0) ctx.queue_volumes[current_edge].fetch_sub(1, std::memory_order_relaxed);
+          }
+          pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
+        }
         agent_speed = v_free_mps;
 
         // Двигаем агента
@@ -228,7 +218,7 @@ public:
     candidates.clear();
 
     for (size_t i = 0; i < agent_count; ++i) {
-      if (active[i] == 1 && __builtin_expect(pos[i] * inv_len[i] >= 1.0f, 0)) {
+      if (pool_.IsDriving(i) && __builtin_expect(pos[i] * inv_len[i] >= 1.0f, 0)) {
         candidates.emplace_back(TransitionCandidate{static_cast<uint32_t>(i),
                                                     current_edges[i], pos[i]});
       }
@@ -266,7 +256,7 @@ public:
       // With large acceleration (dt >> edge_length/velocity), an agent can
       // overshoot multiple edges in a single tick. We drain the overshoot here
       // in one call rather than wasting N ticks on N hops at 1 hop/tick.
-      while (pool_.is_active[agent_idx] == 1 &&
+      while (pool_.IsDriving(agent_idx) &&
              pool_.pos_meters[agent_idx] * pool_.inv_edge_length_m[agent_idx] >=
                  1.0f) {
         // Subtract the current edge length to correct the overshoot
@@ -278,6 +268,16 @@ public:
         uint16_t next_idx = ++pool_.route_progress_idx[agent_idx];
         auto route = arena_.GetRoute(agent_idx);
         traffic::EdgeID old_edge = pool_.current_edge[agent_idx];
+
+        if (route.empty()) {
+          // Агент доехал до конца стартового ребра до ответа роутера.
+          // Фиксируем на конце ребра до получения пути (не деспавним!)
+          pool_.route_progress_idx[agent_idx]--;
+          pool_.pos_meters[agent_idx] = edge_len;
+          pool_.velocity_mps[agent_idx] = 0.0f;
+          blocked = true;
+          break;
+        }
 
         if (next_idx < route.size()) {
           traffic::EdgeID next_edge = route[next_idx];
@@ -308,43 +308,26 @@ public:
           uint32_t load_curr =
               ctx.live_volumes ? ctx.live_volumes[old_edge] : 0;
 
-          // 1. Check if next edge is congested (even for 1 more agent)
-          if (__builtin_expect(load_next + 1 > jam_cap_next, 0)) {
-            bool blocked_transition = true;
-
-            // 2. Absolute limit in agents (150%, but not less than +1 agent
-            // buffer)
-            uint32_t absolute_max_agents =
-                jam_cap_next + std::max<uint32_t>(1, jam_cap_next / 2);
-
-            if (load_next + 1 <= absolute_max_agents) {
-              // 3. Pressure is calculated strictly in agents using integer
-              // cross-multiplication: load_curr / jam_cap_curr >= load_next /
-              // jam_cap_next  => load_curr * jam_cap_next >= load_next *
-              // jam_cap_curr
-              if (static_cast<uint64_t>(load_curr) * jam_cap_next >=
-                  static_cast<uint64_t>(load_next) * jam_cap_curr) {
-                float next_len = 25.0f; // fallback
-                if (ctx.edge_attributes) {
-                  next_len = ctx.edge_attributes[next_edge].length_m;
-                }
-                uint32_t leak_chance = (next_len < 20.0f) ? 15 : 5;
-                if (static_cast<uint32_t>(std::rand() % 100) < leak_chance) {
-                  blocked_transition = false; // Successfully squeezed through!
-                }
-              }
-            }
-
-            if (blocked_transition) {
-              // Rollback transition. Agent remains at the very end of the
-              // current edge
+          // 1. Проверка физической емкости следующего ребра
+          if( __builtin_expect( load_next + 1 > jam_cap_next, 0 ) )
+          {
+              // Блокировка перехода: следующий сегмент забит.
+              // Откатываем индекс маршрута, фиксируем агента строго на конце текущего ребра (без откатов назад)
               pool_.route_progress_idx[agent_idx]--;
-              pool_.pos_meters[agent_idx] =
-                  edge_len - 0.05f;                 // 5 cm from the boundary
-              pool_.velocity_mps[agent_idx] = 0.0f; // Stopped in queue
+              pool_.pos_meters[agent_idx] = edge_len; // На самой границе ребра
+              pool_.velocity_mps[agent_idx] = 0.0f;   // Остановка в очереди
+
+              // Регистрируем агента в очереди обратного распространения затора (Queue Spillback)
+              if( pool_.status[agent_idx] != AgentStatus::ACTIVE_QUEUE )
+              {
+                  pool_.status[agent_idx] = AgentStatus::ACTIVE_QUEUE;
+                  pool_.spillback_start_time_sec[agent_idx] = ctx.current_time_sec;
+                  pool_.spillback_wait_queue.push_back( agent_idx );
+              }
+              // queue_volumes уже учтён при первом входе (стр. 188)
+
               blocked = true;
-              break; // Stop transitioning this agent
-            }
+              break; // Прекращаем попытки перехода в текущем такте
           }
 
           // Check if we reached a waypoint
@@ -377,6 +360,7 @@ public:
           pool_.current_edge[agent_idx] = next_edge;
           pool_.edge_enter_time_sec[agent_idx] = ctx.current_time_sec;
           pool_.in_queue[agent_idx] = 0;
+          pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
 
           // Update geometry immediately so the while-condition re-evaluates
           // correctly
@@ -400,7 +384,7 @@ public:
             }
           }
 
-          pool_.is_active[agent_idx] = 0;
+          pool_.status[agent_idx] = AgentStatus::INACTIVE;
           pool_.is_waiting_route[agent_idx] = 0;
           pool_.pos_meters[agent_idx] = 0.0f;
           pool_.in_queue[agent_idx] = 0;
@@ -414,7 +398,7 @@ public:
       // Compute static Free-Flow speed ONCE for the edge the agent will
       // actually dwell on. Intermediate edges (passed through during multi-hop)
       // are irrelevant.
-      if (pool_.is_active[agent_idx] == 1 && !blocked) {
+      if (pool_.IsDriving(agent_idx) && !blocked) {
         traffic::EdgeID curr_edge = pool_.current_edge[agent_idx];
         float len = (ctx.edge_lengths_m)
                         ? ctx.edge_lengths_m[curr_edge]
@@ -438,6 +422,7 @@ public:
 private:
   AgentPool &pool_;
   RouteArena &arena_;
+  DeadlockMitigationSystem mitigation_system_;
 };
 
 } // namespace traffic::data_provider

@@ -54,12 +54,28 @@ public:
     void ApplySettings( float accel, float fps, float chaos );
     void SetRespawn( bool enabled ) { respawn_enabled_.store( enabled ); }
 
+    struct AgentCounts
+    {
+        uint32_t driving = 0;
+        uint32_t rerouting = 0;
+        uint32_t waiting_spawn = 0;
+        uint32_t virtual_buffer = 0;
+        uint32_t idle = 0;
+        uint32_t waiting_in_queue = 0;
+    };
+
     // Accessors for metrics
+    AgentCounts GetAgentCounts() const;
     uint32_t GetActiveAgents() const;
     uint32_t GetDrivingAgents() const;
     uint32_t GetReroutingAgents() const;
     uint32_t GetWaitingSpawnAgents() const;
     uint32_t GetIdleAgents() const;
+    uint32_t GetWaitingInQueueAgents() const;
+    uint32_t GetVirtualBufferAgents() const;
+    uint64_t GetTeleportedJamCount() const { return teleported_jam_count_; }
+    float GetTrafficFlowPercent() const;
+
     size_t GetRoutesComputed() const { return routes_computed_.load(); }
     size_t GetTotalSuccessfulRoutes() const { return total_successful_routes_; }
     size_t GetTotalFailedRoutes() const { return total_failed_routes_; }
@@ -168,6 +184,7 @@ private:
     size_t total_discarded_routes_{ 0 };
     size_t total_stale_routes_{ 0 };
     size_t total_completed_routes_{ 0 };
+    uint64_t teleported_jam_count_{ 0 };
 
     // TTI accumulators — written only from the engine step thread (no data race),
     // read from daemon thread only during STATS command (rare, acceptable torn read for diagnostics)

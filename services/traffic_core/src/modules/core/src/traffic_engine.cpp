@@ -157,7 +157,7 @@ void TrafficEngine::ResetState() {
       queue_edge_volumes_[i].store(0, std::memory_order_relaxed);
     }
   }
-  std::fill(agent_pool_.is_active.begin(), agent_pool_.is_active.end(), 0);
+  std::fill(agent_pool_.status.begin(), agent_pool_.status.end(), data_provider::AgentStatus::INACTIVE);
   std::fill(agent_pool_.in_queue.begin(), agent_pool_.in_queue.end(), 0);
   std::fill(trip_free_flow_sec_.begin(), trip_free_flow_sec_.end(), 0.0f);
   std::fill(trip_spawn_sim_time_.begin(), trip_spawn_sim_time_.end(), 0.0f);
@@ -272,7 +272,7 @@ void TrafficEngine::UpdateTelemetry() {
 
   // Copy only active agents (SoA to AoS conversion for network)
   for (uint32_t i = 0; i < num_agents_; ++i) {
-    if (agent_pool_.is_active[i] == 1) {
+    if (agent_pool_.IsDriving(i)) {
       common::net::AgentState state;
       state.agent_id = i;
       state.current_edge = agent_pool_.current_edge[i];
@@ -382,7 +382,7 @@ void TrafficEngine::Step(float dt) {
   if (respawn_enabled_.load()) {
     static std::mt19937 rec_gen{std::random_device{}()};
 
-    uint32_t current_active = GetDrivingAgents() + GetReroutingAgents();
+    uint32_t current_active = GetDrivingAgents() + GetReroutingAgents() + GetWaitingSpawnAgents() + GetVirtualBufferAgents();
     float target_ratio = hub_scenario_mgr_.GetTargetActiveRatio(static_cast<uint32_t>(current_sim_time_));
     uint32_t target_active = static_cast<uint32_t>(std::round(num_agents_ * target_ratio));
 
@@ -394,7 +394,7 @@ void TrafficEngine::Step(float dt) {
       uint32_t i = last_respawn_idx_;
       for (uint32_t count = 0; count < num_agents_ && respawn_quota > 0;
            ++count) {
-        if (agent_pool_.is_active[i] == 0 &&
+        if (agent_pool_.status[i] == data_provider::AgentStatus::INACTIVE &&
             agent_pool_.is_waiting_route[i] == 0 &&
             hub_scenario_mgr_.ShouldWakeupAgent(i, agent_pool_, static_cast<uint32_t>(current_sim_time_), target_ratio, rec_gen)) {
           respawn_quota--;
@@ -405,6 +405,13 @@ void TrafficEngine::Step(float dt) {
           agent_pool_.current_edge[i] = start_edge;
           agent_pool_.pos_meters[i] = 0.0f;
           agent_pool_.velocity_mps[i] = 0.0f;
+          // Сброс прогресса маршрута предыдущей поездки.
+          // Без этого GetWaitingSpawnAgents() не учитывает агента (route_progress_idx > 0).
+          agent_pool_.route_progress_idx[i] = 0;
+          // Сброс эталонного времени свободного потока.
+          // Без этого is_initial_spawn=false и HandleResponses выбросит маршрут как несоответствующий reroute.
+          trip_free_flow_sec_[i] = 0.0f;
+          trip_spawn_sim_time_[i] = current_sim_time_;
 
           float length = edge_lengths_cache_.empty()
                              ? router_manager_.get_edge_length(start_edge)
@@ -412,7 +419,8 @@ void TrafficEngine::Step(float dt) {
           agent_pool_.inv_edge_length_m[i] =
               (length > 0.001f) ? (1.0f / length) : 1.0f;
 
-          agent_pool_.is_active[i] = 2;
+          // Статус остаётся INACTIVE до получения маршрута — кинематика не двигает машину до спавна.
+          agent_pool_.status[i] = data_provider::AgentStatus::INACTIVE;
           agent_pool_.is_waiting_route[i] = 1;
           agent_pool_.route_epoch[i]++;
 
@@ -637,14 +645,15 @@ void TrafficEngine::HandleResponses() {
       agent_pool_.is_waiting_route[r.agent_id] = 0;
 
       if (r.success) {
-        const bool was_active = (agent_pool_.is_active[r.agent_id] == 1);
+        const bool is_initial_spawn = (trip_free_flow_sec_[r.agent_id] == 0.0f);
+        const bool was_reroute = !is_initial_spawn;
 
         // Verify that the agent is still on a valid segment of the calculated
         // path. If it has moved, but is still on one of the edges in the new
         // path, we align its progress index. Otherwise, if its current edge is
         // not found in the path, we discard it.
         int found_idx = -1;
-        if (was_active && r.path_len > 0) {
+        if (was_reroute && r.path_len > 0) {
           traffic::EdgeID curr_edge = agent_pool_.current_edge[r.agent_id];
           for (size_t k = 0; k < r.path_len; ++k) {
             if (r.path[k] == curr_edge) {
@@ -671,11 +680,19 @@ void TrafficEngine::HandleResponses() {
           }
         }
 
-        // Reroute counter: agent already had a route and is getting a new one
-        if (was_active)
+        // Reroute counter vs Spawn counter
+        if (was_reroute) {
           reroute_count_.fetch_add(1, std::memory_order_relaxed);
-        else
+          if (found_idx >= 0) {
+            agent_pool_.route_progress_idx[r.agent_id] = static_cast<uint16_t>(found_idx);
+          }
+        } else {
           total_spawns_.fetch_add(1, std::memory_order_relaxed);
+          agent_pool_.route_progress_idx[r.agent_id] = 0;
+          if (r.path_len > 0) {
+            agent_pool_.current_edge[r.agent_id] = r.path[0];
+          }
+        }
 
         total_successful_routes_++;
         if constexpr (ROUTER_PROFILE_ENABLED) {
@@ -689,7 +706,7 @@ void TrafficEngine::HandleResponses() {
                                  {r.edge_etas_sec.data(), r.path_len});
 
         // TTI: record TRUE free-flow trip cost only at initial spawn
-        if (!was_active && r.path_len > 0) {
+        if (!was_reroute && r.path_len > 0) {
           const auto *edge_attrs = router_manager_.get_edge_attributes_ptr();
           float free_flow_sec = 0.0f;
           for (size_t k = 0; k < r.path_len; ++k) {
@@ -718,7 +735,7 @@ void TrafficEngine::HandleResponses() {
           }
         }
 
-        if (!was_active) {
+        if (!was_reroute) {
           agent_pool_.route_progress_idx[r.agent_id] = 0;
           agent_pool_.edge_enter_time_sec[r.agent_id] =
               static_cast<uint32_t>(current_sim_time_);
@@ -735,7 +752,7 @@ void TrafficEngine::HandleResponses() {
           if (live_edge_volumes_[first_edge] > max_live_volumes_[first_edge])
             max_live_volumes_[first_edge] = live_edge_volumes_[first_edge];
 
-          agent_pool_.is_active[r.agent_id] = 1;
+          agent_pool_.status[r.agent_id] = data_provider::AgentStatus::ACTIVE_FREE_FLOW;
 
           float w = (first_len / 15.0f);
           const auto *edge_attrs = router_manager_.get_edge_attributes_ptr();
@@ -763,7 +780,7 @@ void TrafficEngine::HandleResponses() {
         total_failed_routes_++;
         // Маршрут не найден. Агент остается мертвым (или становится им) и ждет
         // квоту на респавн
-        agent_pool_.is_active[r.agent_id] = 0;
+        agent_pool_.status[r.agent_id] = data_provider::AgentStatus::INACTIVE;
       }
     }
   }
@@ -771,17 +788,46 @@ void TrafficEngine::HandleResponses() {
 
 uint32_t TrafficEngine::GetActiveAgents() const {
   uint32_t active = 0;
-  for (uint32_t i = 0; i < agent_pool_.is_active.size(); ++i) {
-    if (agent_pool_.is_active[i])
+  for (uint32_t i = 0; i < agent_pool_.status.size(); ++i) {
+    if (agent_pool_.IsActive(i))
       active++;
   }
   return active;
 }
 
+TrafficEngine::AgentCounts TrafficEngine::GetAgentCounts() const {
+  AgentCounts c;
+  c.waiting_in_queue = static_cast<uint32_t>(agent_pool_.spillback_wait_queue.size());
+
+  for (uint32_t i = 0; i < agent_pool_.status.size(); ++i) {
+    auto st = agent_pool_.status[i];
+    bool waiting_route = (agent_pool_.is_waiting_route[i] == 1);
+
+    if (st == data_provider::AgentStatus::VIRTUAL_BUFFER) {
+      // Виртуальный буфер — всегда отдельная категория, независимо от is_waiting_route.
+      c.virtual_buffer++;
+    } else if (waiting_route) {
+      if (agent_pool_.route_progress_idx[i] == 0) {
+        c.waiting_spawn++;
+      } else {
+        c.rerouting++;
+      }
+    } else {
+      if (st == data_provider::AgentStatus::ACTIVE_FREE_FLOW ||
+          st == data_provider::AgentStatus::ACTIVE_QUEUE) {
+        c.driving++;
+      } else {
+        c.idle++;
+      }
+    }
+  }
+  return c;
+}
+
 uint32_t TrafficEngine::GetDrivingAgents() const {
   uint32_t cnt = 0;
-  for (uint32_t i = 0; i < agent_pool_.is_active.size(); ++i) {
-    if (agent_pool_.is_active[i] == 1 && agent_pool_.is_waiting_route[i] == 0) {
+  for (uint32_t i = 0; i < agent_pool_.status.size(); ++i) {
+    if (agent_pool_.IsDriving(i) && agent_pool_.is_waiting_route[i] == 0) {
       cnt++;
     }
   }
@@ -790,8 +836,12 @@ uint32_t TrafficEngine::GetDrivingAgents() const {
 
 uint32_t TrafficEngine::GetReroutingAgents() const {
   uint32_t cnt = 0;
-  for (uint32_t i = 0; i < agent_pool_.is_active.size(); ++i) {
-    if (agent_pool_.is_active[i] == 1 && agent_pool_.is_waiting_route[i] == 1) {
+  for (uint32_t i = 0; i < agent_pool_.status.size(); ++i) {
+    // Считаем перемаршрутизацию только для физически едущих агентов (не в виртуальном буфере).
+    if (agent_pool_.status[i] != data_provider::AgentStatus::VIRTUAL_BUFFER &&
+        agent_pool_.IsDriving(i) &&
+        agent_pool_.is_waiting_route[i] == 1 &&
+        agent_pool_.route_progress_idx[i] > 0) {
       cnt++;
     }
   }
@@ -800,8 +850,8 @@ uint32_t TrafficEngine::GetReroutingAgents() const {
 
 uint32_t TrafficEngine::GetWaitingSpawnAgents() const {
   uint32_t cnt = 0;
-  for (uint32_t i = 0; i < agent_pool_.is_active.size(); ++i) {
-    if (agent_pool_.is_active[i] == 2) {
+  for (uint32_t i = 0; i < agent_pool_.status.size(); ++i) {
+    if (agent_pool_.is_waiting_route[i] == 1 && agent_pool_.route_progress_idx[i] == 0) {
       cnt++;
     }
   }
@@ -810,12 +860,52 @@ uint32_t TrafficEngine::GetWaitingSpawnAgents() const {
 
 uint32_t TrafficEngine::GetIdleAgents() const {
   uint32_t cnt = 0;
-  for (uint32_t i = 0; i < agent_pool_.is_active.size(); ++i) {
-    if (agent_pool_.is_active[i] == 0 && agent_pool_.is_waiting_route[i] == 0) {
+  for (uint32_t i = 0; i < agent_pool_.status.size(); ++i) {
+    if (agent_pool_.status[i] == data_provider::AgentStatus::INACTIVE && agent_pool_.is_waiting_route[i] == 0) {
       cnt++;
     }
   }
   return cnt;
+}
+
+uint32_t TrafficEngine::GetWaitingInQueueAgents() const {
+  return static_cast<uint32_t>(agent_pool_.spillback_wait_queue.size());
+}
+
+uint32_t TrafficEngine::GetVirtualBufferAgents() const {
+  uint32_t cnt = 0;
+  for (uint32_t i = 0; i < agent_pool_.status.size(); ++i) {
+    // Считаем ВСЕХ агентов в виртуальном буфере — в том числе тех, кто ждёт MPR ответа.
+    if (agent_pool_.status[i] == data_provider::AgentStatus::VIRTUAL_BUFFER) {
+      cnt++;
+    }
+  }
+  return cnt;
+}
+
+float TrafficEngine::GetTrafficFlowPercent() const {
+  const size_t agent_count = agent_pool_.Size();
+  if (agent_count == 0) return 100.0f;
+
+  double total_v_ratio = 0.0;
+  uint32_t active_count = 0;
+
+  for (size_t i = 0; i < agent_count; ++i) {
+    if (agent_pool_.IsDriving(i)) {
+      active_count++;
+      float v_curr = agent_pool_.velocity_mps[i];
+      float inv_len = agent_pool_.inv_edge_length_m[i];
+      float edge_len = (inv_len > 0.0001f) ? (1.0f / inv_len) : 15.0f;
+      float v_free = edge_len / 1.0f;
+      if (v_free < 1.0f) v_free = 1.0f;
+      float ratio = (v_curr / v_free);
+      if (ratio > 1.0f) ratio = 1.0f;
+      total_v_ratio += ratio;
+    }
+  }
+
+  if (active_count == 0) return 100.0f;
+  return static_cast<float>((total_v_ratio / active_count) * 100.0);
 }
 
 data_provider::PhysicsContext
@@ -834,6 +924,13 @@ TrafficEngine::MakePhysicsContext(uint32_t time_sec) const noexcept {
   // Expose the static CSR weights (free-flow travel time per edge in seconds)
   const auto &view = router_manager_.get_view();
   ctx.static_weights = view.static_weights;
+
+  // Подсистема противодействия заторам и дедлокам
+  ctx.deadlock_mitigation_enabled = true;
+  ctx.deadlock_mitigation_mode = 0; // 0: sumo_virtual_buffer, 1: cs_despawn_target
+  ctx.time_to_teleport_sec = 300.0f;
+  ctx.min_virtual_speed_mps = 1.3f;
+  ctx.teleported_jam_count_out = const_cast<uint64_t *>(&teleported_jam_count_);
 
   return ctx;
 }

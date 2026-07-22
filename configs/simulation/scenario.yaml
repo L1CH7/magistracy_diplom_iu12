@@ -30,7 +30,7 @@ scenario:
   center:
     lat: 55.7879
     lon: 49.1221
-    radius_km: 2.5
+    radius_km: 4.5
 
   # Residential Hubs
   residential:
@@ -43,3 +43,11 @@ scenario:
     - { name: "Innopolis", lat: 55.7440, lon: 48.7450, radius_km: 1.0, weight: 0.35 }
     - { name: "Vysokaya_Gora", lat: 55.9120, lon: 49.3050, radius_km: 1.0, weight: 0.35 }
     - { name: "Salavat_Kupere", lat: 55.8340, lon: 48.9350, radius_km: 1.5, weight: 0.30 }
+
+  # Deadlock & Queue Mitigation Subsystem (SUMO Virtual Buffer vs Cities Skylines Despawn)
+  deadlock_mitigation:
+    enabled: true
+    mode: "sumo_virtual_buffer"  # Modes: sumo_virtual_buffer, cs_despawn_target, cs_despawn_home
+    time_to_teleport_sec: 300.0
+    min_virtual_speed_mps: 2.0
+

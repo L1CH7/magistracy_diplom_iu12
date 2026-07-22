@@ -50,7 +50,6 @@ public:
       last_route_request_edge_.resize(agent_count, 0xFFFFFFFF);
     }
 
-    const uint8_t *__restrict active = pool.is_active.data();
     const uint8_t *__restrict waiting = pool.is_waiting_route.data();
     const uint32_t *__restrict enter_times = pool.edge_enter_time_sec.data();
     const uint16_t *__restrict progress_idxs = pool.route_progress_idx.data();
@@ -59,15 +58,13 @@ public:
 
 #pragma GCC ivdep
     for (size_t i = 0; i < agent_count; ++i) {
-      // Only truly active agents
-      if (active[i] == 1)
+      // Only driving agents on physical road (exclude INACTIVE and VIRTUAL_BUFFER)
+      if (pool.IsDriving(i))
       {
-        // If agent is already waiting in the queue, only proceed if it moved to a new edge
+        // If agent is ALREADY waiting in the router queue, do not duplicate/flood
         if (waiting[i] == 1)
         {
-          if (pool.current_edge[i] == last_route_request_edge_[i]) {
-            continue; // Edge has not changed, do not duplicate/flood the queue
-          }
+          continue;
         }
 
         const uint32_t elapsed = current_time_sec - enter_times[i];
@@ -86,11 +83,12 @@ public:
             TRAFFIC_MPR_TOLERANCE_DEN;
             
         if (elapsed > allowed_time) {
-          // Anti-Flood Check (30 sim-seconds cooldown for new queue placements)
-          if (waiting[i] == 1 || (current_time_sec - last_route_request_time_[i] >= 30.0f)) {
+          // Anti-Flood Cooldown: at least 60 sim-seconds between reroute requests on the same edge
+          if (static_cast<float>(current_time_sec) - last_route_request_time_[i] >= 60.0f) {
             if (tokens_left > 0) {
               stuck_indices_.push_back(static_cast<uint32_t>(i));
               last_route_request_time_[i] = static_cast<float>(current_time_sec);
+              last_route_request_edge_[i] = pool.current_edge[i];
               tokens_left--;
             }
           }

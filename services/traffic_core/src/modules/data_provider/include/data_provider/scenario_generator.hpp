@@ -338,7 +338,7 @@ public:
       pool.route_epoch[i] = 1;
 
       if (i < active_count) {
-        pool.is_active[i] = 2;
+        pool.status[i] = AgentStatus::ACTIVE_FREE_FLOW;
         pool.is_waiting_route[i] = 1;
 
         traffic::common::net::RouteRequest req;
@@ -353,7 +353,7 @@ public:
 
         initial_requests.push_back(std::move(req));
       } else {
-        pool.is_active[i] = 0;
+        pool.status[i] = AgentStatus::INACTIVE;
         pool.is_waiting_route[i] = 0;
       }
     }

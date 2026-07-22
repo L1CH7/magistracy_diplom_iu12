@@ -167,7 +167,7 @@ int main( int argc, char ** argv )
             {
                 uint32_t random_id = agent_dist( chaos_gen );
                 auto & agent_pool = engine.GetAgentPool();
-                if( agent_pool.is_active[ random_id ] )
+                if( agent_pool.IsDriving( random_id ) )
                 {
                     agent_pool.velocity_mps[ random_id ] = 0.0f;
                 }

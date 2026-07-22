@@ -101,7 +101,8 @@ async def monitor():
         "CompletedTrips", "DynamicReroutes", "BlackZones", 
         "RedZones", "YellowZones", "RouterRPS", "SavedDuplicates", "RouterLoad",
         "GreenZones", "VisitedNodes", "RouteCycles",
-        "WaitingSpawn", "RouteTimeMaxUs", "RouteTimeAvgUs", "RouterWaitTimeUs"
+        "WaitingSpawn", "RouteTimeMaxUs", "RouteTimeAvgUs", "RouterWaitTimeUs",
+        "VirtualBuffer", "WaitingSpillbackQueue"
     ]
     with open(csv_filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -237,13 +238,14 @@ async def monitor():
                 agents_rerouting = stats_cache.get("agents_rerouting", 0)
                 agents_waiting_spawn = stats_cache.get("agents_waiting_spawn", 0)
                 agents_idle = stats_cache.get("agents_idle", 0)
+                virtual_buffer = stats_cache.get("virtual_buffer_count", 0)
 
-                sum_agents = agents_driving + agents_rerouting + agents_waiting_spawn + agents_idle
-                total_cars = active_agents * asf
-                stuck_cars_est = int(total_cars * (p_black / 100.0))
-
-                active_on_roads = agents_driving + agents_rerouting
+                sum_agents = agents_driving + agents_rerouting + agents_waiting_spawn + agents_idle + virtual_buffer
+                active_on_roads = agents_driving + agents_rerouting + virtual_buffer
                 inactive_agents = agents_waiting_spawn + agents_idle
+
+                total_cars = active_on_roads * asf
+                stuck_cars_est = int(total_cars * (p_black / 100.0))
 
                 visited_nodes = stats_cache.get("visited_nodes_avg", 0.0)
                 route_cycles = stats_cache.get("route_cycles_avg", 0.0)
@@ -258,7 +260,7 @@ async def monitor():
                         writer.writerow([
                             round(sim_time, 1),
                             round(tti, 4),
-                            active_agents,
+                            active_on_roads,
                             agents_rerouting,
                             routes_completed,
                             reroutes,
@@ -274,7 +276,9 @@ async def monitor():
                             agents_waiting_spawn,
                             route_time_max,
                             round(route_time_avg, 2),
-                            router_wait_time
+                            router_wait_time,
+                            virtual_buffer,
+                            stats_cache.get("waiting_in_queue_count", 0)
                         ])
                     last_logged_sim_time = sim_time
 
@@ -298,15 +302,19 @@ async def monitor():
                 out.append(f"  ├─ Успешно прибыло (доехали): {C_GREEN}{routes_completed}{C_RESET} авто")
                 out.append(f"  └─ Динамических объездов MPR: {C_YELLOW}{reroutes}{C_RESET}")
                 out.append("")
+                spillback_queue_cnt = stats_cache.get("waiting_in_queue_count", 0)
                 out.append(f"РАСПРЕДЕЛЕНИЕ АГЕНТОВ (Всего в симуляции: {C_BOLD}{config_agents}{C_RESET}):")
                 out.append(f"  ├─ {C_BOLD}Активные на дорогах:{C_RESET}   {C_BOLD}{active_on_roads}{C_RESET}")
                 out.append(f"  │   ├─ Едут по маршруту:  {C_GREEN}{agents_driving}{C_RESET} авто")
-                out.append(f"  │   └─ Ищут объезд затора: {C_YELLOW}{agents_rerouting}{C_RESET} авто (в очереди роутера)")
+                out.append(f"  │   ├─ Ищут объезд затора: {C_YELLOW}{agents_rerouting}{C_RESET} авто (в очереди роутера)")
+                out.append(f"  │   ├─ Виртуальный буфер:  {C_MAGENTA}{virtual_buffer}{C_RESET} авто (SUMO 2 м/с)")
+                out.append(f"  │   └─ Застряли (0 км/ч):  {C_RED}{spillback_queue_cnt}{C_RESET} авто (на границе ребра)")
                 out.append(f"  └─ {C_BOLD}Неактивные в буфере:{C_RESET}   {C_BOLD}{inactive_agents}{C_RESET}")
                 out.append(f"      ├─ В очереди на выезд: {C_CYAN}{agents_waiting_spawn}{C_RESET} авто (ждут первый маршрут)")
                 out.append(f"      └─ Ожидают новый цикл: {C_MAGENTA}{agents_idle}{C_RESET} авто (завершили поездку)")
                 
-                status_ok = f"{C_GREEN}[OK: 100%]{C_RESET}" if sum_agents == config_agents else f"{C_RED}[НЕСООТВЕТСТВИЕ!]{C_RESET}"
+                pct = (sum_agents / config_agents * 100.0) if config_agents > 0 else 0.0
+                status_ok = f"{C_GREEN}[OK: {pct:.1f}%]{C_RESET}" if sum_agents == config_agents else f"{C_RED}[НЕСООТВЕТСТВИЕ: {pct:.1f}%]{C_RESET}"
                 out.append("")
                 out.append(f"Итоговый баланс популяции: {C_BOLD}{sum_agents}/{config_agents}{C_RESET} {status_ok}")
                 out.append("--------------------------------------------------------------------------------")

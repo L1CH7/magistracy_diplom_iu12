@@ -172,7 +172,7 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
     arena.UpdateRoute( agent_id, route, etas );
 
     pool.Allocate( 1 );
-    pool.is_active[ agent_id ] = 1;
+    pool.status[ agent_id ] = AgentStatus::ACTIVE_FREE_FLOW;
     pool.current_edge[ agent_id ] = route[ 0 ];
     pool.velocity_mps[ agent_id ] = 10.0f;      // 10 m/s
     pool.inv_edge_length_m[ agent_id ] = 0.01f; // 1/100m (Total length 100m)
@@ -213,7 +213,7 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         CHECK( pool.pos_meters[ agent_id ] == doctest::Approx( 10.0f ) );
         CHECK( pool.current_edge[ agent_id ] == 102 );
         CHECK( pool.route_progress_idx[ agent_id ] == 1 );
-        CHECK( pool.is_active[ agent_id ] == 1 );
+        CHECK( pool.status[ agent_id ] == AgentStatus::ACTIVE_FREE_FLOW );
         MESSAGE("  [OK] Agent moved to edge 102, position corrected to 10.0m.");
     }
 
@@ -234,7 +234,7 @@ TEST_CASE( "Mesoscopic Simulation (Data Provider) Functional Test" )
         system.ProcessTransitions( mock_ctx );
         
         // End of route detected
-        CHECK( pool.is_active[ agent_id ] == 0 );
+        CHECK( pool.status[ agent_id ] == AgentStatus::INACTIVE );
         CHECK( pool.pos_meters[ agent_id ] == 0.0f );
         REQUIRE( completed_agents.size() == 1 );
         CHECK( completed_agents[ 0 ] == agent_id );
@@ -302,7 +302,7 @@ TEST_CASE("Spillback & Deadlock Elasticity Mechanics Unit Test") {
     arena.UpdateRoute(agent_id, route, etas);
 
     pool.Allocate(1);
-    pool.is_active[agent_id] = 1;
+    pool.status[agent_id] = AgentStatus::ACTIVE_FREE_FLOW;
     pool.current_edge[agent_id] = route[0];
     pool.velocity_mps[agent_id] = 10.0f;
     pool.inv_edge_length_m[agent_id] = 0.01f; // Length 100m
@@ -364,7 +364,7 @@ TEST_CASE("Spillback & Deadlock Elasticity Mechanics Unit Test") {
         for (uint32_t i = 0; i < iterations; ++i) {
             // Re-allocate / reset pool for clean state
             pool.Allocate(1);
-            pool.is_active[agent_id] = 1;
+            pool.status[agent_id] = AgentStatus::ACTIVE_FREE_FLOW;
             pool.current_edge[agent_id] = route[0];
             pool.pos_meters[agent_id] = 110.0f;
             pool.velocity_mps[agent_id] = 10.0f;
@@ -477,7 +477,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
     {
         MESSAGE("Testing MPR Reroute detection logic...");
         uint32_t agent_id = 0;
-        pool.is_active[ agent_id ] = 1;
+        pool.status[ agent_id ] = AgentStatus::ACTIVE_FREE_FLOW;
         pool.current_edge[ agent_id ] = 500;
         pool.waypoints[ agent_id ][ 0 ] = 500;
         pool.waypoints[ agent_id ][ 1 ] = 999;
@@ -514,7 +514,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         
         for( uint32_t i = 0; i < 10; ++i )
         {
-            pool.is_active[ i ] = 1;
+            pool.status[ i ] = AgentStatus::ACTIVE_FREE_FLOW;
             pool.edge_enter_time_sec[ i ] = start_time;
             pool.route_progress_idx[ i ] = 0;
             pool.waypoints[ i ][ 0 ] = 1000;
@@ -554,7 +554,7 @@ TEST_CASE( "MPR Engine (Decision Engine) Functional Test" )
         
         for( uint32_t i = 0; i < 10; ++i )
         {
-            pool.is_active[ i ] = 1;
+            pool.status[ i ] = AgentStatus::ACTIVE_FREE_FLOW;
             pool.is_waiting_route[ i ] = 0; // Reset waiting status
             pool.edge_enter_time_sec[ i ] = start_time;
             pool.route_progress_idx[ i ] = 0;
