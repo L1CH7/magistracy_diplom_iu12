@@ -326,6 +326,11 @@ public:
         req_wps.push_back(dst);
       }
 
+      if (req_wps[0] == 0) req_wps[0] = 1;
+      if (req_wps.size() > 1 && (req_wps[1] == 0 || req_wps[1] == req_wps[0])) {
+        req_wps[1] = (req_wps[0] + 100) % std::max(1u, max_edges - 1) + 1;
+      }
+
       for (size_t w = 0; w < req_wps.size(); ++w) {
         pool.waypoints[i][w] = req_wps[w];
       }
@@ -338,7 +343,7 @@ public:
       pool.route_epoch[i] = 1;
 
       if (i < active_count) {
-        pool.status[i] = AgentStatus::ACTIVE_FREE_FLOW;
+        pool.status[i] = AgentStatus::INACTIVE;
         pool.is_waiting_route[i] = 1;
 
         traffic::common::net::RouteRequest req;

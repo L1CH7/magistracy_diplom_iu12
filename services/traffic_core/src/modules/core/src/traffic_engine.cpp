@@ -338,6 +338,16 @@ void TrafficEngine::Step(float dt) {
     }
   }
 
+  // Watchdog: Clean up any phantom agents stuck in limbo (IsDriving with empty route and not waiting for route)
+  uint32_t total_pool = static_cast<uint32_t>(agent_pool_.status.size());
+  for (uint32_t i = 0; i < total_pool; ++i) {
+    if (agent_pool_.IsDriving(i) && agent_pool_.is_waiting_route[i] == 0) {
+      if (route_arena_.GetRoute(i).empty()) {
+        agent_pool_.status[i] = data_provider::AgentStatus::INACTIVE;
+      }
+    }
+  }
+
   // Phase 2: Decision Making (MPR - Mesoscopic Path Rerouting)
   uint32_t sim_sec = static_cast<uint32_t>(current_sim_time_);
   while (sim_sec > last_mpr_tick_sim_sec_) {
@@ -401,6 +411,9 @@ void TrafficEngine::Step(float dt) {
           auto [start_edge, target_edge] = hub_scenario_mgr_.GeneratePairForAgent(
               i, agent_pool_, static_cast<uint32_t>(current_sim_time_),
               static_cast<uint32_t>(router_manager_.num_edges()), rec_gen);
+
+          if (start_edge == 0) start_edge = (agent_pool_.home_edge[i] != 0) ? agent_pool_.home_edge[i] : 1;
+          if (target_edge == 0) target_edge = (agent_pool_.work_edge[i] != 0) ? agent_pool_.work_edge[i] : 2;
 
           agent_pool_.current_edge[i] = start_edge;
           agent_pool_.pos_meters[i] = 0.0f;
@@ -641,9 +654,6 @@ void TrafficEngine::HandleResponses() {
         continue;
       }
 
-      // Запрос завершен, снимаем флаг ожидания
-      agent_pool_.is_waiting_route[r.agent_id] = 0;
-
       if (r.success) {
         const bool is_initial_spawn = (trip_free_flow_sec_[r.agent_id] == 0.0f);
         const bool was_reroute = !is_initial_spawn;
@@ -664,9 +674,17 @@ void TrafficEngine::HandleResponses() {
           if (found_idx == -1) {
             // Current edge is not part of the calculated path. Discard it.
             total_discarded_routes_++;
+            // Снимаем флаг ожидания, но если маршрут пустой — возобновим запрос
+            agent_pool_.is_waiting_route[r.agent_id] = 0;
+            if (route_arena_.GetRoute(r.agent_id).empty()) {
+              agent_pool_.status[r.agent_id] = data_provider::AgentStatus::INACTIVE;
+            }
             continue;
           }
         }
+
+        // Успешный проверенный путь — снимаем флаг ожидания
+        agent_pool_.is_waiting_route[r.agent_id] = 0;
 
         if constexpr (ROUTER_TRAFFIC_ENABLED) {
           auto vol_mgr = router_manager_.get_volume_manager();
@@ -822,6 +840,99 @@ TrafficEngine::AgentCounts TrafficEngine::GetAgentCounts() const {
     }
   }
   return c;
+}
+
+std::string TrafficEngine::GetAgentDebugSample(uint32_t requested_count) const {
+  std::ostringstream json;
+  json << "{\"sim_time\":" << current_sim_time_ << ",\"agents\":[";
+
+  uint32_t total = static_cast<uint32_t>(agent_pool_.status.size());
+  if (total == 0) {
+    json << "]}";
+    return json.str();
+  }
+
+  // 1. Фильтруем строго по АКТИВНЫМ агентам, находящимся физически на дорогах или в буфере
+  std::vector<uint32_t> active_indices;
+  active_indices.reserve(total);
+  for (uint32_t i = 0; i < total; ++i) {
+    if (agent_pool_.IsDriving(i)) {
+      active_indices.push_back(i);
+    }
+  }
+
+  uint32_t n_active = static_cast<uint32_t>(active_indices.size());
+  uint32_t target_count = std::min(requested_count, n_active > 0 ? n_active : total);
+  if (target_count == 0) target_count = 200;
+
+  std::vector<uint32_t> sampled_indices;
+  sampled_indices.reserve(target_count);
+
+  if (n_active > 0) {
+    // Равномерный шаг строго по АКТИВНЫМ агентам на дорогах
+    uint32_t step = std::max(1u, n_active / target_count);
+    for (uint32_t i = 0; i < n_active && sampled_indices.size() < target_count; i += step) {
+      sampled_indices.push_back(active_indices[i]);
+    }
+    for (uint32_t i = 0; i < n_active && sampled_indices.size() < target_count; ++i) {
+      if (i % step != 0) {
+        sampled_indices.push_back(active_indices[i]);
+      }
+    }
+  } else {
+    uint32_t step = std::max(1u, total / target_count);
+    for (uint32_t i = 0; i < total && sampled_indices.size() < target_count; i += step) {
+      sampled_indices.push_back(i);
+    }
+  }
+
+  bool first = true;
+  uint32_t curr_sim_sec = static_cast<uint32_t>(current_sim_time_);
+
+  for (uint32_t idx : sampled_indices) {
+    if (!first) json << ",";
+    first = false;
+
+    const char* status_str = "INACTIVE";
+    switch (agent_pool_.status[idx]) {
+      case data_provider::AgentStatus::ACTIVE_FREE_FLOW: status_str = "ACTIVE_FREE_FLOW"; break;
+      case data_provider::AgentStatus::ACTIVE_QUEUE: status_str = "ACTIVE_QUEUE"; break;
+      case data_provider::AgentStatus::VIRTUAL_BUFFER: status_str = "VIRTUAL_BUFFER"; break;
+      default: status_str = "INACTIVE"; break;
+    }
+
+    uint32_t wait_time = 0;
+    if (agent_pool_.status[idx] == data_provider::AgentStatus::ACTIVE_QUEUE &&
+        curr_sim_sec >= agent_pool_.spillback_start_time_sec[idx]) {
+      wait_time = curr_sim_sec - agent_pool_.spillback_start_time_sec[idx];
+    }
+
+    float trip_duration = (agent_pool_.IsDriving(idx) && trip_spawn_sim_time_[idx] > 0.0f)
+                              ? (current_sim_time_ - trip_spawn_sim_time_[idx])
+                              : 0.0f;
+    if (trip_duration < 0.0f) trip_duration = 0.0f;
+
+    auto route = route_arena_.GetRoute(idx);
+    uint32_t route_total_edges = static_cast<uint32_t>(route.size());
+
+    json << "{"
+         << "\"id\":" << idx << ","
+         << "\"status\":\"" << status_str << "\","
+         << "\"edge\":" << agent_pool_.current_edge[idx] << ","
+         << "\"pos\":" << agent_pool_.pos_meters[idx] << ","
+         << "\"v\":" << agent_pool_.velocity_mps[idx] << ","
+         << "\"route_idx\":" << agent_pool_.route_progress_idx[idx] << ","
+         << "\"route_total\":" << route_total_edges << ","
+         << "\"trip_sec\":" << static_cast<uint32_t>(trip_duration) << ","
+         << "\"in_queue\":" << static_cast<uint32_t>(agent_pool_.in_queue[idx]) << ","
+         << "\"waiting_route\":" << static_cast<uint32_t>(agent_pool_.is_waiting_route[idx]) << ","
+         << "\"spillback_wait_sec\":" << wait_time << ","
+         << "\"pop_type\":" << static_cast<uint32_t>(agent_pool_.population_type[idx])
+         << "}";
+  }
+
+  json << "]}";
+  return json.str();
 }
 
 uint32_t TrafficEngine::GetDrivingAgents() const {

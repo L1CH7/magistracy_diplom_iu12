@@ -23,7 +23,10 @@ enum class CommandOpcode : uint8_t
     STEP = 6,
     PAUSE = 7,
     RESUME = 8,
-    STATS = 9   ///< Request engine diagnostics, response is JSON text (not binary ACK)
+    STATS = 9,             ///< Запрос диагностики движка, ответ — JSON-текст (не бинарный ACK)
+    DEBUG_AGENT_SAMPLE = 10 ///< Отладочный снимок N агентов: застрявшие + едущие. Ответ — JSON.
+                            ///< Поле num_agents в CommandRequest задаёт запрошенное кол-во образцов.
+                            ///< Вызывается ТОЛЬКО по явному HTTP-запросу, не фоново.
 };
 
 /**

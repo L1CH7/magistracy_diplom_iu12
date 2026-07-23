@@ -129,35 +129,33 @@ public:
                const std::vector<float> &spoke_weights) override {
     PopulationType ptype = static_cast<PopulationType>(pool.population_type[agent_id]);
     traffic::EdgeID start_edge = pool.current_edge[agent_id];
+    if (start_edge == 0) {
+      start_edge = (pool.home_edge[agent_id] != 0) ? pool.home_edge[agent_id] : 1;
+    }
 
     if (ptype == PopulationType::Commuter) {
-      // Zero-teleportation: выезд происхоид с текущей припаркованной позиции
-      if (start_edge == 0) {
-        start_edge = pool.home_edge[agent_id];
-      }
-
       uint32_t hour = (sim_time_sec / 3600) % 24;
       bool is_evening = (hour >= static_cast<uint32_t>(cfg_.evening_peak_hour - 1.0f) &&
                          hour <= static_cast<uint32_t>(cfg_.evening_peak_hour + 2.0f));
 
       traffic::EdgeID target_edge = is_evening ? pool.home_edge[agent_id] : pool.work_edge[agent_id];
-      if (target_edge == start_edge) {
-        target_edge = (start_edge == pool.home_edge[agent_id]) ? pool.work_edge[agent_id] : pool.home_edge[agent_id];
+      if (target_edge == 0 || target_edge == start_edge) {
+        traffic::EdgeID alt = (start_edge == pool.home_edge[agent_id]) ? pool.work_edge[agent_id] : pool.home_edge[agent_id];
+        target_edge = (alt != 0 && alt != start_edge) ? alt : (start_edge % std::max(1u, max_edges - 1) + 1);
       }
       return {start_edge, target_edge};
     }
 
     if (ptype == PopulationType::Commercial) {
-      // Коммерческий/такси трафик: выезд с текущей точки в случайный новый хаб
       traffic::EdgeID target_edge = pick_spoke_edge(spoke_edges, spoke_weights, gen, max_edges);
-      while (target_edge == start_edge) {
+      while (target_edge == 0 || target_edge == start_edge) {
         target_edge = pick_edge_from_list(center_edges, gen, max_edges);
       }
       return {start_edge, target_edge};
     }
 
     // Случайный фоновый трафик
-    std::uniform_int_distribution<uint32_t> dist(0, max_edges - 1);
+    std::uniform_int_distribution<uint32_t> dist(1, std::max(1u, max_edges - 1));
     traffic::EdgeID target_edge = dist(gen);
     while (target_edge == start_edge) {
       target_edge = dist(gen);
@@ -172,7 +170,6 @@ public:
     float current_hour = std::fmod(static_cast<float>(sim_time_sec) / 3600.0f, 24.0f);
 
     if (ptype == PopulationType::Commuter) {
-      // Пробуждаем по Гауссову распределению вокруг пиков с учетом выровненной нормы
       float sched_time = current_hour * 3600.0f + pool.schedule_offset_sec[agent_id];
       float sched_hour = std::fmod(sched_time / 3600.0f + 24.0f, 24.0f);
 
@@ -185,7 +182,6 @@ public:
       }
     }
 
-    // Для остальных типов вероятность выезда напрямую зависит от текущей дневной кривой
     std::uniform_real_distribution<float> roll(0.0f, 1.0f);
     return roll(gen) <= target_ratio;
   }
@@ -196,18 +192,19 @@ private:
   static traffic::EdgeID pick_edge_from_list(const std::vector<traffic::EdgeID> &list,
                                              std::mt19937 &gen, uint32_t max_edges) {
     if (list.empty()) {
-      std::uniform_int_distribution<uint32_t> dist(0, max_edges - 1);
+      std::uniform_int_distribution<uint32_t> dist(1, std::max(1u, max_edges - 1));
       return dist(gen);
     }
     std::uniform_int_distribution<size_t> dist(0, list.size() - 1);
-    return list[dist(gen)];
+    traffic::EdgeID e = list[dist(gen)];
+    return (e == 0) ? 1 : e;
   }
 
   static traffic::EdgeID pick_spoke_edge(const std::vector<std::vector<traffic::EdgeID>> &spoke_edges,
                                         const std::vector<float> &spoke_weights,
                                         std::mt19937 &gen, uint32_t max_edges) {
     if (spoke_edges.empty()) {
-      std::uniform_int_distribution<uint32_t> dist(0, max_edges - 1);
+      std::uniform_int_distribution<uint32_t> dist(1, std::max(1u, max_edges - 1));
       return dist(gen);
     }
 

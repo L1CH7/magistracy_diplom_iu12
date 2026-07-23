@@ -66,6 +66,7 @@ public:
 
     // Accessors for metrics
     AgentCounts GetAgentCounts() const;
+    std::string GetAgentDebugSample(uint32_t requested_count) const;
     uint32_t GetActiveAgents() const;
     uint32_t GetDrivingAgents() const;
     uint32_t GetReroutingAgents() const;
@@ -107,6 +108,7 @@ public:
     float GetCurrentSimTime() const { return current_sim_time_; }
     const std::vector< uint32_t >& GetMaxLiveVolumes() const { return max_live_volumes_; }
     const uint32_t* GetLiveVolumes() const { return live_edge_volumes_.data(); }
+    const std::atomic<uint32_t>* GetQueueVolumes() const { return queue_edge_volumes_.get(); }
     uint16_t GetASF() const { return asf_; }
     uint32_t GetNumAgentsConfig() const { return num_agents_; }
     uint64_t GetTotalVisitedNodes() const { return total_visited_nodes_.load( std::memory_order_relaxed ); }

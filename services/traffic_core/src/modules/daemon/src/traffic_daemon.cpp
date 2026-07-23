@@ -221,6 +221,7 @@ int main(int argc, char **argv) {
               if (now - last_heatmap_time >= heatmap_interval) {
                 last_heatmap_time = now;
                 const uint32_t *live_volumes = engine.GetLiveVolumes();
+                const auto *queue_volumes = engine.GetQueueVolumes();
                 if (live_volumes) {
                   auto &rm = engine.GetRouterManager();
 
@@ -242,39 +243,46 @@ int main(int argc, char **argv) {
 
                     for (uint32_t edge_id = 0; edge_id < hm_nodes; ++edge_id) {
                       float agents_count = heatmap_smooth[edge_id];
-                      if (agents_count < 0.1f)
+                      uint32_t q_vol = (queue_volumes != nullptr)
+                                           ? queue_volumes[edge_id].load(std::memory_order_relaxed)
+                                           : 0;
+
+                      if (agents_count < 0.1f && q_vol == 0)
                         continue;
                       const int64_t osm_id = rm.get_osm_id(edge_id);
                       if (osm_id <= 0)
                         continue;
 
-                      float vis_cap_agents = std::max<float>(
+                      float vis_cap = std::max<float>(
                           1.0f,
                           static_cast<float>(rm.get_edge_capacity(edge_id)));
-                      float jam_cap_agents = std::max<float>(
-                          1.0f, static_cast<float>(
-                                    rm.get_edge_physical_capacity(edge_id)));
+                      float jam_cap = std::max<float>(
+                          vis_cap + 1.0f,
+                          static_cast<float>(rm.get_edge_physical_capacity(edge_id)));
 
-                      if (jam_cap_agents < vis_cap_agents)
-                        jam_cap_agents = vis_cap_agents + 1.0f;
+                      uint32_t live_v = live_volumes[edge_id];
+                      uint32_t vol_int = std::max(live_v, q_vol);
+                      uint32_t jam_cap_int = static_cast<uint32_t>(jam_cap);
 
-                      float r = 0.0f;
-                      if (agents_count <= vis_cap_agents) {
-                        r = 0.01f;
-                      } else if (agents_count >= jam_cap_agents) {
-                        float over =
-                            (agents_count - jam_cap_agents) / jam_cap_agents;
-                        r = 1.0f + over;
+                      // Кусочно-линейный расчёт с целочисленной гарантией пресечения:
+                      // 1. vol_int >= jam_cap_int: Ровно 1.00x (КРАСНАЯ ЗОНА при полной физической забитости)
+                      // 2. vol_int <= vis_cap: Зеленая зона свободной скорости (r от 0.00x до 0.30x)
+                      // 3. vis_cap < vol_int < jam_cap_int: Желтый градиент затора (r строго до 0.99x с округлением вниз)
+                      float r = 0.01f;
+                      if (vol_int >= jam_cap_int) {
+                        r = 1.00f;
+                      } else if (static_cast<float>(vol_int) <= vis_cap) {
+                        r = 0.30f * (static_cast<float>(vol_int) / vis_cap);
                       } else {
-                        float denom = jam_cap_agents - vis_cap_agents;
-                        r = (agents_count - vis_cap_agents) / denom;
-                        if (r < 0.01f)
-                          r = 0.01f;
+                        float denom = jam_cap - vis_cap;
+                        float raw_r = 0.30f + 0.70f * ((static_cast<float>(vol_int) - vis_cap) / denom);
+                        r = std::min(0.99f, raw_r); // Округление вниз до 0.99x, чтобы не становиться 1.00x до jam_cap
                       }
 
+                      if (r < 0.01f) r = 0.01f;
+
                       uint16_t true_cap = 1000;
-                      uint16_t send_vol = static_cast<uint16_t>(std::min<float>(
-                          std::max<float>(r * 1000.0f, 0.0f), 65535.0f));
+                      uint16_t send_vol = static_cast<uint16_t>(std::floor(r * 1000.0f));
 
                       entries.push_back(common::net::HeatmapEntry{
                           static_cast<uint64_t>(osm_id), send_vol, true_cap});
@@ -547,6 +555,14 @@ int main(int argc, char **argv) {
         json << "}";
         std::string payload = json.str();
         rep_socket.send(zmq::message_t(payload.data(), payload.size()),
+                        zmq::send_flags::none);
+        continue; // Skip standard Ack
+      }
+
+      case common::net::CommandOpcode::DEBUG_AGENT_SAMPLE: {
+        uint32_t count = cmd->num_agents > 0 ? cmd->num_agents : 200;
+        std::string json_payload = engine.GetAgentDebugSample(count);
+        rep_socket.send(zmq::message_t(json_payload.data(), json_payload.size()),
                         zmq::send_flags::none);
         continue; // Skip standard Ack
       }

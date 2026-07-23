@@ -182,6 +182,30 @@ async def sim_stats(request: Request):
         logger.error(f"Sim stats error: {e}")
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
+@app.get("/api/v1/debug/agent_sample")
+async def debug_agent_sample(request: Request, count: int = 200):
+    """
+    Get detailed debug sample of active/stuck/buffer agents.
+    Sends opcode 10 (DEBUG_AGENT_SAMPLE) to Traffic Core on-demand.
+    Zero CPU overhead when not called.
+    """
+    try:
+        payload = struct.pack("<BIIIHfff3B", 10, 0, 0, count, 0, 0.0, 0.0, 0.0, 0, 0, 0)
+        response_raw = await send_core_command(request.app, payload, timeout=5.0)
+        if not response_raw:
+            return JSONResponse({"status": "error", "message": "Empty response from Traffic Core"}, status_code=500)
+        try:
+            json_str = response_raw.decode('utf-8')
+            sample_data = json.loads(json_str)
+            return JSONResponse({"status": "success", "data": sample_data})
+        except json.JSONDecodeError as e:
+            return JSONResponse({"status": "error", "message": f"Invalid JSON: {str(e)}"}, status_code=500)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Debug agent sample error: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 @app.post("/routing/calculate")
 async def calculate_route(request: Request):
     """
