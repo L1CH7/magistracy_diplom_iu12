@@ -171,16 +171,18 @@ public:
       if (!pool_.in_queue[agent_idx] && pos[agent_idx] < stop_line_m - 1.0f) {
         // РЕЖИМ 1: Свободный поток. Агент далеко от пробки, едет на V_free.
         if (pool_.status[agent_idx] == AgentStatus::ACTIVE_QUEUE) {
-          // Агент вышел из пробки — сбрасываем флаг очереди.
-          pool_.in_queue[agent_idx] = 0;
-          if (ctx.queue_volumes) {
-            uint32_t q =
-                ctx.queue_volumes[current_edge].load(std::memory_order_relaxed);
-            if (q > 0)
-              ctx.queue_volumes[current_edge].fetch_sub(
-                  1, std::memory_order_relaxed);
+          // Сбрасываем статус только если агент действительно вырвался из затора (spillback_start_time_sec == 0)
+          if (pool_.spillback_start_time_sec[agent_idx] == 0) {
+            pool_.in_queue[agent_idx] = 0;
+            if (ctx.queue_volumes) {
+              uint32_t q =
+                  ctx.queue_volumes[current_edge].load(std::memory_order_relaxed);
+              if (q > 0)
+                ctx.queue_volumes[current_edge].fetch_sub(
+                    1, std::memory_order_relaxed);
+            }
+            pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
           }
-          pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
         }
         agent_speed = v_free_mps;
 
@@ -365,28 +367,32 @@ public:
           pool_.edge_enter_time_sec[agent_idx] = ctx.current_time_sec;
           pool_.in_queue[agent_idx] = 0;
 
-          // Проверяем загруженность целевого ребра по стандарту SUMO MESO
-          // (meso_jam_threshold_pct)
-          float load_ratio = 0.0f;
-          if (ctx.edge_attributes && ctx.live_volumes) {
-            uint32_t jam_cap = std::max<uint32_t>(
-                1, ctx.edge_attributes[next_edge].jam_capacity);
-            load_ratio = static_cast<float>(ctx.live_volumes[next_edge]) /
-                         static_cast<float>(jam_cap);
-          }
-
-          if (load_ratio >= ctx.meso_jam_threshold_pct) {
-            // Переход из затора в заторный слот (FIFO): накопительный таймер НЕ
-            // СБРАСЫВАЕТСЯ!
-            if (pool_.spillback_start_time_sec[agent_idx] == 0) {
-              pool_.spillback_start_time_sec[agent_idx] = ctx.current_time_sec;
-            }
-            pool_.status[agent_idx] = AgentStatus::ACTIVE_QUEUE;
-          } else {
-            // Честный выход на свободную дорогу (< meso_jam_threshold_pct):
-            // сброс таймера затора!
-            pool_.spillback_start_time_sec[agent_idx] = 0;
+          // HOT PATH: Быстрый путь (0 L3 cache-misses для 90%+ едущих машин)
+          if (__builtin_expect(pool_.status[agent_idx] != AgentStatus::ACTIVE_QUEUE, 1)) {
             pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
+            pool_.spillback_start_time_sec[agent_idx] = 0;
+          } else {
+            // COLD PATH: Только для агентов, ранее стоявших в очереди затора
+            uint32_t jam_cap = (ctx.edge_attributes)
+                                   ? std::max<uint32_t>(1, ctx.edge_attributes[next_edge].jam_capacity)
+                                   : 1;
+            uint32_t curr_load = (ctx.live_volumes) ? ctx.live_volumes[next_edge] : 0;
+            uint32_t threshold_limit = static_cast<uint32_t>(ctx.meso_jam_threshold_pct * 100.0f);
+
+            // Целочисленное сравнение без float-деления (fdiv)
+            if (curr_load * 100u >= jam_cap * threshold_limit) {
+              if (pool_.spillback_start_time_sec[agent_idx] == 0) {
+                pool_.spillback_start_time_sec[agent_idx] = ctx.current_time_sec;
+              }
+              if (pool_.status[agent_idx] != AgentStatus::ACTIVE_QUEUE) {
+                pool_.status[agent_idx] = AgentStatus::ACTIVE_QUEUE;
+                pool_.spillback_wait_queue.push_back(agent_idx);
+              }
+            } else {
+              // Честный выход на свободную дорогу (< meso_jam_threshold_pct): сброс таймера затора!
+              pool_.spillback_start_time_sec[agent_idx] = 0;
+              pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
+            }
           }
 
           // Update geometry immediately so the while-condition re-evaluates
