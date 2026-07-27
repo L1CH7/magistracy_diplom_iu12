@@ -67,13 +67,15 @@ def main():
     agents_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats", "agents")
     os.makedirs(agents_dir, exist_ok=True)
 
+    date_str = time.strftime("%d-%m-%Y")
     run_hash = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
-    csv_filename = os.path.join(agents_dir, f"run_{run_hash}_agents_sample_{args.count}a.csv")
+    csv_filename = os.path.join(agents_dir, f"run_{date_str}_{run_hash}_agents_sample_{args.count}a.csv")
 
     csv_headers = [
         "SimTime", "SampleCount", "FreeFlowCount", "StuckQueueCount", 
         "VirtualBufferCount", "InactiveCount", "AvgStuckSec", "MaxStuckSec", 
         "AvgSpeedMps", "AvgRouteTotal", "AvgRouteProgressPct", "AvgTripSec",
+        "AvgBufferInSec", "AvgBufferEdges",
         "Edge0Count", "LimboPhantomCount", "UniqueStuckEdges", "TopBottleneckEdge", 
         "TopBottleneckCount", "TotalStuckEpisodes"
     ]
@@ -117,6 +119,8 @@ def main():
             route_totals = []
             progress_pcts = []
             trip_secs = []
+            buffer_in_secs = []
+            buffer_edges_list = []
 
             for ag in agents_list:
                 aid = ag["id"]
@@ -151,6 +155,10 @@ def main():
                         limbo_cnt += 1
                 elif st == "VIRTUAL_BUFFER":
                     virt_buf_now += 1
+                    buf_sec = ag.get("buffer_in_sec", 0)
+                    buf_edg = ag.get("buffer_edges", 0)
+                    buffer_in_secs.append(buf_sec)
+                    buffer_edges_list.append(buf_edg)
                 elif st == "ACTIVE_FREE_FLOW":
                     free_flow_now += 1
                 else:
@@ -162,6 +170,8 @@ def main():
             avg_rtot = (sum(route_totals) / len(route_totals)) if route_totals else 0.0
             avg_prog = (sum(progress_pcts) / len(progress_pcts)) if progress_pcts else 0.0
             avg_tsec = (sum(trip_secs) / len(trip_secs)) if trip_secs else 0.0
+            avg_buf_sec = (sum(buffer_in_secs) / len(buffer_in_secs)) if buffer_in_secs else 0.0
+            avg_buf_edg = (sum(buffer_edges_list) / len(buffer_edges_list)) if buffer_edges_list else 0.0
 
             top_edge = 0
             top_cnt = 0
@@ -177,9 +187,10 @@ def main():
                     writer.writerow([
                         round(sim_time, 2), len(agents_list), free_flow_now, stuck_now,
                         virt_buf_now, inactive_now, round(avg_stuck, 2), round(max_stuck, 2),
-                        round(avg_speed, 2), round(avg_rtot, 1), round(avg_prog, 1), round(avg_tsec, 1),
-                        edge0_cnt, limbo_cnt, len(stuck_edges_counter), top_edge, top_cnt,
-                        total_episodes
+                        round(avg_speed, 2), round(avg_rtot, 1), round(avg_prog, 2), round(avg_tsec, 1),
+                        round(avg_buf_sec, 2), round(avg_buf_edg, 2),
+                        edge0_cnt, limbo_cnt, len(stuck_edges_counter), top_edge,
+                        top_cnt, total_episodes
                     ])
                 last_logged_sim_time = sim_time
 

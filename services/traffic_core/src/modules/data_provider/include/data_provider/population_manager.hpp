@@ -167,23 +167,30 @@ public:
                          uint32_t sim_time_sec, float target_ratio,
                          std::mt19937 &gen) override {
     PopulationType ptype = static_cast<PopulationType>(pool.population_type[agent_id]);
-    float current_hour = std::fmod(static_cast<float>(sim_time_sec) / 3600.0f, 24.0f);
 
-    if (ptype == PopulationType::Commuter) {
-      float sched_time = current_hour * 3600.0f + pool.schedule_offset_sec[agent_id];
-      float sched_hour = std::fmod(sched_time / 3600.0f + 24.0f, 24.0f);
-
-      bool near_morning = std::abs(sched_hour - cfg_.morning_peak_hour) <= (cfg_.gaussian_sigma_hours * 2.0f);
-      bool near_evening = std::abs(sched_hour - cfg_.evening_peak_hour) <= (cfg_.gaussian_sigma_hours * 2.0f);
-
-      if (near_morning || near_evening) {
-        std::uniform_real_distribution<float> roll(0.0f, 1.0f);
-        return roll(gen) <= (target_ratio * 1.5f);
-      }
+    // 1. Коммерческий транспорт, таксисты, доставка и фоновый шум (35% пула)
+    // Готовы выезжать в любой момент суток для наполнения требуемого объема трафика.
+    if (ptype != PopulationType::Commuter) {
+      return true;
     }
 
+    // 2. Маятниковые агенты (Commuters, 65% пула)
+    // Проверяем индивидуальное расписание маятника с учетом джиттера
+    float current_hour = std::fmod(static_cast<float>(sim_time_sec) / 3600.0f, 24.0f);
+    float sched_time = current_hour * 3600.0f + pool.schedule_offset_sec[agent_id];
+    float sched_hour = std::fmod(sched_time / 3600.0f + 24.0f, 24.0f);
+
+    // Окна утреннего (06:00-12:00) и вечернего (15:00-21:00) пиков сценария
+    bool is_morning_peak = (sched_hour >= 6.0f && sched_hour <= 12.0f);
+    bool is_evening_peak = (sched_hour >= 15.0f && sched_hour <= 21.0f);
+
+    if (is_morning_peak || is_evening_peak) {
+      return true; // В часы пик маятник выезжает дом <-> работа
+    }
+
+    // Вне часов пик (ночью) маятники отдыхают дома/на работе, уступая место таксистам/коммерции
     std::uniform_real_distribution<float> roll(0.0f, 1.0f);
-    return roll(gen) <= target_ratio;
+    return roll(gen) <= (target_ratio * 0.2f);
   }
 
 private:

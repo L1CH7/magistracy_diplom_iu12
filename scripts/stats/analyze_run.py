@@ -40,6 +40,7 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
         # Use Agg backend to allow running on headless systems / SSH
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator
         import numpy as np
     except ImportError:
         print(f"\n{C_YELLOW}[!] Для построения графиков установите matplotlib: pip install matplotlib{C_RESET}")
@@ -53,98 +54,141 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     plt.rcParams['axes.edgecolor'] = '#cccccc'
     plt.rcParams['axes.linewidth'] = 0.8
     
-    # 3x2 grid dashboard
-    fig, axs = plt.subplots(3, 2, figsize=(15, 15), dpi=150)
-    fig.suptitle(f"Панель Анализа Симуляции: {os.path.basename(target_file)}", fontsize=16, fontweight='bold', y=0.98)
+    # 4x2 grid dashboard
+    fig, axs = plt.subplots(4, 2, figsize=(16, 18), dpi=150)
+    fig.suptitle(f"Панель Анализа Симуляции: {os.path.basename(target_file)}", fontsize=16, fontweight='bold', y=0.99)
     
+    # Convert SimTime to Hours for clear, intuitive presentation
+    sim_time_hours = [t / 3600.0 for t in sim_time]
+    t_min = min(sim_time_hours) if sim_time_hours else 0.0
+    t_max = max(sim_time_hours) if sim_time_hours else 24.0
+
+    # Helper to format X axis with integer hour ticks and zero white padding
+    def format_x_axis(ax):
+        ax.set_xlabel("Время симуляции (часы)", fontsize=10)
+        ax.set_xlim(t_min, t_max)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
     # 1. Travel Time Index (TTI) Over Time
-    axs[0, 0].plot(sim_time, tti, color='#1f77b4', linewidth=2.0, label='TTI (Индекс Задержки)')
+    axs[0, 0].plot(sim_time_hours, tti, color='#1f77b4', linewidth=2.0, label='TTI (Индекс Задержки)')
     axs[0, 0].axhline(1.0, color='r', linestyle='--', linewidth=0.8, alpha=0.7, label='Порог Free-Flow (1.0)')
-    axs[0, 0].set_title("Динамика Индекса Задержки (TTI)", fontsize=12, fontweight='bold')
-    axs[0, 0].set_xlabel("Время симуляции (сек)", fontsize=10)
+    axs[0, 0].set_title("1. Динамика Индекса Задержки (TTI)", fontsize=12, fontweight='bold')
     axs[0, 0].set_ylabel("Коэффициент TTI", fontsize=10)
+    format_x_axis(axs[0, 0])
     axs[0, 0].grid(True, linestyle=':', alpha=0.6)
     axs[0, 0].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     
-    # 2. Congestion Zones Breakdown (Yellow/Red/Black)
-    axs[0, 1].plot(sim_time, black_zones, color='#800080', linewidth=1.8, label='Черные зоны (Затор >= 2x)')
-    axs[0, 1].plot(sim_time, red_zones, color='#d62728', linewidth=1.8, label='Красные зоны (Перегрузка >= 1x)')
-    axs[0, 1].plot(sim_time, yellow_zones, color='#bcbd22', linewidth=1.5, label='Желтые зоны (Плотный >= 0.3x)')
-    axs[0, 1].set_title("Заторы и Перегрузка Дорожной Сети", fontsize=12, fontweight='bold')
-    axs[0, 1].set_xlabel("Время симуляции (сек)", fontsize=10)
+    # 2. Congestion Zones Breakdown (Yellow/Red/Black) -> Plotted on roads with traffic
+    axs[0, 1].plot(sim_time_hours, black_zones, color='#800080', linewidth=1.8, label='Черные зоны (B: Затор на узлах)')
+    axs[0, 1].plot(sim_time_hours, red_zones, color='#d62728', linewidth=1.8, label='Красные зоны (R: 100% jam_cap)')
+    axs[0, 1].plot(sim_time_hours, yellow_zones, color='#bcbd22', linewidth=1.5, label='Желтые зоны (Y: Плотный поток)')
+    axs[0, 1].set_title("2. Забитые и загруженные рёбра сети (R + B + Y)", fontsize=12, fontweight='bold')
     axs[0, 1].set_ylabel("Количество ребер", fontsize=10)
+    format_x_axis(axs[0, 1])
     axs[0, 1].grid(True, linestyle=':', alpha=0.6)
     axs[0, 1].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
-    
-    # 3. Router Performance (RPS & Load)
-    ax3_left = axs[1, 0]
-    ax3_right = ax3_left.twinx()
-    
-    line1 = ax3_left.plot(sim_time, router_rps, color='#2ca02c', linewidth=1.5, label='Скорость ALT (RPS)')
-    # Convert load fraction to percentage
-    router_load_pct = [load * 100.0 for load in router_load]
-    line2 = ax3_right.plot(sim_time, router_load_pct, color='#ff7f0e', linewidth=1.5, linestyle='--', label='Нагрузка потока (%)')
-    
-    ax3_left.set_title("Производительность Вычислений Роутера", fontsize=12, fontweight='bold')
-    ax3_left.set_xlabel("Время симуляции (сек)", fontsize=10)
-    ax3_left.set_ylabel("Вычисленные маршруты / сек (RPS)", fontsize=10)
-    ax3_right.set_ylabel("Загрузка потока роутера (%)", fontsize=10)
-    ax3_left.grid(True, linestyle=':', alpha=0.6)
-    
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
-    ax3_left.legend(lines, labels, loc='upper left', frameon=True, facecolor='white', edgecolor='none')
-    
-    # 4. Population and Queue Size
-    axs[1, 1].plot(sim_time, active_agents, color='#17becf', linewidth=1.8, label='Активные на дорогах')
-    axs[1, 1].plot(sim_time, waiting_reroute, color='#ff7f0e', linewidth=1.5, label='Очередь MPR (Живые)')
-    if waiting_spawn is not None and any(waiting_spawn):
-        axs[1, 1].plot(sim_time, waiting_spawn, color='#9467bd', linewidth=1.5, linestyle='--', label='Очередь Spawn (Призраки)')
-    if virtual_buffer is not None and any(virtual_buffer):
-        axs[1, 1].plot(sim_time, virtual_buffer, color='#e377c2', linewidth=1.5, linestyle=':', label='Виртуальный буфер SUMO (2 м/с)')
-    if waiting_spillback is not None and any(waiting_spillback):
-        axs[1, 1].plot(sim_time, waiting_spillback, color='#d62728', linewidth=1.5, linestyle='-.', label='Застряли (0 км/ч)')
-    axs[1, 1].set_title("Популяция Агентов и Очереди Роутера", fontsize=12, fontweight='bold')
-    axs[1, 1].set_xlabel("Время симуляции (сек)", fontsize=10)
-    axs[1, 1].set_ylabel("Количество агентов", fontsize=10)
+
+    # 3. Green Zones (G) -> Active roads where 1 <= vol <= cap_vis (Free flow speed)
+    min_gz = min(green_zones) if green_zones else 0
+    max_gz = max(green_zones) if green_zones else 100
+    margin_gz = max(15, int((max_gz - min_gz) * 0.08))
+
+    axs[1, 0].plot(sim_time_hours, green_zones, color='#2ca02c', linewidth=2.0, label='Зеленые дороги (G: 1 <= vol <= cap_vis)')
+    axs[1, 0].set_title("3. Зеленые дороги с активными агентами (G)", fontsize=12, fontweight='bold')
+    axs[1, 0].set_ylabel("Число зеленых дорог (ед)", fontsize=10)
+    axs[1, 0].set_ylim(max(0, min_gz - margin_gz), max_gz + margin_gz)
+    format_x_axis(axs[1, 0])
+    axs[1, 0].grid(True, linestyle=':', alpha=0.6)
+    axs[1, 0].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
+
+    # 4. Completely Empty Roads without agents (vol = 0) -> N - (R + G + Y + B)
+    total_physical_roads = 160689
+    active_roads_sum = [g + y + r + b for g, y, r, b in zip(green_zones, yellow_zones, red_zones, black_zones)]
+    empty_roads_vol0 = [total_physical_roads - active for active in active_roads_sum]
+
+    min_emp = min(empty_roads_vol0) if empty_roads_vol0 else 140000
+    max_emp = max(empty_roads_vol0) if empty_roads_vol0 else 160689
+    margin_emp = max(50, int((max_emp - min_emp) * 0.08))
+
+    axs[1, 1].plot(sim_time_hours, empty_roads_vol0, color='#7f7f7f', linewidth=2.0, label='Свободные от машин дороги (N - (R+G+Y+B))')
+    axs[1, 1].set_title("4. Свободные от агентов дороги сети (vol = 0)", fontsize=12, fontweight='bold')
+    axs[1, 1].set_ylabel("Число свободных дорог (ед)", fontsize=10)
+    axs[1, 1].set_ylim(max(0, min_emp - margin_emp), min(total_physical_roads + 100, max_emp + margin_emp))
+    format_x_axis(axs[1, 1])
     axs[1, 1].grid(True, linestyle=':', alpha=0.6)
     axs[1, 1].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
 
-    # 5. Free-Flow Roads (Green Zones) - separate plot so they don't blot out other zones
-    axs[2, 0].plot(sim_time, green_zones, color='#2ca02c', linewidth=2.0, label='Зеленые зоны (Свободно < 0.3x)')
-    axs[2, 0].set_title("Свободные дороги дорожной сети", fontsize=12, fontweight='bold')
-    axs[2, 0].set_xlabel("Время симуляции (сек)", fontsize=10)
-    axs[2, 0].set_ylabel("Количество ребер", fontsize=10)
+    # 5. Population and Queue Size
+    axs[2, 0].plot(sim_time_hours, active_agents, color='#17becf', linewidth=1.8, label='Активные на дорогах')
+    if virtual_buffer is not None and any(virtual_buffer):
+        axs[2, 0].plot(sim_time_hours, virtual_buffer, color='#e377c2', linewidth=1.5, linestyle=':', label='Телепортация / Буфер заторов (SUMO)')
+    if waiting_spillback is not None and any(waiting_spillback):
+        axs[2, 0].plot(sim_time_hours, waiting_spillback, color='#d62728', linewidth=1.5, linestyle='-.', label='Застряли (0 км/ч)')
+    axs[2, 0].set_title("5. Популяция Агентов и Очереди Заторов", fontsize=12, fontweight='bold')
+    axs[2, 0].set_ylabel("Количество агентов", fontsize=10)
+    format_x_axis(axs[2, 0])
     axs[2, 0].grid(True, linestyle=':', alpha=0.6)
     axs[2, 0].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
 
-    # 6. A* Search Space & CPU Cycles / Wall-clock times (Double Y-Axis)
-    ax6_left = axs[2, 1]
-    ax6_right = ax6_left.twinx()
+    # 6. Waiting Queues (Spawn & Reroute) -> Exclude initial t=0 spawn burst (70k population queue)
+    axs[2, 1].plot(sim_time_hours, waiting_reroute, color='#ff7f0e', linewidth=1.8, label='Очередь перестроения (MPR)')
+    if waiting_spawn is not None and any(waiting_spawn):
+        spawn_clean = list(waiting_spawn)
+        # Discard the artificial t=0 burst when all 70k agents are initialized at once
+        if len(spawn_clean) > 1:
+            spawn_clean[0] = spawn_clean[1]
+        axs[2, 1].plot(sim_time_hours, spawn_clean, color='#bcbd22', linewidth=1.5, linestyle='--', label='Очередь спавна')
+    axs[2, 1].set_title("6. Очереди ожидания поиска маршрута", fontsize=12, fontweight='bold')
+    axs[2, 1].set_ylabel("Количество агентов", fontsize=10)
+    format_x_axis(axs[2, 1])
+    axs[2, 1].grid(True, linestyle=':', alpha=0.6)
+    axs[2, 1].legend(loc='upper left', frameon=True, facecolor='white', edgecolor='none')
+
+    # 7. Router Performance (RPS & Load)
+    ax7_left = axs[3, 0]
+    ax7_right = ax7_left.twinx()
     
-    line1_prof = ax6_left.plot(sim_time, visited_nodes, color='#1f77b4', linewidth=1.8, label='Посещенные вершины (ед)')
+    line1 = ax7_left.plot(sim_time_hours, router_rps, color='#2ca02c', linewidth=1.5, label='Скорость ALT (RPS)')
+    router_load_pct = [load * 100.0 for load in router_load]
+    line2 = ax7_right.plot(sim_time_hours, router_load_pct, color='#ff7f0e', linewidth=1.5, linestyle='--', label='Нагрузка потока (%)')
+    
+    ax7_left.set_title("7. Производительность Вычислений Роутера", fontsize=12, fontweight='bold')
+    ax7_left.set_ylabel("Маршруты / сек (RPS)", fontsize=10)
+    ax7_right.set_ylabel("Загрузка потока роутера (%)", fontsize=10)
+    format_x_axis(ax7_left)
+    ax7_left.grid(True, linestyle=':', alpha=0.6)
+    
+    lines = line1 + line2
+    labels = [l.get_label() for l in lines]
+    ax7_left.legend(lines, labels, loc='upper left', frameon=True, facecolor='white', edgecolor='none')
+
+    # 8. A* Search Diagnostics
+    ax8_left = axs[3, 1]
+    ax8_right = ax8_left.twinx()
+    
+    line1_prof = ax8_left.plot(sim_time_hours, visited_nodes, color='#1f77b4', linewidth=1.8, label='Посещенные вершины (ед)')
     
     lines_prof = line1_prof
     if route_time_max is not None and any(route_time_max) and sum(route_time_max) > 0:
         max_ms = [t / 1000.0 for t in route_time_max]
         avg_ms = [t / 1000.0 for t in route_time_avg]
-        line2_prof = ax6_right.plot(sim_time, max_ms, color='#d62728', linewidth=1.5, label='Время A* Max (мс)')
-        line3_prof = ax6_right.plot(sim_time, avg_ms, color='#2ca02c', linewidth=1.2, linestyle='--', label='Время A* Avg (мс)')
-        ax6_right.set_ylabel("Время расчета пути (мс)", fontsize=10)
+        line2_prof = ax8_right.plot(sim_time_hours, max_ms, color='#d62728', linewidth=1.5, label='Время A* Max (мс)')
+        line3_prof = ax8_right.plot(sim_time_hours, avg_ms, color='#2ca02c', linewidth=1.2, linestyle='--', label='Время A* Avg (мс)')
+        ax8_right.set_ylabel("Время расчета пути (мс)", fontsize=10)
         lines_prof += line2_prof + line3_prof
     else:
         cycles_m = [c / 1e6 for c in route_cycles]
-        line2_prof = ax6_right.plot(sim_time, cycles_m, color='#9467bd', linewidth=1.5, linestyle=':', label='Такты CPU (млн)')
-        ax6_right.set_ylabel("Миллионы тактов CPU (RDTSC)", fontsize=10)
+        line2_prof = ax8_right.plot(sim_time_hours, cycles_m, color='#9467bd', linewidth=1.5, linestyle=':', label='Такты CPU (млн)')
+        ax8_right.set_ylabel("Миллионы тактов CPU (RDTSC)", fontsize=10)
         lines_prof += line2_prof
         
-    ax6_left.set_title("Диагностика поиска пути A*", fontsize=12, fontweight='bold')
-    ax6_left.set_xlabel("Время симуляции (сек)", fontsize=10)
-    ax6_left.set_ylabel("Посещенные вершины (ед)", fontsize=10)
-    ax6_left.grid(True, linestyle=':', alpha=0.6)
+    ax8_left.set_title("8. Диагностика поиска пути A*", fontsize=12, fontweight='bold')
+    ax8_left.set_ylabel("Посещенные вершины (ед)", fontsize=10)
+    format_x_axis(ax8_left)
+    ax8_left.grid(True, linestyle=':', alpha=0.6)
     
     labels_prof = [l.get_label() for l in lines_prof]
-    ax6_left.legend(lines_prof, labels_prof, loc='upper left', frameon=True, facecolor='white', edgecolor='none')
+    ax8_left.legend(lines_prof, labels_prof, loc='upper left', frameon=True, facecolor='white', edgecolor='none')
     
     # Adjust layout
     plt.tight_layout()
@@ -154,7 +198,8 @@ def plot_statistics(target_file, sim_time, tti, black_zones, red_zones, yellow_z
     plt.savefig(output_png, bbox_inches='tight')
     plt.close()
     
-    print(f"{C_BOLD}{C_GREEN}[+] График успешно сохранен: {os.path.basename(output_png)}{C_RESET}")
+    rel_path = os.path.relpath(output_png)
+    print(f"{C_BOLD}{C_GREEN}[+] График успешно сохранен: {rel_path}{C_RESET}")
 
 def analyze_latest():
     stats_dir = os.path.dirname(os.path.abspath(__file__))
@@ -270,11 +315,23 @@ def analyze_latest():
     corr_tti_reroute = pearson_correlation(tti, waiting_reroute)
     
     # Output metrics
+    max_active_ag = max(active_agents) if active_agents else 0
+    max_stuck_ag = max(waiting_spillback) if waiting_spillback else 0
+    max_virt_ag = max(virtual_buffer) if virtual_buffer else 0
+    min_green_edg = min(green_zones) if green_zones else 0
+
     print(f"{C_BOLD}Общие параметры запуска:{C_RESET}")
-    print(f"  ├─ Длительность замера:       {C_BOLD}{run_duration:.1f} сек.{C_RESET} симуляции (от {sim_time[0]:.1f} до {sim_time[-1]:.1f})")
+    print(f"  ├─ Длительность замера:       {C_BOLD}{run_duration:.1f} сек.{C_RESET} симуляции (от {sim_time[0]:.1f} до {sim_time[-1]:.1f}) [{run_duration/3600:.2f} ч.]")
     print(f"  ├─ Записей телеметрии:        {n_samples} точек")
     print(f"  ├─ Успешно доехали (авто):    {total_completed} завершенных поездок")
     print(f"  └─ Сделано объездов MPR:      {total_reroutes} перестроений")
+    print("")
+    
+    print(f"{C_BOLD}Популяция и Буфер Заторов (SUMO / Телепортация):{C_RESET}")
+    print(f"  ├─ Пик активных на дорогах:   {C_CYAN}{max_active_ag}{C_RESET} машин")
+    print(f"  ├─ Пик застрявших (0 км/ч):   {C_RED}{max_stuck_ag}{C_RESET} машин ({((max_stuck_ag/max_active_ag)*100 if max_active_ag>0 else 0):.1f}% от пикового потока)")
+    print(f"  ├─ Буфер SUMO / Телепорт:     {C_MAGENTA}{max_virt_ag}{C_RESET} машин в пике")
+    print(f"  └─ Мин. свободных дорог:     {C_GREEN}{min_green_edg}{C_RESET} ребер")
     print("")
     
     print(f"{C_BOLD}Метрики задержки (TTI — Travel Time Index):{C_RESET}")

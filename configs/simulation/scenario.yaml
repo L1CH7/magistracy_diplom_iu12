@@ -19,12 +19,15 @@ scenario:
     gaussian_sigma_hours: 1.0  # Jitter spread around peaks
 
   # Diurnal active volume curve (defines % of max_agents active on roads by hour 0..23)
+  # Strictly following scientific supervisor's intervals with 100% peak normalization (/ 0.8)
   volume_profile:
-    - { hour: 3,  ratio: 0.10 }  # Deep night minimum (10% active)
-    - { hour: 8,  ratio: 1.00 }  # Morning rush peak (100% active)
-    - { hour: 13, ratio: 0.50 }  # Midday lull (50% active)
-    - { hour: 18, ratio: 0.90 }  # Evening rush peak (90% active)
-    - { hour: 22, ratio: 0.25 }  # Late night wind-down (25% active)
+    - { hour: 3,  ratio: 0.125 } # 00:00-06:00 (Night min: 12.5%)
+    - { hour: 7,  ratio: 0.500 } # 06:00-09:00 (Morning buildup: 50%)
+    - { hour: 10, ratio: 0.875 } # 09:00-12:00 (Morning peak: 87.5%)
+    - { hour: 13, ratio: 0.500 } # 12:00-15:00 (Midday lull: 50%)
+    - { hour: 16, ratio: 0.750 } # 15:00-18:00 (Afternoon buildup: 75%)
+    - { hour: 19, ratio: 1.000 } # 18:00-21:00 (Main Evening Rush Peak: 100%)
+    - { hour: 22, ratio: 0.250 } # 21:00-00:00 (Late evening wind-down: 25%)
 
   # Central Zone
   center:

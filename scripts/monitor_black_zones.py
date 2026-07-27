@@ -67,30 +67,32 @@ async def monitor():
     os.makedirs(stats_dir, exist_ok=True)
     
     # Try fetching initial stats synchronously to dynamically discover compile-time/run-time parameters
-    print(f"{C_BOLD}{C_CYAN}Получение конфигурации от демона...{C_RESET}")
+    # Try fetching initial stats synchronously to dynamically discover parameters
+    print(f"{C_BOLD}{C_CYAN}Получение конфигурации от демона (ожидание старта)...{C_RESET}")
     initial_stats = {}
-    for _ in range(10):
+    for _ in range(30):
         initial_stats = fetch_stats()
-        if initial_stats:
+        if initial_stats and (initial_stats.get("configured_agents", 0) > 0 or initial_stats.get("active_agents", 0) > 0):
             break
         time.sleep(0.5)
-        
+
     num_buckets = initial_stats.get("num_buckets", 24)
     slot_sec = initial_stats.get("slot_sec", 300)
-    configured_agents = initial_stats.get("configured_agents", 200000)
+    configured_agents = initial_stats.get("configured_agents", initial_stats.get("num_agents", 0))
     asf = initial_stats.get("asf", 1)
     bpr_enabled = initial_stats.get("bpr_enabled", False)
     profiling_enabled = initial_stats.get("profiling_enabled", False)
-    
+
     bpr_status = "on" if bpr_enabled else "off"
     prof_status = "on" if profiling_enabled else "off"
-    
+
     stats_cache = initial_stats if initial_stats else {}
-    
+
+    date_str = time.strftime("%d-%m-%Y")
     run_hash = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
     csv_filename = os.path.join(
         stats_dir, 
-        f"run_{run_hash}_bpr_{bpr_status}_prof_{prof_status}_{num_buckets}b_{slot_sec}s_{configured_agents}a_{asf}asf.csv"
+        f"run_{date_str}_{run_hash}_bpr_{bpr_status}_prof_{prof_status}_{num_buckets}b_{slot_sec}s_{configured_agents}a_{asf}asf.csv"
     )
     last_logged_sim_time = -100.0
     
@@ -110,11 +112,22 @@ async def monitor():
     
     # Background task to poll stats periodically
     async def poll_stats_loop():
-        nonlocal stats_cache
+        nonlocal stats_cache, csv_filename, configured_agents
         while True:
             fetched = fetch_stats()
             if fetched:
                 stats_cache = fetched
+                cfg_ag = fetched.get("configured_agents", fetched.get("num_agents", 0))
+                if configured_agents == 0 and cfg_ag > 0 and "_0a_" in csv_filename:
+                    new_filename = csv_filename.replace("_0a_", f"_{cfg_ag}a_")
+                    try:
+                        if os.path.exists(csv_filename):
+                            os.rename(csv_filename, new_filename)
+                            print(f"{C_BOLD}{C_GREEN}[+] Файл переименован с утом реального числа агентов: {os.path.basename(new_filename)}{C_RESET}")
+                            csv_filename = new_filename
+                            configured_agents = cfg_ag
+                    except Exception as e:
+                        pass
             await asyncio.sleep(1.0)
 
     poll_task = asyncio.create_task(poll_stats_loop())

@@ -63,6 +63,7 @@ public:
                 float v_bpr = ( live_vol > vis_cap ) ? v_free * ( C_vis / static_cast< float >( live_vol ) ) : v_free;
                 v_virt = std::max< float >( 1.3f, v_bpr );
             }
+            pool_.velocity_mps[agent_idx] = v_virt;
             pool_.pos_meters[agent_idx] += v_virt * dt;
 
             float edge_len = 1.0f / pool_.inv_edge_length_m[agent_idx];
@@ -103,6 +104,7 @@ public:
                         pool_.current_edge[agent_idx] = next_edge;
                         pool_.pos_meters[agent_idx] = 0.0f;
                         pool_.edge_enter_time_sec[agent_idx] = ctx.current_time_sec;
+                        pool_.virtual_buffer_edges_count[agent_idx]++;
 
                         if( ctx.live_volumes )
                         {
@@ -115,9 +117,17 @@ public:
                     }
                     else
                     {
-                        // Ребро забито — ждём на конце текущего ребра до следующего такта.
-                        // Не прыгаем вперёд: один такт = максимум одно ребро.
-                        pool_.pos_meters[agent_idx] = edge_len - 0.01f;
+                        // Физическое ребро забито, но агент НАХОДИТСЯ В ВИРТУАЛЬНОМ БУФЕРЕ SUMO!
+                        // Агент переходит на следующее ребро в виртуальном режиме (1.3 м/с)
+                        pool_.route_progress_idx[agent_idx] = next_idx;
+                        pool_.current_edge[agent_idx] = next_edge;
+                        pool_.pos_meters[agent_idx] = 0.0f;
+                        pool_.edge_enter_time_sec[agent_idx] = ctx.current_time_sec;
+                        pool_.virtual_buffer_edges_count[agent_idx]++;
+
+                        float next_len = ( ctx.edge_lengths_m ) ? ctx.edge_lengths_m[next_edge] : 100.0f;
+                        if( next_len < 1.0f ) next_len = 1.0f;
+                        pool_.inv_edge_length_m[agent_idx] = 1.0f / next_len;
                     }
                 }
                 else
@@ -125,6 +135,7 @@ public:
                     // Финиш маршрута в виртуальном буфере
                     pool_.status[agent_idx] = AgentStatus::INACTIVE;
                     pool_.pos_meters[agent_idx] = 0.0f;
+                    pool_.virtual_buffer_edges_count[agent_idx]++;
                     if( ctx.completed_agents_out )
                     {
                         ctx.completed_agents_out->push_back( agent_idx );
@@ -179,6 +190,8 @@ public:
                 if( ctx.deadlock_mitigation_mode == 0 ) // SUMO Virtual Buffer
                 {
                     pool_.status[agent_idx] = AgentStatus::VIRTUAL_BUFFER;
+                    pool_.virtual_buffer_entry_time_sec[agent_idx] = ctx.current_time_sec;
+                    pool_.virtual_buffer_edges_count[agent_idx] = 0;
                     pool_.virtual_buffer_queue.push_back( agent_idx );
                 }
                 else // Cities Skylines Despawn

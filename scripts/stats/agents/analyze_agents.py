@@ -67,60 +67,95 @@ def analyze_csv(csv_path: str):
     print(f"Метрики простоев и скоростей:")
     print(f"  ├─ Среднее время в заторе:      {mean_stuck_sec:.1f} сек.")
     print(f"  ├─ Максимальное время в заторе: {max_stuck_sec:.1f} сек.")
+    if "AvgBufferInSec" in df.columns:
+        avg_buf_sec_val = df["AvgBufferInSec"].mean()
+        avg_buf_edg_val = df["AvgBufferEdges"].mean()
+        print(f"  ├─ Среднее время в буфере SUMO: {avg_buf_sec_val:.1f} сек.")
+        print(f"  └─ Среднее рёбер в буфере SUMO:{avg_buf_edg_val:.1f} рёбер")
     print(f"  ├─ Средняя скорость потока:     {avg_speed_mps:.2f} м/с ({avg_speed_mps*3.6:.1f} км/ч)")
     print(f"  └─ Макс. уникальных узких рёбер:{max_unique_bottlenecks} рёбер одновременно")
     print("-" * 75)
 
-    # Plotting Dashboard
-    fig, axs = plt.subplots(2, 2, figsize=(14, 9))
+    # Plotting Dashboard (3x2 Grid)
+    from matplotlib.ticker import MaxNLocator
+
+    fig, axs = plt.subplots(3, 2, figsize=(15, 13))
     fig.suptitle(f"Аналитика поведения выборки агентов ({os.path.basename(csv_path)})", fontsize=14, fontweight="bold")
 
-    time = df["SimTime"] / 3600.0  # Hours
+    time_hours = df["SimTime"] / 3600.0  # Hours
+    t_min = time_hours.min()
+    t_max = time_hours.max()
+
+    def format_x_axis(ax):
+        ax.set_xlabel("Время симуляции (часы)", fontsize=10)
+        ax.set_xlim(t_min, t_max)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
     # 1. Status Distribution Over Time
-    axs[0, 0].plot(time, df["FreeFlowCount"], color="#2ca02c", linewidth=2.0, label="Free Flow (Едут)")
-    axs[0, 0].plot(time, df["StuckQueueCount"], color="#d62728", linewidth=2.0, label="Stuck Queue (Стоят 0 м/с)")
-    axs[0, 0].plot(time, df["VirtualBufferCount"], color="#9467bd", linewidth=2.0, label="Virtual Buffer (Буфер SUMO)")
+    axs[0, 0].plot(time_hours, df["FreeFlowCount"], color="#2ca02c", linewidth=2.0, label="Free Flow (Едут)")
+    axs[0, 0].plot(time_hours, df["StuckQueueCount"], color="#d62728", linewidth=2.0, label="Stuck Queue (Стоят 0 м/с)")
+    axs[0, 0].plot(time_hours, df["VirtualBufferCount"], color="#9467bd", linewidth=2.0, label="Телепортация / Буфер заторов (SUMO)")
     axs[0, 0].set_title("Динамика статусов агентов на дорогах")
-    axs[0, 0].set_xlabel("Время симуляции (часы)")
     axs[0, 0].set_ylabel("Количество агентов")
+    format_x_axis(axs[0, 0])
     axs[0, 0].grid(True, linestyle="--", alpha=0.6)
     axs[0, 0].legend(loc="upper right")
 
     # 2. Route Progress & Discrepancies
     if "AvgRouteProgressPct" in df.columns:
-        axs[0, 1].plot(time, df["AvgRouteProgressPct"], color="#1f77b4", linewidth=2.0, label="Средний прогресс маршрута (%)")
+        axs[0, 1].plot(time_hours, df["AvgRouteProgressPct"], color="#1f77b4", linewidth=2.0, label="Средний прогресс маршрута (%)")
     if "LimboPhantomCount" in df.columns:
-        axs[0, 1].plot(time, df["LimboPhantomCount"], color="#d62728", linestyle="--", linewidth=1.5, label="Фантомы без маршрута")
+        axs[0, 1].plot(time_hours, df["LimboPhantomCount"], color="#d62728", linestyle="--", linewidth=1.5, label="Фантомы без маршрута")
     axs[0, 1].set_title("Прогресс движения и обнаружение аномалий")
-    axs[0, 1].set_xlabel("Время симуляции (часы)")
     axs[0, 1].set_ylabel("Процент / Количество")
+    format_x_axis(axs[0, 1])
     axs[0, 1].grid(True, linestyle="--", alpha=0.6)
     axs[0, 1].legend(loc="upper left")
 
     # 3. Average Speed Evolution
-    axs[1, 0].plot(time, df["AvgSpeedMps"] * 3.6, color="#008080", linewidth=2.0, label="Средняя скорость (км/ч)")
+    axs[1, 0].plot(time_hours, df["AvgSpeedMps"] * 3.6, color="#008080", linewidth=2.0, label="Средняя скорость (км/ч)")
     axs[1, 0].axhline(y=5.0, color="#d62728", linestyle=":", label="Порог глухого затора (5 км/ч)")
     axs[1, 0].set_title("Динамика средней скорости потока")
-    axs[1, 0].set_xlabel("Время симуляции (часы)")
     axs[1, 0].set_ylabel("Скорость (км/ч)")
+    format_x_axis(axs[1, 0])
     axs[1, 0].grid(True, linestyle="--", alpha=0.6)
     axs[1, 0].legend(loc="lower right")
 
     # 4. Spillback Wait Time
-    axs[1, 1].plot(time, df["AvgStuckSec"], color="#ff7f0e", linewidth=2.0, label="Средний простой (сек)")
-    axs[1, 1].plot(time, df["MaxStuckSec"], color="#d62728", linestyle="--", linewidth=1.5, label="Макс. простой (сек)")
-    axs[1, 1].set_title("Время простоя в заторах (Spillback Wait Time)")
-    axs[1, 1].set_xlabel("Время симуляции (часы)")
+    axs[1, 1].plot(time_hours, df["AvgStuckSec"], color="#ff7f0e", linewidth=2.0, label="Средний простой до буфера (сек)")
+    axs[1, 1].plot(time_hours, df["MaxStuckSec"], color="#d62728", linestyle="--", linewidth=1.5, label="Макс. простой до буфера (сек)")
+    axs[1, 1].set_title("Время простоя в заторах до буфера (0..300с)")
     axs[1, 1].set_ylabel("Секунды ожидания")
+    format_x_axis(axs[1, 1])
     axs[1, 1].grid(True, linestyle="--", alpha=0.6)
     axs[1, 1].legend(loc="upper left")
 
-    plt.tight_layout()
+    # 5. Pure Buffer Time (Inside Virtual Buffer)
+    if "AvgBufferInSec" in df.columns:
+        axs[2, 0].plot(time_hours, df["AvgBufferInSec"], color="#9467bd", linewidth=2.0, label="Время внутри буфера (сек)")
+    else:
+        axs[2, 0].text(0.5, 0.5, "Метрика появится при обновлении C++", ha="center", va="center")
+    axs[2, 0].set_title("Чистое время нахождения внутри буфера/телепорта")
+    axs[2, 0].set_ylabel("Секунды пребывания в буфере")
+    format_x_axis(axs[2, 0])
+    axs[2, 0].grid(True, linestyle="--", alpha=0.6)
+    axs[2, 0].legend(loc="upper left")
+
+    # 6. Edges Traversed Inside Virtual Buffer
+    if "AvgBufferEdges" in df.columns:
+        axs[2, 1].plot(time_hours, df["AvgBufferEdges"], color="#e377c2", linewidth=2.0, label="Рёбер в буфере (ед)")
+    else:
+        axs[2, 1].text(0.5, 0.5, "Метрика появится при обновлении C++", ha="center", va="center")
+    axs[2, 1].set_title("Количество рёбер, пройденных в буферном режиме")
+    axs[2, 1].set_ylabel("Количество рёбер")
+    format_x_axis(axs[2, 1])
+    axs[2, 1].grid(True, linestyle="--", alpha=0.6)
+    axs[2, 1].legend(loc="upper left")
 
     out_png = csv_path.replace(".csv", "_dashboard.png")
     plt.savefig(out_png, dpi=200)
-    print(f"[+] График анализа агентов сохранен: {os.path.basename(out_png)}")
+    rel_png = os.path.relpath(out_png)
+    print(f"[+] График анализа агентов сохранен: {rel_png}")
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize Agent Sample Telemetry CSV")

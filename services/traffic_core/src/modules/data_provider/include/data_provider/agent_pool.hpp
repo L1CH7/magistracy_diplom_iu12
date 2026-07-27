@@ -51,6 +51,8 @@ struct AgentPool
 
     // === Подсистема очереди заторов и виртуального буфера (Queue Spillback & SUMO Buffer) ===
     std::vector< uint32_t > spillback_start_time_sec; // Симуляционное время попадания в очередь (0 м/с)
+    std::vector< uint32_t > virtual_buffer_entry_time_sec; // Время входа в виртуальный буфер (сек)
+    std::vector< uint16_t > virtual_buffer_edges_count;    // Количество ребер, пройденных в буфере
     std::vector< uint32_t > spillback_wait_queue;     // Компактный вектор индексов агентов, стоящих в хвосте очереди
     std::vector< uint32_t > virtual_buffer_queue;    // Компактный вектор индексов агентов в буфере SUMO
 
@@ -102,6 +104,8 @@ struct AgentPool
         schedule_offset_sec.assign( capacity, 0.0f );
 
         spillback_start_time_sec.assign( capacity, 0 );
+        virtual_buffer_entry_time_sec.assign( capacity, 0 );
+        virtual_buffer_edges_count.assign( capacity, 0 );
         spillback_wait_queue.reserve( capacity / 5 );
         virtual_buffer_queue.reserve( capacity / 10 );
 

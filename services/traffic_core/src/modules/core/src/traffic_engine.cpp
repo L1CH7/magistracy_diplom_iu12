@@ -907,6 +907,12 @@ std::string TrafficEngine::GetAgentDebugSample(uint32_t requested_count) const {
       wait_time = curr_sim_sec - agent_pool_.spillback_start_time_sec[idx];
     }
 
+    uint32_t buffer_time = 0;
+    if (agent_pool_.status[idx] == data_provider::AgentStatus::VIRTUAL_BUFFER &&
+        curr_sim_sec >= agent_pool_.virtual_buffer_entry_time_sec[idx]) {
+      buffer_time = curr_sim_sec - agent_pool_.virtual_buffer_entry_time_sec[idx];
+    }
+
     float trip_duration = (agent_pool_.IsDriving(idx) && trip_spawn_sim_time_[idx] > 0.0f)
                               ? (current_sim_time_ - trip_spawn_sim_time_[idx])
                               : 0.0f;
@@ -927,6 +933,8 @@ std::string TrafficEngine::GetAgentDebugSample(uint32_t requested_count) const {
          << "\"in_queue\":" << static_cast<uint32_t>(agent_pool_.in_queue[idx]) << ","
          << "\"waiting_route\":" << static_cast<uint32_t>(agent_pool_.is_waiting_route[idx]) << ","
          << "\"spillback_wait_sec\":" << wait_time << ","
+         << "\"buffer_in_sec\":" << buffer_time << ","
+         << "\"buffer_edges\":" << static_cast<uint32_t>(agent_pool_.virtual_buffer_edges_count[idx]) << ","
          << "\"pop_type\":" << static_cast<uint32_t>(agent_pool_.population_type[idx])
          << "}";
   }
