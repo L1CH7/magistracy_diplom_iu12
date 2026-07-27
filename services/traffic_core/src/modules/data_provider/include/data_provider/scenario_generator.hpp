@@ -40,6 +40,18 @@ public:
     pop_mgr_ = std::make_unique<ConfigurablePopulationManager>();
   }
 
+  bool deadlock_mitigation_enabled_{true};
+  uint8_t deadlock_mitigation_mode_{0};
+  float time_to_teleport_sec_{130.0f};
+  float min_virtual_speed_mps_{1.3f};
+  float meso_jam_threshold_pct_{0.70f};
+
+  bool GetDeadlockMitigationEnabled() const noexcept { return deadlock_mitigation_enabled_; }
+  uint8_t GetDeadlockMitigationMode() const noexcept { return deadlock_mitigation_mode_; }
+  float GetTimeToTeleportSec() const noexcept { return time_to_teleport_sec_; }
+  float GetMinVirtualSpeedMps() const noexcept { return min_virtual_speed_mps_; }
+  float GetMesoJamThresholdPct() const noexcept { return meso_jam_threshold_pct_; }
+
   bool LoadConfig(const std::string &config_path,
                   const common::GeometryStore *geom_store, uint32_t num_edges) {
     if (!geom_store || num_edges == 0)
@@ -83,6 +95,14 @@ public:
         sscanf(line.c_str(), "%*[^:]: %f", &pop_cfg.evening_peak_hour);
       } else if (line.find("gaussian_sigma_hours:") != std::string::npos) {
         sscanf(line.c_str(), "%*[^:]: %f", &pop_cfg.gaussian_sigma_hours);
+      } else if (line.find("time_to_teleport_sec:") != std::string::npos) {
+        sscanf(line.c_str(), "%*[^:]: %f", &time_to_teleport_sec_);
+      } else if (line.find("min_virtual_speed_mps:") != std::string::npos) {
+        sscanf(line.c_str(), "%*[^:]: %f", &min_virtual_speed_mps_);
+      } else if (line.find("meso_jam_threshold_pct:") != std::string::npos) {
+        sscanf(line.c_str(), "%*[^:]: %f", &meso_jam_threshold_pct_);
+      } else if (line.find("mode:") != std::string::npos && line.find("sumo_virtual_buffer") != std::string::npos) {
+        deadlock_mitigation_mode_ = 0;
       } else if (line.find("hour:") != std::string::npos && line.find("ratio:") != std::string::npos) {
         float h = 0.0f, r = 1.0f;
         auto h_pos = line.find("hour:");

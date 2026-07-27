@@ -51,6 +51,7 @@ scenario:
   deadlock_mitigation:
     enabled: true
     mode: "sumo_virtual_buffer"  # Modes: sumo_virtual_buffer, cs_despawn_target, cs_despawn_home
-    time_to_teleport_sec: 300.0
+    time_to_teleport_sec: 130.0
     min_virtual_speed_mps: 2.0
+    meso_jam_threshold_pct: 0.70 # SUMO MESO Jam threshold ratio (0.40 .. 0.85)
 

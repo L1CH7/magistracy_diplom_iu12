@@ -174,8 +174,11 @@ public:
           // Агент вышел из пробки — сбрасываем флаг очереди.
           pool_.in_queue[agent_idx] = 0;
           if (ctx.queue_volumes) {
-            uint32_t q = ctx.queue_volumes[current_edge].load(std::memory_order_relaxed);
-            if (q > 0) ctx.queue_volumes[current_edge].fetch_sub(1, std::memory_order_relaxed);
+            uint32_t q =
+                ctx.queue_volumes[current_edge].load(std::memory_order_relaxed);
+            if (q > 0)
+              ctx.queue_volumes[current_edge].fetch_sub(
+                  1, std::memory_order_relaxed);
           }
           pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
         }
@@ -218,7 +221,8 @@ public:
     candidates.clear();
 
     for (size_t i = 0; i < agent_count; ++i) {
-      if (pool_.IsDriving(i) && __builtin_expect(pos[i] * inv_len[i] >= 1.0f, 0)) {
+      if (pool_.IsDriving(i) &&
+          __builtin_expect(pos[i] * inv_len[i] >= 1.0f, 0)) {
         candidates.emplace_back(TransitionCandidate{static_cast<uint32_t>(i),
                                                     current_edges[i], pos[i]});
       }
@@ -309,25 +313,25 @@ public:
               ctx.live_volumes ? ctx.live_volumes[old_edge] : 0;
 
           // 1. Проверка физической емкости следующего ребра
-          if( __builtin_expect( load_next + 1 > jam_cap_next, 0 ) )
-          {
-              // Блокировка перехода: следующий сегмент забит.
-              // Откатываем индекс маршрута, фиксируем агента строго на конце текущего ребра (без откатов назад)
-              pool_.route_progress_idx[agent_idx]--;
-              pool_.pos_meters[agent_idx] = edge_len; // На самой границе ребра
-              pool_.velocity_mps[agent_idx] = 0.0f;   // Остановка в очереди
+          if (__builtin_expect(load_next + 1 > jam_cap_next, 0)) {
+            // Блокировка перехода: следующий сегмент забит.
+            // Откатываем индекс маршрута, фиксируем агента строго на конце
+            // текущего ребра (без откатов назад)
+            pool_.route_progress_idx[agent_idx]--;
+            pool_.pos_meters[agent_idx] = edge_len; // На самой границе ребра
+            pool_.velocity_mps[agent_idx] = 0.0f;   // Остановка в очереди
 
-              // Регистрируем агента в очереди обратного распространения затора (Queue Spillback)
-              if( pool_.status[agent_idx] != AgentStatus::ACTIVE_QUEUE )
-              {
-                  pool_.status[agent_idx] = AgentStatus::ACTIVE_QUEUE;
-                  pool_.spillback_start_time_sec[agent_idx] = ctx.current_time_sec;
-                  pool_.spillback_wait_queue.push_back( agent_idx );
-              }
-              // queue_volumes уже учтён при первом входе (стр. 188)
+            // Регистрируем агента в очереди обратного распространения затора
+            // (Queue Spillback)
+            if (pool_.status[agent_idx] != AgentStatus::ACTIVE_QUEUE) {
+              pool_.status[agent_idx] = AgentStatus::ACTIVE_QUEUE;
+              pool_.spillback_start_time_sec[agent_idx] = ctx.current_time_sec;
+              pool_.spillback_wait_queue.push_back(agent_idx);
+            }
+            // queue_volumes уже учтён при первом входе (стр. 188)
 
-              blocked = true;
-              break; // Прекращаем попытки перехода в текущем такте
+            blocked = true;
+            break; // Прекращаем попытки перехода в текущем такте
           }
 
           // Check if we reached a waypoint
@@ -360,7 +364,30 @@ public:
           pool_.current_edge[agent_idx] = next_edge;
           pool_.edge_enter_time_sec[agent_idx] = ctx.current_time_sec;
           pool_.in_queue[agent_idx] = 0;
-          pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
+
+          // Проверяем загруженность целевого ребра по стандарту SUMO MESO
+          // (meso_jam_threshold_pct)
+          float load_ratio = 0.0f;
+          if (ctx.edge_attributes && ctx.live_volumes) {
+            uint32_t jam_cap = std::max<uint32_t>(
+                1, ctx.edge_attributes[next_edge].jam_capacity);
+            load_ratio = static_cast<float>(ctx.live_volumes[next_edge]) /
+                         static_cast<float>(jam_cap);
+          }
+
+          if (load_ratio >= ctx.meso_jam_threshold_pct) {
+            // Переход из затора в заторный слот (FIFO): накопительный таймер НЕ
+            // СБРАСЫВАЕТСЯ!
+            if (pool_.spillback_start_time_sec[agent_idx] == 0) {
+              pool_.spillback_start_time_sec[agent_idx] = ctx.current_time_sec;
+            }
+            pool_.status[agent_idx] = AgentStatus::ACTIVE_QUEUE;
+          } else {
+            // Честный выход на свободную дорогу (< meso_jam_threshold_pct):
+            // сброс таймера затора!
+            pool_.spillback_start_time_sec[agent_idx] = 0;
+            pool_.status[agent_idx] = AgentStatus::ACTIVE_FREE_FLOW;
+          }
 
           // Update geometry immediately so the while-condition re-evaluates
           // correctly

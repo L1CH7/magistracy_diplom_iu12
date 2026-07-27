@@ -1045,10 +1045,11 @@ TrafficEngine::MakePhysicsContext(uint32_t time_sec) const noexcept {
   ctx.static_weights = view.static_weights;
 
   // Подсистема противодействия заторам и дедлокам
-  ctx.deadlock_mitigation_enabled = true;
-  ctx.deadlock_mitigation_mode = 0; // 0: sumo_virtual_buffer, 1: cs_despawn_target
-  ctx.time_to_teleport_sec = 300.0f;
-  ctx.min_virtual_speed_mps = 1.3f;
+  ctx.deadlock_mitigation_enabled = hub_scenario_mgr_.GetDeadlockMitigationEnabled();
+  ctx.deadlock_mitigation_mode = hub_scenario_mgr_.GetDeadlockMitigationMode();
+  ctx.time_to_teleport_sec = hub_scenario_mgr_.GetTimeToTeleportSec();
+  ctx.min_virtual_speed_mps = hub_scenario_mgr_.GetMinVirtualSpeedMps();
+  ctx.meso_jam_threshold_pct = hub_scenario_mgr_.GetMesoJamThresholdPct();
   ctx.teleported_jam_count_out = const_cast<uint64_t *>(&teleported_jam_count_);
 
   return ctx;

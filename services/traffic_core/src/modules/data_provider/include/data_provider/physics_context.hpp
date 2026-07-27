@@ -39,6 +39,7 @@ struct PhysicsContext
     uint8_t deadlock_mitigation_mode = 0; // 0: sumo_virtual_buffer, 1: cs_despawn_target, 2: cs_despawn_home
     float time_to_teleport_sec = 300.0f;
     float min_virtual_speed_mps = 2.0f;
+    float meso_jam_threshold_pct = 0.70f;
     uint64_t * teleported_jam_count_out = nullptr;
 };
 
